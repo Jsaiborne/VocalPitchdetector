@@ -22,19 +22,14 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import kotlin.math.pow
+import androidx.compose.foundation.ScrollState
 
-/**
- * Piano with horizontal pan (finger drag) to view full range.
- * - White keys have fixed width; content is wider than screen so horizontalScroll allows panning.
- * - Black keys are overlaid and can be shifted slightly right using blackKeyShiftFraction for visual tuning.
- * - Press-and-hold plays continuous tone; quick tap plays short tone.
- * - Auto-centers only when a stable note (stableMidi) is emitted and autoCenter==true.
- */
 @SuppressLint("UnusedBoxWithConstraintsScope")
 @Composable
 fun Piano(
     startMidi: Int = 24, // C1
-    endMidi: Int = 84, // C6
+    endMidi: Int = 84,   // C6
+    scrollState: ScrollState? = null, // optional external shared scroll state
     onKeyPressed: ((midi: Int, freqHz: Double) -> Unit)? = null,
     activeMidi: Int? = null,
     autoCenter: Boolean = true,
@@ -45,10 +40,12 @@ fun Piano(
     blackKeyShiftFraction: Float = 0.5f // positive shifts black keys to the right
 ) {
     val scope = rememberCoroutineScope()
-    val scrollState = rememberScrollState()
+    val internalScroll = rememberScrollState()
+    val sState = scrollState ?: internalScroll
+
     val density = LocalDensity.current
 
-// Build white and black key lists
+    // Build white and black key lists
     val whiteKeys = remember(startMidi, endMidi) {
         mutableListOf<Int>().apply {
             for (m in startMidi..endMidi) {
@@ -86,7 +83,7 @@ fun Piano(
         val contentWidthPx = whiteCount * whiteKeyWidthPx
         val contentWidthDp = with(density) { contentWidthPx.toDp() }
 
-// Auto-scroll when a stableMidi is emitted (only if autoCenter true)
+        // Auto-scroll when a stableMidi is emitted (only if autoCenter true)
         LaunchedEffect(stableMidi, autoCenter) {
             if (!autoCenter) return@LaunchedEffect
             if (stableMidi == null) return@LaunchedEffect
@@ -105,15 +102,15 @@ fun Piano(
                 }
             }
             val bounded = targetPx.coerceIn(0f, maxOf(0f, contentWidthPx - containerWidthPx))
-            scope.launch { scrollState.animateScrollTo(bounded.toInt()) }
+            scope.launch { sState.animateScrollTo(bounded.toInt()) }
         }
 
-// Scrollable content box: white keys + black keys overlay inside the same container so they move together
+        // Scrollable content box: white keys + black keys overlay inside the same container so they move together
         Box(modifier = Modifier
             .width(contentWidthDp)
-            .horizontalScroll(scrollState)) {
+            .horizontalScroll(sState)) {
 
-// White keys row
+            // White keys row
             Row(modifier = Modifier.fillMaxSize(), verticalAlignment = Alignment.Top) {
                 for ((index, midi) in whiteKeys.withIndex()) {
                     val isActive = activeMidi == midi
@@ -137,13 +134,11 @@ fun Piano(
                             detectTapGestures(onPress = {
                                 pressedMidi = midi
                                 val freq = 440.0 * 2.0.pow((midi - 69) / 12.0)
-// start continuous tone while pressed
                                 ToneGenerator.playToneContinuous(freq)
                                 try { val released = tryAwaitRelease() } catch (_: Exception) { }
                                 ToneGenerator.stop()
                                 pressedMidi = null
                             }, onTap = {
-// quick tap: short static tone
                                 val freq = 440.0 * 2.0.pow((midi - 69) / 12.0)
                                 scope.launch { ToneGenerator.playTone(freq, 300) }
                                 onKeyPressed?.invoke(midi, freq)
@@ -157,16 +152,13 @@ fun Piano(
                 }
             }
 
-// Black keys overlay - center them between adjacent white keys, then shift right by fraction for tuning
+            // Black keys overlay
             val blackWidthDp = whiteKeyWidthDp * 0.62f
             for (bk in blackKeys) {
                 val midi = bk.midi
                 val leftIndex = bk.leftWhiteIndex
-// center between left white and next white
                 val centerDp = whiteKeyWidthDp * (leftIndex.toFloat() + 0.5f)
-// base left coordinate
                 val baseLeftDp = centerDp - (blackWidthDp / 2f)
-// apply small right shift
                 val shiftDp = whiteKeyWidthDp * blackKeyShiftFraction
                 val offsetDp = baseLeftDp + shiftDp
 
