@@ -1,6 +1,7 @@
 package com.example.vocalpitchdetector
 
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.*
@@ -104,7 +105,7 @@ fun MainScreen() {
                 Text(text = "Detected: $noteText", style = MaterialTheme.typography.bodyMedium)
             }
         }
-
+        Spacer(modifier = Modifier.height(12.dp))
         Spacer(modifier = Modifier.height(8.dp))
 
         // Key width control — compact
@@ -119,17 +120,6 @@ fun MainScreen() {
                 Text(text = "${String.format("%.1f", graphAlignmentDp)} dp", style = MaterialTheme.typography.bodySmall)
                 Slider(value = graphAlignmentDp, onValueChange = { graphAlignmentDp = it }, valueRange = -16f..16f, steps = 32)
             }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            Button(onClick = { /* TODO: Record */ }, content = { Text("Record") })
-            Button(onClick = { /* TODO: Open graph details */ }, content = { Text("Graph") })
-            Button(onClick = {
-                // Play middle A reference tone for quick check
-                scope.launch { ToneGenerator.playTone(440.0, 600) }
-            }, content = { Text("Play A4") })
         }
 
         Spacer(modifier = Modifier.height(10.dp))
@@ -149,7 +139,7 @@ fun MainScreen() {
         )
 
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
         // Real-time pitch graph area (uses remaining vertical space)
         PitchGraphCard(
@@ -167,5 +157,15 @@ fun MainScreen() {
             blackKeyShiftFraction = 0.5f,       // same fraction for graph alignment
             timeWindowMs = 8000L
         )
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Box(modifier = Modifier
+            .fillMaxWidth()
+            .height(72.dp)
+            .padding(8.dp)
+            .background(MaterialTheme.colorScheme.primaryContainer), contentAlignment = Alignment.Center) {
+            Text(text = "Ad placeholder", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+        }
+
     }
 }
