@@ -41,9 +41,6 @@ private fun midiToNoteNameLocal(midi: Int): String {
 
 /**
  * High-level card that chooses rotated or horizontal rendering.
- *
- * rotated=false -> original horizontal pitch axis (midi -> x)
- * rotated=true  -> pitch axis vertical (midi -> y), vertical scrolling to match rotated piano.
  */
 @Composable
 fun PitchGraphCard(
@@ -107,10 +104,7 @@ fun PitchGraphCard(
 }
 
 /**
- * Original-style horizontal graph:
- * - midi -> x (columns line up with piano)
- * - time -> y (latest at bottom)
- * - uses horizontalScroll for panning when needed.
+ * Horizontal graph: midi -> x, time -> y (left = older, bottom = latest).
  */
 @Composable
 fun PitchGraphHorizontal(
@@ -348,7 +342,7 @@ fun PitchGraphHorizontal(
 
 /**
  * Vertical (rotated) graph:
- * - midi -> y (rows align with piano keys)
+ * - midi -> y (rows align with piano keys; reversed so lower notes at bottom)
  * - time -> x (left to right)
  * - uses verticalScroll for panning so it can share scrollState with a vertical piano.
  */
@@ -372,7 +366,7 @@ fun PitchGraphVertical(
     val stableMarkers = remember { mutableStateListOf<StableMarker>() }
     val density = LocalDensity.current
 
-    // Collect samples
+    // collect live pitch state into samples
     LaunchedEffect(engine, paused) {
         engine.state.collectLatest { s ->
             if (!paused) {
@@ -385,7 +379,7 @@ fun PitchGraphVertical(
         }
     }
 
-    // stable events
+    // stable note events
     LaunchedEffect(engine) {
         engine.stableNotes.collectLatest { sn ->
             val now = System.currentTimeMillis()
@@ -395,7 +389,7 @@ fun PitchGraphVertical(
         }
     }
 
-    // paints (reuse same paint objects as horizontal)
+    // paints
     val labelPaint = remember {
         Paint().apply {
             color = android.graphics.Color.WHITE
@@ -449,11 +443,11 @@ fun PitchGraphVertical(
                 val minMidi = startMidi
                 val maxMidi = endMidi
 
-                // build maps
+                // build white/black maps (white->index reversed so low at bottom)
                 val whiteList = mutableListOf<Int>()
                 for (m in minMidi..maxMidi) if (!midiToNoteNameLocal(m).contains("#")) whiteList.add(m)
                 val whiteIndexMap = mutableMapOf<Int, Int>()
-                whiteList.forEachIndexed { idx, midi -> whiteIndexMap[midi] = idx }
+                whiteList.forEachIndexed { idx, midi -> whiteIndexMap[midi] = (whiteCount - 1 - idx) }
 
                 val blackLeftIndexMap = mutableMapOf<Int, Int>()
                 var whiteIdxCounter = 0
@@ -466,7 +460,7 @@ fun PitchGraphVertical(
 
                 val alignPx = with(density) { alignmentOffsetDp.toPx() }
 
-                // midi -> y
+                // midi -> y using reversed whiteIndexMap (so low midi down)
                 val midiCount = maxMidi - minMidi + 1
                 val midiY = FloatArray(midiCount)
                 for (m in minMidi..maxMidi) {
@@ -476,7 +470,8 @@ fun PitchGraphVertical(
                         padTop + (widx + 0.5f) * keyThicknessPx + alignPx
                     } else {
                         val left = blackLeftIndexMap[m] ?: 0
-                        val center = (left + 0.5f) * keyThicknessPx
+                        val reversedLeft = whiteCount - 1 - left
+                        val center = (reversedLeft + 0.5f) * keyThicknessPx
                         val shiftPx = keyThicknessPx * blackKeyShiftFraction
                         padTop + center + shiftPx + alignPx
                     }
@@ -496,7 +491,7 @@ fun PitchGraphVertical(
                 // background
                 drawRect(brush = Brush.horizontalGradient(listOf(Color(0xFF081226), Color(0xFF0F2A3F))), size = Size(w, h))
 
-                // draw horizontal pitch lines
+                // draw pitch lines
                 for (m in minMidi..maxMidi) {
                     val y = midiY[m - minMidi]
                     val isNatural = !midiToNoteNameLocal(m).contains("#")
@@ -553,7 +548,7 @@ fun PitchGraphVertical(
                     drawCircle(color = Color.White, radius = 3f, center = Offset(x, y))
                 }
 
-                // vertical time grid (columns)
+                // vertical time grid
                 if (showHorizontalGrid) {
                     val cols = 6
                     val step = innerW / cols.toFloat()
@@ -563,7 +558,7 @@ fun PitchGraphVertical(
                     }
                 }
 
-                // stable markers and label placement
+                // stable markers + labels
                 for (m in stableMarkers) {
                     val x = xForTime(m.tMs)
                     val y = midiY[m.midi - minMidi]
@@ -571,7 +566,7 @@ fun PitchGraphVertical(
                     if (showNoteLabels) drawIntoCanvas { canvas -> canvas.nativeCanvas.drawText(midiToNoteNameLocal(m.midi), x + 6f, y - 10f, yellowPaint) }
                 }
 
-                // latest sample label
+                // latest label
                 val last = samples.last()
                 if (!last.midi.isNaN()) {
                     val nearest = last.midi.toInt().coerceIn(minMidi, maxMidi)
