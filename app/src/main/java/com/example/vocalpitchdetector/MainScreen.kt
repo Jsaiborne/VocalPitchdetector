@@ -4,11 +4,9 @@ package com.example.vocalpitchdetector
 
 import android.content.res.Configuration
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -16,8 +14,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
-import kotlin.math.roundToInt
 import androidx.compose.foundation.ScrollState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Settings
+import kotlin.math.roundToInt
 
 @Composable
 fun MainScreen() {
@@ -31,7 +31,7 @@ fun MainScreen() {
     // track last stable note (used for auto-centering)
     var stableMidi by remember { mutableStateOf<Int?>(null) }
 
-    // white key width control (in dp). Interpreted as key *thickness* in rotated mode.
+    // white key width control (in dp)
     var whiteKeyWidthDpFloat by remember { mutableStateOf(56f) }
 
     // graph pause/hold
@@ -68,109 +68,44 @@ fun MainScreen() {
     val config = LocalConfiguration.current
     val isLandscape = config.orientation == Configuration.ORIENTATION_LANDSCAPE
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
+    Column(modifier = Modifier
+        .fillMaxSize()
+        .padding(6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+
         if (isLandscape) {
-            // Top bar spanning full width: note, confidence, small controls, Hold + gear
-            TopAppBar(
-                title = {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            val noteText = activeMidi?.let { midiToNoteName(it) } ?: "-"
-                            Text(text = noteText)
-                            Text(
-                                text = "Confidence: ${String.format("%.2f", state.confidence)}",
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-
-                        // Controls on right
-                        Column(horizontalAlignment = Alignment.End) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(text = "Key width", style = MaterialTheme.typography.bodySmall)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Slider(
-                                    value = whiteKeyWidthDpFloat,
-                                    onValueChange = { whiteKeyWidthDpFloat = it },
-                                    valueRange = 36f..96f,
-                                    modifier = Modifier.width(140.dp)
-                                )
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(text = "Align", style = MaterialTheme.typography.bodySmall)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Slider(
-                                    value = graphAlignmentDp,
-                                    onValueChange = { graphAlignmentDp = it },
-                                    valueRange = -16f..16f,
-                                    modifier = Modifier.width(140.dp)
-                                )
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(text = "Auto-centre", style = MaterialTheme.typography.bodySmall)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Switch(checked = autoCenter, onCheckedChange = { autoCenter = it })
-                            }
-
-                            Spacer(modifier = Modifier.height(6.dp))
-
-                            // Hold
-                            Button(onClick = { graphPaused = !graphPaused }) {
-                                Text(if (graphPaused) "Resume" else "Hold")
-                            }
-
-                            // Gear menu
-                            var menuExpanded by remember { mutableStateOf(false) }
-                            IconButton(onClick = { menuExpanded = true }) {
-                                Icon(imageVector = Icons.Filled.Settings, contentDescription = "Graph options")
-                            }
-                            DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
-                                DropdownMenuItem(
-                                    text = {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(text = "Note labels", modifier = Modifier.weight(1f))
-                                            Switch(checked = showNoteLabels, onCheckedChange = { showNoteLabels = it })
-                                        }
-                                    },
-                                    onClick = { /* no-op; state changed via Switch */ }
-                                )
-                                DropdownMenuItem(
-                                    text = {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(text = "Grid lines", modifier = Modifier.weight(1f))
-                                            Switch(checked = showHorizontalGrid, onCheckedChange = { showHorizontalGrid = it })
-                                        }
-                                    },
-                                    onClick = { }
-                                )
-                                DropdownMenuItem(
-                                    text = {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(text = "Curve", modifier = Modifier.weight(1f))
-                                            Switch(checked = showCurve, onCheckedChange = { showCurve = it })
-                                        }
-                                    },
-                                    onClick = { }
-                                )
-                            }
-                        }
-                    }
-                }
+            // Top bar spanning full width: detected note, confidence, sliders, hold and gear
+            TopAppBarLandscape(
+                detectedFreq = state.frequency,
+                detectedConfidence = state.confidence,
+                activeMidi = activeMidi,
+                whiteKeyWidthDpFloat = whiteKeyWidthDpFloat,
+                onWhiteKeyWidthChange = { whiteKeyWidthDpFloat = it },
+                graphAlignmentDp = graphAlignmentDp,
+                onGraphAlignmentChange = { graphAlignmentDp = it },
+                autoCenter = autoCenter,
+                onAutoCenterToggle = { autoCenter = it },
+                onTogglePause = { graphPaused = !graphPaused },
+                // pass visual toggle state handlers
+                showNoteLabels = showNoteLabels,
+                onToggleShowNoteLabels = { showNoteLabels = it },
+                showHorizontalGrid = showHorizontalGrid,
+                onToggleShowHorizontalGrid = { showHorizontalGrid = it },
+                showCurve = showCurve,
+                onToggleShowCurve = { showCurve = it }
             )
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Main content: left piano, right graph (both reflowed for rotated appearance)
-            Row(modifier = Modifier.fillMaxWidth().weight(1f)) {
-                // Left piano column — in rotated mode we'll render piano vertically and make the scroll vertical
-                Box(modifier = Modifier.fillMaxHeight().width(360.dp).padding(6.dp)) {
+            // Main content: left piano, right graph — do NOT rotate outer boxes; use rotated=true in components
+            Row(modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)) {
+
+                // Left piano column — instruct Piano to render rotated internally and share vertical scroll
+                Box(modifier = Modifier
+                    .fillMaxHeight()
+                    .width(360.dp)
+                    .padding(6.dp)) {
                     Piano(
                         startMidi = 24,
                         endMidi = 84,
@@ -179,54 +114,57 @@ fun MainScreen() {
                         autoCenter = autoCenter,
                         stableMidi = stableMidi,
                         whiteKeyWidthDp = whiteKeyWidthDpFloat.dp,
-                        blackKeyShiftFraction = 0.5f,
+                        scrollState = sharedScroll,
                         rotated = true,
-                        scrollState = sharedScroll
+                        blackKeyShiftFraction = 0.5f
                     )
                 }
 
                 Spacer(modifier = Modifier.width(8.dp))
 
-                // Graph (takes remaining space) — rotated appearance (pitch axis vertically aligned with piano). scrollState shared vertically.
-                PitchGraphCard(
-                    engine = engine,
-                    modifier = Modifier.fillMaxHeight().weight(1f).padding(6.dp),
-                    paused = graphPaused,
-                    onTogglePause = { graphPaused = !graphPaused },
-                    startMidi = 24,
-                    endMidi = 84,
-                    whiteKeyWidthDp = whiteKeyWidthDpFloat.dp,
-                    scrollState = sharedScroll,
-                    alignmentOffsetDp = graphAlignmentDp.dp,
-                    timeWindowMs = 8000L,
-                    blackKeyShiftFraction = 0.5f,
-                    rotated = true,
-                    showNoteLabels = showNoteLabels,
-                    showHorizontalGrid = showHorizontalGrid,
-                    showCurve = showCurve
-                )
+                // Right graph area — ask PitchGraphCard to render rotated layout and share scroll vertically
+                Box(modifier = Modifier
+                    .fillMaxHeight()
+                    .weight(1f)
+                    .padding(6.dp)) {
+                    PitchGraphCard(
+                        engine = engine,
+                        modifier = Modifier.fillMaxSize(),
+                        paused = graphPaused,
+                        onTogglePause = { graphPaused = !graphPaused },
+                        startMidi = 24,
+                        endMidi = 84,
+                        whiteKeyWidthDp = whiteKeyWidthDpFloat.dp,
+                        scrollState = sharedScroll,
+                        alignmentOffsetDp = graphAlignmentDp.dp,
+                        timeWindowMs = 8000L,
+                        // pass visual toggle state
+                        showNoteLabels = showNoteLabels,
+                        showHorizontalGrid = showHorizontalGrid,
+                        showCurve = showCurve,
+                        rotated = true,
+                        blackKeyShiftFraction = 0.5f
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
             // Bottom ad placeholder bar
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(72.dp)
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "Ad placeholder",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
+            Box(modifier = Modifier
+                .fillMaxWidth()
+                .height(72.dp)
+                .background(MaterialTheme.colorScheme.primaryContainer), contentAlignment = Alignment.Center) {
+                Text(text = "Ad placeholder", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
             }
+
         } else {
-            // PORTRAIT: original (horizontal piano on top, graph below). Keep controls in header + gear in header.
+            // PORTRAIT: header row with hold + gear, info card, piano (horizontal), graph (horizontal)
+
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(text = "Vocal Pitch Monitor", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+
+                // Auto-center switch
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(text = "Auto-center")
                     Spacer(modifier = Modifier.width(8.dp))
@@ -234,74 +172,61 @@ fun MainScreen() {
                 }
 
                 Spacer(modifier = Modifier.width(12.dp))
-                Button(onClick = { graphPaused = !graphPaused }) { Text(if (graphPaused) "Resume" else "Hold") }
+
+                // Hold button in portrait header
+                Button(onClick = { graphPaused = !graphPaused }) {
+                    Text(text = if (graphPaused) "Resume" else "Hold")
+                }
 
                 Spacer(modifier = Modifier.width(8.dp))
-                // Gear for portrait
+
+                // Gear menu in portrait header
                 var menuExpandedPortrait by remember { mutableStateOf(false) }
-                IconButton(onClick = { menuExpandedPortrait = true }) {
-                    Icon(imageVector = Icons.Filled.Settings, contentDescription = "Options")
-                }
+                IconButton(onClick = { menuExpandedPortrait = true }) { Icon(imageVector = Icons.Filled.Settings, contentDescription = "Options") }
                 DropdownMenu(expanded = menuExpandedPortrait, onDismissRequest = { menuExpandedPortrait = false }) {
-                    DropdownMenuItem(
-                        text = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(text = "Note labels", modifier = Modifier.weight(1f))
-                                Switch(checked = showNoteLabels, onCheckedChange = { showNoteLabels = it })
-                            }
-                        },
-                        onClick = { }
-                    )
-                    DropdownMenuItem(
-                        text = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(text = "Grid lines", modifier = Modifier.weight(1f))
-                                Switch(checked = showHorizontalGrid, onCheckedChange = { showHorizontalGrid = it })
-                            }
-                        },
-                        onClick = { }
-                    )
-                    DropdownMenuItem(
-                        text = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(text = "Curve", modifier = Modifier.weight(1f))
-                                Switch(checked = showCurve, onCheckedChange = { showCurve = it })
-                            }
-                        },
-                        onClick = { }
-                    )
+                    DropdownMenuItem(text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(text = "Note labels", modifier = Modifier.weight(1f))
+                            Switch(checked = showNoteLabels, onCheckedChange = { showNoteLabels = it })
+                        }
+                    }, onClick = { })
+
+                    DropdownMenuItem(text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(text = "Grid lines", modifier = Modifier.weight(1f))
+                            Switch(checked = showHorizontalGrid, onCheckedChange = { showHorizontalGrid = it })
+                        }
+                    }, onClick = { })
+
+                    DropdownMenuItem(text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(text = "Curve", modifier = Modifier.weight(1f))
+                            Switch(checked = showCurve, onCheckedChange = { showCurve = it })
+                        }
+                    }, onClick = { })
                 }
             }
 
             Spacer(modifier = Modifier.height(6.dp))
 
-            // Info card (short)
-            val freqText = if (state.frequency > 0f) "${String.format("%.1f", state.frequency)} Hz" else "--"
-            val noteText = activeMidi?.let { midiToNoteName(it) } ?: "-"
+            // Small info card (reduced height)
             Card(modifier = Modifier.fillMaxWidth().height(100.dp)) {
-                Column(
-                    modifier = Modifier.fillMaxSize().padding(10.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
+                Column(modifier = Modifier.fillMaxSize().padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                    val freqText = if (state.frequency > 0f) "${String.format("%.1f", state.frequency)} Hz" else "--"
                     Text(text = "Frequency: $freqText")
                     Text(text = "Confidence: ${String.format("%.2f", state.confidence)}")
                     Spacer(modifier = Modifier.height(6.dp))
+                    val noteText = if (activeMidi != null) midiToNoteName(activeMidi!!) else "-"
                     Text(text = "Detected: $noteText")
                 }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Controls: key width and align
+            // Key width control
             Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
-                Text(
-                    text = "Key width: ${whiteKeyWidthDpFloat.toInt()} dp — approx ${(config.screenWidthDp / whiteKeyWidthDpFloat).toInt()} keys visible",
-                    style = MaterialTheme.typography.bodyMedium
-                )
+                Text(text = "Key width: ${whiteKeyWidthDpFloat.toInt()} dp — approx ${(config.screenWidthDp / whiteKeyWidthDpFloat).toInt()} keys visible", style = MaterialTheme.typography.bodyMedium)
                 Slider(value = whiteKeyWidthDpFloat, onValueChange = { whiteKeyWidthDpFloat = it }, valueRange = 36f..96f)
-                Text(text = "Align: ${String.format("%.1f", graphAlignmentDp)} dp", style = MaterialTheme.typography.bodySmall)
-                Slider(value = graphAlignmentDp, onValueChange = { graphAlignmentDp = it }, valueRange = -16f..16f)
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -315,9 +240,9 @@ fun MainScreen() {
                 autoCenter = autoCenter,
                 stableMidi = stableMidi,
                 whiteKeyWidthDp = whiteKeyWidthDpFloat.dp,
-                blackKeyShiftFraction = 0.5f,
+                scrollState = sharedScroll,
                 rotated = false,
-                scrollState = sharedScroll
+                blackKeyShiftFraction = 0.5f
             )
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -334,28 +259,105 @@ fun MainScreen() {
                 scrollState = sharedScroll,
                 alignmentOffsetDp = graphAlignmentDp.dp,
                 timeWindowMs = 8000L,
-                blackKeyShiftFraction = 0.5f,
-                rotated = false,
                 showNoteLabels = showNoteLabels,
                 showHorizontalGrid = showHorizontalGrid,
-                showCurve = showCurve
+                showCurve = showCurve,
+                rotated = false,
+                blackKeyShiftFraction = 0.5f
             )
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(72.dp)
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "Ad placeholder",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
+            // Bottom placeholder for ads (portrait)
+            Box(modifier = Modifier
+                .fillMaxWidth()
+                .height(72.dp)
+                .background(MaterialTheme.colorScheme.primaryContainer), contentAlignment = Alignment.Center) {
+                Text(text = "Ad placeholder", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
             }
         }
     }
+}
+
+@Composable
+private fun TopAppBarLandscape(
+    detectedFreq: Float,
+    detectedConfidence: Float,
+    activeMidi: Int?,
+    whiteKeyWidthDpFloat: Float,
+    onWhiteKeyWidthChange: (Float) -> Unit,
+    graphAlignmentDp: Float,
+    onGraphAlignmentChange: (Float) -> Unit,
+    autoCenter: Boolean,
+    onAutoCenterToggle: (Boolean) -> Unit,
+    onTogglePause: () -> Unit,
+    // visual toggles lifted here so the gear lives in the top bar
+    showNoteLabels: Boolean,
+    onToggleShowNoteLabels: (Boolean) -> Unit,
+    showHorizontalGrid: Boolean,
+    onToggleShowHorizontalGrid: (Boolean) -> Unit,
+    showCurve: Boolean,
+    onToggleShowCurve: (Boolean) -> Unit
+) {
+    TopAppBar(
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.weight(1f)) {
+                    val noteText = if (activeMidi != null) midiToNoteName(activeMidi) else "-"
+                    Text(text = "$noteText")
+                    Text(text = "Confidence: ${String.format("%.2f", detectedConfidence)}", style = MaterialTheme.typography.bodySmall)
+                }
+
+                // small controls in top bar
+                Column(horizontalAlignment = Alignment.End) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(text = "Key width", style = MaterialTheme.typography.bodySmall)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Slider(value = whiteKeyWidthDpFloat, onValueChange = onWhiteKeyWidthChange, valueRange = 36f..96f, modifier = Modifier.width(140.dp))
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(text = "Align", style = MaterialTheme.typography.bodySmall)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Slider(value = graphAlignmentDp, onValueChange = onGraphAlignmentChange, valueRange = -16f..16f, modifier = Modifier.width(140.dp))
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(text = "Auto-centre", style = MaterialTheme.typography.bodySmall)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Switch(checked = autoCenter, onCheckedChange = onAutoCenterToggle)
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    // Hold button moved to top bar
+                    Button(onClick = onTogglePause) { Text("Hold") }
+
+                    // Gear menu moved to top bar
+                    var menuExpanded by remember { mutableStateOf(false) }
+                    IconButton(onClick = { menuExpanded = true }) { Icon(imageVector = Icons.Filled.Settings, contentDescription = "Graph options") }
+                    DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                        DropdownMenuItem(text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(text = "Note labels", modifier = Modifier.weight(1f))
+                                Switch(checked = showNoteLabels, onCheckedChange = { onToggleShowNoteLabels(it) })
+                            }
+                        }, onClick = { })
+
+                        DropdownMenuItem(text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(text = "Grid lines", modifier = Modifier.weight(1f))
+                                Switch(checked = showHorizontalGrid, onCheckedChange = { onToggleShowHorizontalGrid(it) })
+                            }
+                        }, onClick = { })
+
+                        DropdownMenuItem(text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(text = "Curve", modifier = Modifier.weight(1f))
+                                Switch(checked = showCurve, onCheckedChange = { onToggleShowCurve(it) })
+                            }
+                        }, onClick = { })
+                    }
+                }
+            }
+        }
+    )
 }
