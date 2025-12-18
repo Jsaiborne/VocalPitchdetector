@@ -4,7 +4,6 @@ package com.example.vocalpitchdetector
 
 import android.content.res.Configuration
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.*
@@ -13,6 +12,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.ScrollState
 import androidx.compose.material.icons.Icons
@@ -55,9 +55,7 @@ fun MainScreen() {
 
     // collect stable notes from engine and update stableMidi
     LaunchedEffect(engine) {
-        engine.stableNotes.collect { note ->
-            stableMidi = note.midi
-        }
+        engine.stableNotes.collect { note -> stableMidi = note.midi }
     }
 
     // compute nearest MIDI note (nullable) for live highlighting
@@ -68,22 +66,23 @@ fun MainScreen() {
     val config = LocalConfiguration.current
     val isLandscape = config.orientation == Configuration.ORIENTATION_LANDSCAPE
 
-    Column(modifier = Modifier
-        .fillMaxSize()
-        .padding(6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(6.dp), horizontalAlignment = Alignment.CenterHorizontally
+    ) {
 
         if (isLandscape) {
-            // Top bar spanning full width: detected note, confidence, sliders, hold and gear
-            TopAppBarLandscape(
+            // Top bar spanning full width: detected note, confidence, compact controls (tune menu for slider), auto-center, hold & gear
+            TopAppBarLandscapeCompact(
                 detectedFreq = state.frequency,
                 detectedConfidence = state.confidence,
                 activeMidi = activeMidi,
                 whiteKeyWidthDpFloat = whiteKeyWidthDpFloat,
                 onWhiteKeyWidthChange = { whiteKeyWidthDpFloat = it },
-                graphAlignmentDp = graphAlignmentDp,
-                onGraphAlignmentChange = { graphAlignmentDp = it },
                 autoCenter = autoCenter,
                 onAutoCenterToggle = { autoCenter = it },
+                paused = graphPaused,
                 onTogglePause = { graphPaused = !graphPaused },
                 // pass visual toggle state handlers
                 showNoteLabels = showNoteLabels,
@@ -279,17 +278,21 @@ fun MainScreen() {
     }
 }
 
+/**
+ * Compact landscape TopAppBar:
+ * - compact "tune" icon replaced with emoji button (avoids missing icon dependency)
+ * - Auto-center switch, Hold/Resume button and Gear icon laid out horizontally next to it
+ */
 @Composable
-private fun TopAppBarLandscape(
+private fun TopAppBarLandscapeCompact(
     detectedFreq: Float,
     detectedConfidence: Float,
     activeMidi: Int?,
     whiteKeyWidthDpFloat: Float,
     onWhiteKeyWidthChange: (Float) -> Unit,
-    graphAlignmentDp: Float,
-    onGraphAlignmentChange: (Float) -> Unit,
     autoCenter: Boolean,
     onAutoCenterToggle: (Boolean) -> Unit,
+    paused: Boolean,
     onTogglePause: () -> Unit,
     // visual toggles lifted here so the gear lives in the top bar
     showNoteLabels: Boolean,
@@ -301,39 +304,68 @@ private fun TopAppBarLandscape(
 ) {
     TopAppBar(
         title = {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Left (expands)
                 Column(modifier = Modifier.weight(1f)) {
                     val noteText = if (activeMidi != null) midiToNoteName(activeMidi) else "-"
-                    Text(text = "$noteText")
-                    Text(text = "Confidence: ${String.format("%.2f", detectedConfidence)}", style = MaterialTheme.typography.bodySmall)
+                    Text(text = noteText)
+                    Text(
+                        text = "Confidence: ${String.format("%.2f", detectedConfidence)}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
 
-                // small controls in top bar
-                Column(horizontalAlignment = Alignment.End) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(text = "Key width", style = MaterialTheme.typography.bodySmall)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Slider(value = whiteKeyWidthDpFloat, onValueChange = onWhiteKeyWidthChange, valueRange = 36f..96f, modifier = Modifier.width(140.dp))
+                // Right compact controls: emoji-tune button (opens slider popup), auto-center, hold, gear
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.wrapContentWidth()
+                ) {
+                    // Emoji-based Tune button -> opens a small DropdownMenu containing the slider
+                    var tuneMenuExpanded by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(onClick = { tuneMenuExpanded = true }) {
+                            // use an emoji so no missing icon dependency
+                            Text(text = "🎚", fontSize = 20.sp)
+                        }
+                        DropdownMenu(
+                            expanded = tuneMenuExpanded,
+                            onDismissRequest = { tuneMenuExpanded = false },
+                            modifier = Modifier.width(220.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(text = "Key width: ${whiteKeyWidthDpFloat.roundToInt()} dp", style = MaterialTheme.typography.bodySmall)
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Slider(
+                                    value = whiteKeyWidthDpFloat,
+                                    onValueChange = onWhiteKeyWidthChange,
+                                    valueRange = 36f..96f,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
                     }
+
+                    // Auto-center (compact)
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(text = "Align", style = MaterialTheme.typography.bodySmall)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Slider(value = graphAlignmentDp, onValueChange = onGraphAlignmentChange, valueRange = -16f..16f, modifier = Modifier.width(140.dp))
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(text = "Auto-centre", style = MaterialTheme.typography.bodySmall)
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(text = "Auto", style = MaterialTheme.typography.bodySmall)
+                        Spacer(modifier = Modifier.width(4.dp))
                         Switch(checked = autoCenter, onCheckedChange = onAutoCenterToggle)
                     }
 
-                    Spacer(modifier = Modifier.height(6.dp))
+                    // Hold / Resume
+                    Button(onClick = onTogglePause) {
+                        Text(if (paused) "Resume" else "Hold")
+                    }
 
-                    // Hold button moved to top bar
-                    Button(onClick = onTogglePause) { Text("Hold") }
-
-                    // Gear menu moved to top bar
+                    // Gear menu (graph options) - keep the settings icon
                     var menuExpanded by remember { mutableStateOf(false) }
-                    IconButton(onClick = { menuExpanded = true }) { Icon(imageVector = Icons.Filled.Settings, contentDescription = "Graph options") }
+                    IconButton(onClick = { menuExpanded = true }) {
+                        Icon(imageVector = Icons.Filled.Settings, contentDescription = "Graph options")
+                    }
                     DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
                         DropdownMenuItem(text = {
                             Row(verticalAlignment = Alignment.CenterVertically) {

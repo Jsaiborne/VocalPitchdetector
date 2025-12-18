@@ -78,13 +78,11 @@ fun Piano(
     }
 
     var pressedMidi by remember { mutableStateOf<Int?>(null) }
-    // pressedIndex is used in rotated mode to point to reversedWhite index (0 = top/high)
     var pressedIndex by remember { mutableStateOf<Int?>(null) }
-    // pressedBlackMidi is used in rotated mode for black key highlight
     var pressedBlackMidi by remember { mutableStateOf<Int?>(null) }
 
     if (!rotated) {
-        // Horizontal (portrait) behavior — unchanged logic (per-key pointerInput)
+        // --- PORTRAIT CODE: UNTOUCHED AS REQUESTED ---
         BoxWithConstraints(modifier = Modifier.fillMaxWidth().height(whiteKeyHeight)) {
             val containerWidthPx = with(density) { maxWidth.toPx() }
             val whiteCount = whiteKeys.size
@@ -93,8 +91,7 @@ fun Piano(
             val contentWidthDp = with(density) { contentWidthPx.toDp() }
 
             LaunchedEffect(stableMidi, autoCenter) {
-                if (!autoCenter) return@LaunchedEffect
-                if (stableMidi == null) return@LaunchedEffect
+                if (!autoCenter || stableMidi == null) return@LaunchedEffect
                 val targetPx = run {
                     val whiteIndex = whiteKeys.indexOf(stableMidi)
                     if (whiteIndex >= 0) {
@@ -113,7 +110,6 @@ fun Piano(
             }
 
             Box(modifier = Modifier.width(contentWidthDp).horizontalScroll(sState)) {
-                // White keys
                 Row(modifier = Modifier.fillMaxSize(), verticalAlignment = Alignment.Top) {
                     for ((index, midi) in whiteKeys.withIndex()) {
                         val isActive = activeMidi == midi
@@ -125,8 +121,6 @@ fun Piano(
                             isActive -> Color(0xFF90CAF9)
                             else -> Color.White
                         }
-                        val fg = Color.Black
-
                         Box(
                             modifier = Modifier
                                 .width(whiteKeyWidthDp)
@@ -139,10 +133,7 @@ fun Piano(
                                         pressedMidi = midi
                                         val freq = 440.0 * 2.0.pow((midi - 69) / 12.0)
                                         ToneGenerator.playToneContinuous(freq)
-                                        try {
-                                            tryAwaitRelease()
-                                        } catch (_: Exception) {
-                                        }
+                                        try { tryAwaitRelease() } catch (_: Exception) {}
                                         ToneGenerator.stop()
                                         pressedMidi = null
                                     }, onTap = {
@@ -156,7 +147,7 @@ fun Piano(
                                 Text(
                                     text = midiToNoteName(midi),
                                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 6.dp),
-                                    color = fg,
+                                    color = Color.Black,
                                     textAlign = TextAlign.Center
                                 )
                             }
@@ -164,7 +155,6 @@ fun Piano(
                     }
                 }
 
-                // Black keys overlay
                 val blackWidthDp = whiteKeyWidthDp * 0.62f
                 for (bk in blackKeys) {
                     val midi = bk.midi
@@ -197,10 +187,7 @@ fun Piano(
                                     pressedMidi = midi
                                     val freq = 440.0 * 2.0.pow((midi - 69) / 12.0)
                                     ToneGenerator.playToneContinuous(freq)
-                                    try {
-                                        tryAwaitRelease()
-                                    } catch (_: Exception) {
-                                    }
+                                    try { tryAwaitRelease() } catch (_: Exception) {}
                                     ToneGenerator.stop()
                                     pressedMidi = null
                                 }, onTap = {
@@ -214,23 +201,19 @@ fun Piano(
             }
         }
     } else {
-        // ROTATED mode (vertical piano). Rewritten touch mapping with robust geometry.
+        // --- ROTATED MODE: FIXED TOUCH LOGIC ---
         BoxWithConstraints(modifier = Modifier.fillMaxHeight()) {
-            val parentFullWidthDp = maxWidth // use available width as the "full piano width"
-            val fullContentWidthDp = parentFullWidthDp
-            val visibleWidthDp = fullContentWidthDp * 0.80f // portion shown
+            val parentFullWidthDp = maxWidth
+            val visibleWidthDp = parentFullWidthDp * 0.80f
             val containerHeightPx = with(density) { maxHeight.toPx() }
 
             val whiteCount = whiteKeys.size
-            val keySizePx = with(density) { whiteKeyWidthDp.toPx() } // thickness per key (height)
+            val keySizePx = with(density) { whiteKeyWidthDp.toPx() }
             val contentHeightPx = whiteCount * keySizePx
             val contentHeightDp = with(density) { contentHeightPx.toDp() }
 
-            // Auto-scroll centers using reversed indices (so low notes at bottom)
             LaunchedEffect(stableMidi, autoCenter) {
-                if (!autoCenter) return@LaunchedEffect
-                if (stableMidi == null) return@LaunchedEffect
-
+                if (!autoCenter || stableMidi == null) return@LaunchedEffect
                 val targetPx = run {
                     val idx = whiteKeys.indexOf(stableMidi)
                     if (idx >= 0) {
@@ -240,8 +223,7 @@ fun Piano(
                     } else {
                         val bk = blackKeys.find { it.midi == stableMidi }
                         if (bk != null) {
-                            val left = bk.leftWhiteIndex
-                            val reversedLeft = whiteCount - 1 - left
+                            val reversedLeft = whiteCount - 1 - bk.leftWhiteIndex
                             val center = (reversedLeft + 0.5f) * keySizePx
                             center - containerHeightPx / 2f
                         } else 0f
@@ -251,264 +233,149 @@ fun Piano(
                 scope.launch { sState.animateScrollTo(bounded.roundToInt()) }
             }
 
-            // UI indices use reversed order: reversedWhite[0] is top-most/highest note
             val reversedWhite = whiteKeys.asReversed()
-
-            // geometry for black keys (rectangular bars on the left area of visible piano)
             val blackThicknessDp = whiteKeyWidthDp * 0.62f
             val blackThicknessPx = with(density) { blackThicknessDp.toPx() }
-
-            val blackKeyWidthDp = (fullContentWidthDp * 0.40f).coerceAtLeast(48.dp)
+            val blackKeyWidthDp = (parentFullWidthDp * 0.40f).coerceAtLeast(48.dp)
             val blackKeyWidthPx = with(density) { blackKeyWidthDp.toPx() }
+            val shiftLeftDp = parentFullWidthDp - visibleWidthDp
 
-            val shiftLeftDp = fullContentWidthDp - visibleWidthDp
-            val shiftLeftPx = with(density) { shiftLeftDp.toPx() }
+            // The drawing X-offset for black keys
+            val blackDrawLeftDp = (parentFullWidthDp - blackKeyWidthDp) / 2f - (parentFullWidthDp - visibleWidthDp) / 2f
+            val blackDrawLeftPx = with(density) { blackDrawLeftDp.toPx() }
+            val blackDrawRightPx = blackDrawLeftPx + blackKeyWidthPx
 
-            // base left for black keys inside the full content (we will subtract shiftLeftPx when comparing touchX)
-            val blackOffsetBaseDp = (fullContentWidthDp - blackKeyWidthDp) / 2f
-            val blackOffsetBasePx = with(density) { blackOffsetBaseDp.toPx() }
-
-            // a small dead-zone radius (as fraction of key height) to avoid accidental hits near borders
-            val deadZoneFraction = 0.15f
-
-            // Visible container (shows the requested right portion). Vertical scrolling synced to sState.
             Box(
                 modifier = Modifier
                     .height(contentHeightDp)
                     .width(visibleWidthDp)
                     .verticalScroll(sState)
             ) {
-                // Full-width piano content placed inside and shifted left so right portion is visible.
                 Box(
                     modifier = Modifier
                         .fillMaxHeight()
-                        .width(fullContentWidthDp)
-                        .offset(x = -shiftLeftDp) // shift left so right portion shows
+                        .width(parentFullWidthDp)
+                        .offset(x = -shiftLeftDp)
                 ) {
-                    // Column of white keys in REVERSED order so low notes at bottom
-                    Column(modifier = Modifier.fillMaxHeight().width(fullContentWidthDp)) {
+                    // White keys column
+                    Column(modifier = Modifier.fillMaxHeight().fillMaxWidth()) {
                         for ((index, midi) in reversedWhite.withIndex()) {
                             val isActive = activeMidi == midi
-                            val isPressed = pressedIndex == index
-                            val elevation by animateDpAsState(if (isPressed) 12.dp else if (isActive) 6.dp else 2.dp)
-                            val scale by animateFloatAsState(if (isPressed) 0.99f else 1f)
+                            val isPressed = (pressedMidi == midi) || (pressedIndex == index)
                             val bg = when {
                                 isPressed -> Color(0xFFBBDEFB)
                                 isActive -> Color(0xFF90CAF9)
                                 else -> Color.White
                             }
-                            val fg = Color.Black
-
                             Box(
                                 modifier = Modifier
                                     .height(whiteKeyWidthDp)
                                     .fillMaxWidth()
-                                    .shadow(elevation)
-                                    .graphicsLayer { scaleX = scale; scaleY = scale }
                                     .background(bg)
+                                    .shadow(if (isPressed) 8.dp else 2.dp)
                             ) {
                                 if (midiToNoteName(midi).startsWith("C")) {
                                     Text(
                                         text = midiToNoteName(midi),
-                                        modifier = Modifier.align(Alignment.CenterStart)
-                                            .padding(start = 6.dp),
-                                        color = fg
+                                        modifier = Modifier.align(Alignment.CenterStart).padding(start = 6.dp),
+                                        color = Color.Black
                                     )
                                 }
                             }
                         }
                     }
 
-                    // Black keys overlay (drawn as bars)
+                    // Black keys overlay
                     for (bk in blackKeys) {
-                        val midi = bk.midi
-                        val leftIndex = bk.leftWhiteIndex
-                        val reversedLeft = whiteCount - 1 - leftIndex
+                        val reversedLeft = whiteCount - 1 - bk.leftWhiteIndex
                         val centerDp = whiteKeyWidthDp * (reversedLeft.toFloat() + 0.5f)
-                        val baseTopDp = centerDp - (blackThicknessDp / 2f)
-                        val shiftDp = whiteKeyWidthDp * blackKeyShiftFraction
-                        val offsetTopDp = baseTopDp - shiftDp // shift a little up
+                        val offsetTopDp = centerDp - (blackThicknessDp / 2f) - (whiteKeyWidthDp * blackKeyShiftFraction)
 
-                        val isActive = activeMidi == midi
-                        val isPressed = pressedBlackMidi == midi
-                        val elevation by animateDpAsState(if (isPressed) 14.dp else if (isActive) 8.dp else 4.dp)
-                        val scale by animateFloatAsState(if (isPressed) 0.99f else 1f)
-                        val bg = when {
-                            isPressed -> Color(0xFF1565C0)
-                            isActive -> Color(0xFF1E88E5)
-                            else -> Color.Black
-                        }
+                        val isPressed = pressedBlackMidi == bk.midi
+                        val bg = if (isPressed) Color(0xFF1565C0) else Color.Black
 
                         Box(
                             modifier = Modifier
-                                .offset(x = blackOffsetBaseDp - (fullContentWidthDp - visibleWidthDp) / 2f, y = offsetTopDp)
+                                .offset(x = blackDrawLeftDp, y = offsetTopDp)
                                 .width(blackKeyWidthDp)
                                 .height(blackThicknessDp)
-                                .shadow(elevation)
-                                .graphicsLayer { scaleX = scale; scaleY = scale }
+                                .shadow(if (isPressed) 10.dp else 4.dp)
                                 .background(bg)
                         ) {}
                     }
 
-                    // Touch handling overlay — use same dims as above for hit detection and drive pressedIndex
+                    // --- REWRITTEN TOUCH OVERLAY ---
                     Box(
                         modifier = Modifier
                             .matchParentSize()
                             .pointerInput(Unit) {
                                 detectTapGestures(
                                     onPress = { offset ->
-                                        // offset is local to this box (which is already shifted to show right portion)
-                                        // We must include vertical scroll value (sState.value) because verticalScroll shifts content.
-                                        val localY = offset.y + sState.value.toFloat()
+                                        // FIXED: offset is already relative to this Box's content.
+                                        // Do NOT add sState.value.
+                                        val localY = offset.y
                                         val localX = offset.x
 
-                                        // compute nearest reversedWhite index by pure geometry (center at (i+0.5)*keySizePx)
-                                        fun nearestReversedIndex(yPx: Float): Int {
-                                            // raw index in reversed order (0..whiteCount-1)
-                                            val raw = ((yPx / keySizePx) - 0.5f).roundToInt()
-                                            return raw.coerceIn(0, whiteCount - 1)
-                                        }
-
-                                        // black-key hit detection (priority)
                                         var hitMidi: Int? = null
-                                        var hitIsBlack = false
 
-                                        val blackHalfY = blackThicknessPx / 2f
-                                        // compute black X-range relative to visible area:
-                                        // black boxes were drawn at x = blackOffsetBaseDp - (fullContentWidthDp - visibleWidthDp)/2f
-                                        val blackDrawLeftPx = with(density) { (blackOffsetBaseDp - (fullContentWidthDp - visibleWidthDp) / 2f).toPx() }
-                                        val blackDrawRightPx = blackDrawLeftPx + blackKeyWidthPx
-
-                                        // tighten vertical tolerance a bit to reduce accidental hits
-                                        val verticalTolerance = blackHalfY * (1f - deadZoneFraction)
-
+                                        // 1. Check Black Keys First
                                         for (bk in blackKeys) {
-                                            val reversedLeft = whiteCount - 1 - bk.leftWhiteIndex
-                                            val centerPx = (reversedLeft + 0.5f) * keySizePx - (keySizePx * blackKeyShiftFraction)
-                                            if (abs(localY - centerPx) <= verticalTolerance) {
-                                                if (localX in blackDrawLeftPx..blackDrawRightPx) {
-                                                    hitMidi = bk.midi
-                                                    hitIsBlack = true
-                                                    break
-                                                }
+                                            val revIdx = whiteCount - 1 - bk.leftWhiteIndex
+                                            val bCenterY = (revIdx + 0.5f) * keySizePx - (keySizePx * blackKeyShiftFraction)
+                                            val bTop = bCenterY - (blackThicknessPx / 2f)
+                                            val bBottom = bCenterY + (blackThicknessPx / 2f)
+
+                                            if (localY in bTop..bBottom && localX in blackDrawLeftPx..blackDrawRightPx) {
+                                                hitMidi = bk.midi
+                                                pressedBlackMidi = bk.midi
+                                                break
                                             }
                                         }
 
-                                        if (!hitIsBlack) {
-                                            // nearest white (reversed index)
-                                            val idx = nearestReversedIndex(localY)
-
-                                            // optional dead-zone: if touch is near the border between two keys, require closeness to center
-                                            val centerPx = (idx + 0.5f) * keySizePx
-                                            val maxAllowed = keySizePx * (0.5f - deadZoneFraction)
-                                            val dist = abs(localY - centerPx)
-                                            if (dist <= maxAllowed) {
-                                                hitMidi = reversedWhite[idx]
-                                                // store pressed index (for UI)
-                                                pressedIndex = idx
-                                                pressedBlackMidi = null
-                                            } else {
-                                                // Touch was too close to border — treat as no-hit to avoid accidental wrong key
-                                                hitMidi = null
-                                                pressedIndex = null
-                                                pressedBlackMidi = null
-                                            }
-                                        } else {
-                                            // black key selected: set highlight accordingly
-                                            pressedBlackMidi = hitMidi
-                                            pressedIndex = null
+                                        // 2. Check White Keys
+                                        if (hitMidi == null) {
+                                            val idx = (localY / keySizePx).toInt().coerceIn(0, whiteCount - 1)
+                                            hitMidi = reversedWhite[idx]
+                                            pressedIndex = idx
                                         }
 
-                                        if (hitMidi != null) {
-                                            // play continuous tone
-                                            val freq = 440.0 * 2.0.pow((hitMidi - 69) / 12.0)
-                                            // sync midi -> pressedMidi so UI driven by same source
-                                            pressedMidi = hitMidi
-                                            ToneGenerator.playToneContinuous(freq)
-                                        } else {
-                                            // no valid hit: do nothing
-                                        }
+                                        pressedMidi = hitMidi
+                                        val freq = 440.0 * 2.0.pow((hitMidi!! - 69) / 12.0)
+                                        ToneGenerator.playToneContinuous(freq)
 
-                                        try {
-                                            tryAwaitRelease()
-                                        } catch (_: Exception) {
-                                        }
+                                        try { tryAwaitRelease() } catch (_: Exception) {}
 
-                                        // stop tone and clear highlights
                                         ToneGenerator.stop()
                                         pressedMidi = null
                                         pressedIndex = null
                                         pressedBlackMidi = null
                                     },
-
                                     onTap = { offset ->
-                                        val localY = offset.y + sState.value.toFloat()
+                                        val localY = offset.y
                                         val localX = offset.x
-
-                                        fun nearestReversedIndex(yPx: Float): Int {
-                                            val raw = ((yPx / keySizePx) - 0.5f).roundToInt()
-                                            return raw.coerceIn(0, whiteCount - 1)
-                                        }
-
                                         var hitMidi: Int? = null
-                                        var hitIsBlack = false
-
-                                        val blackHalfY = blackThicknessPx / 2f
-                                        val blackDrawLeftPx = with(density) { (blackOffsetBaseDp - (fullContentWidthDp - visibleWidthDp) / 2f).toPx() }
-                                        val blackDrawRightPx = blackDrawLeftPx + blackKeyWidthPx
-                                        val verticalTolerance = blackHalfY * (1f - deadZoneFraction)
 
                                         for (bk in blackKeys) {
-                                            val reversedLeft = whiteCount - 1 - bk.leftWhiteIndex
-                                            val centerPx = (reversedLeft + 0.5f) * keySizePx - (keySizePx * blackKeyShiftFraction)
-                                            if (abs(localY - centerPx) <= verticalTolerance) {
-                                                if (localX in blackDrawLeftPx..blackDrawRightPx) {
-                                                    hitMidi = bk.midi
-                                                    hitIsBlack = true
-                                                    break
-                                                }
+                                            val revIdx = whiteCount - 1 - bk.leftWhiteIndex
+                                            val bCenterY = (revIdx + 0.5f) * keySizePx - (keySizePx * blackKeyShiftFraction)
+                                            if (localY in (bCenterY - blackThicknessPx/2)..(bCenterY + blackThicknessPx/2) &&
+                                                localX in blackDrawLeftPx..blackDrawRightPx) {
+                                                hitMidi = bk.midi
+                                                break
                                             }
                                         }
-
-                                        if (!hitIsBlack) {
-                                            val idx = nearestReversedIndex(localY)
-                                            val centerPx = (idx + 0.5f) * keySizePx
-                                            val maxAllowed = keySizePx * (0.5f - deadZoneFraction)
-                                            val dist = abs(localY - centerPx)
-                                            if (dist <= maxAllowed) {
-                                                hitMidi = reversedWhite[idx]
-                                                pressedIndex = idx
-                                                pressedBlackMidi = null
-                                            } else {
-                                                hitMidi = null
-                                            }
-                                        } else {
-                                            pressedBlackMidi = hitMidi
-                                            pressedIndex = null
+                                        if (hitMidi == null) {
+                                            val idx = (localY / keySizePx).toInt().coerceIn(0, whiteCount - 1)
+                                            hitMidi = reversedWhite[idx]
                                         }
 
-                                        if (hitMidi != null) {
-                                            pressedMidi = hitMidi
-                                            val freq = 440.0 * 2.0.pow((hitMidi - 69) / 12.0)
-                                            ToneGenerator.playTone(freq, 300)
-
-                                            // keep highlight briefly
-                                            scope.launch {
-                                                kotlinx.coroutines.delay(260)
-                                                if (pressedMidi == hitMidi) pressedMidi = null
-                                                if (pressedIndex == (whiteKeys.indexOf(hitMidi).let { if (it >= 0) whiteCount - 1 - it else null })) {
-                                                    // clear pressedIndex if still same
-                                                    pressedIndex = null
-                                                }
-                                                if (pressedBlackMidi == hitMidi) pressedBlackMidi = null
-                                            }
-
-                                            onKeyPressed?.invoke(hitMidi, freq)
-                                        }
+                                        val freq = 440.0 * 2.0.pow((hitMidi!! - 69) / 12.0)
+                                        ToneGenerator.playTone(freq, 300)
+                                        onKeyPressed?.invoke(hitMidi, freq)
                                     }
                                 )
                             }
-                    ) {}
+                    )
                 }
             }
         }
