@@ -17,6 +17,7 @@ import kotlinx.coroutines.launch
 import androidx.compose.foundation.ScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.runtime.saveable.rememberSaveable
 import kotlin.math.roundToInt
 
 @Composable
@@ -25,25 +26,19 @@ fun MainScreen() {
     val engine = remember { PitchEngine(scope) }
     val state by engine.state.collectAsState()
 
-    // Auto-center toggle
-    var autoCenter by remember { mutableStateOf(true) }
+    // Persist across rotations using rememberSaveable
+    var autoCenter by rememberSaveable { mutableStateOf(true) }
+    var whiteKeyWidthDpFloat by rememberSaveable { mutableStateOf(56f) }
+    var smoothing by rememberSaveable { mutableStateOf(0.5f) }
+    var showNoteLabels by rememberSaveable { mutableStateOf(true) }
+    var showHorizontalGrid by rememberSaveable { mutableStateOf(true) }
+    var showCurve by rememberSaveable { mutableStateOf(true) }
+    var showWhiteTrace by rememberSaveable { mutableStateOf(true) }
 
-    // track last stable note (used for auto-centering)
-    var stableMidi by remember { mutableStateOf<Int?>(null) }
-
-    // white key width control (in dp)
-    var whiteKeyWidthDpFloat by remember { mutableStateOf(56f) }
-
-    // graph pause/hold
+    // transient state that doesn't need to persist across rotation
     var graphPaused by remember { mutableStateOf(false) }
-
-    // alignment tweak (dp) — small range to nudge pitch -> x mapping
-    var graphAlignmentDp by remember { mutableStateOf(0f) } // in dp; can be negative
-
-    // graph visual toggles (lifted so top bar can control them)
-    var showNoteLabels by remember { mutableStateOf(true) }
-    var showHorizontalGrid by remember { mutableStateOf(true) }
-    var showCurve by remember { mutableStateOf(true) }
+    var stableMidi by remember { mutableStateOf<Int?>(null) }
+    var graphAlignmentDp by remember { mutableStateOf(0f) }
 
     // shared scroll state (will be used horizontally in portrait, vertically in landscape)
     val sharedScroll = rememberScrollState()
@@ -73,24 +68,28 @@ fun MainScreen() {
     ) {
 
         if (isLandscape) {
-            // Top bar spanning full width: detected note, confidence, compact controls (tune menu for slider), auto-center, hold & gear
+            // Top bar spanning full width: detected note, confidence, compact controls (Hold & Gear only)
             TopAppBarLandscapeCompact(
                 detectedFreq = state.frequency,
                 detectedConfidence = state.confidence,
                 activeMidi = activeMidi,
+                // pass current settings
                 whiteKeyWidthDpFloat = whiteKeyWidthDpFloat,
                 onWhiteKeyWidthChange = { whiteKeyWidthDpFloat = it },
                 autoCenter = autoCenter,
                 onAutoCenterToggle = { autoCenter = it },
                 paused = graphPaused,
                 onTogglePause = { graphPaused = !graphPaused },
-                // pass visual toggle state handlers
                 showNoteLabels = showNoteLabels,
                 onToggleShowNoteLabels = { showNoteLabels = it },
                 showHorizontalGrid = showHorizontalGrid,
                 onToggleShowHorizontalGrid = { showHorizontalGrid = it },
                 showCurve = showCurve,
-                onToggleShowCurve = { showCurve = it }
+                onToggleShowCurve = { showCurve = it },
+                smoothing = smoothing,
+                onSmoothingChange = { smoothing = it },
+                showWhiteTrace = showWhiteTrace,
+                onShowWhiteTraceChange = { showWhiteTrace = it }
             )
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -137,12 +136,13 @@ fun MainScreen() {
                         scrollState = sharedScroll,
                         alignmentOffsetDp = graphAlignmentDp.dp,
                         timeWindowMs = 8000L,
-                        // pass visual toggle state
                         showNoteLabels = showNoteLabels,
                         showHorizontalGrid = showHorizontalGrid,
                         showCurve = showCurve,
                         rotated = true,
-                        blackKeyShiftFraction = 0.5f
+                        blackKeyShiftFraction = 0.5f,
+                        smoothing = smoothing,
+                        showWhiteTrace = showWhiteTrace
                     )
                 }
             }
@@ -163,13 +163,6 @@ fun MainScreen() {
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(text = "Vocal Pitch Monitor", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
 
-                // Auto-center switch
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(text = "Auto-center")
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Switch(checked = autoCenter, onCheckedChange = { autoCenter = it })
-                }
-
                 Spacer(modifier = Modifier.width(12.dp))
 
                 // Hold button in portrait header
@@ -179,30 +172,79 @@ fun MainScreen() {
 
                 Spacer(modifier = Modifier.width(8.dp))
 
-                // Gear menu in portrait header
+                // Gear menu in portrait header (contains note labels, grid, curve, auto-center, key width slider and smoothing and white-trace toggle)
                 var menuExpandedPortrait by remember { mutableStateOf(false) }
                 IconButton(onClick = { menuExpandedPortrait = true }) { Icon(imageVector = Icons.Filled.Settings, contentDescription = "Options") }
-                DropdownMenu(expanded = menuExpandedPortrait, onDismissRequest = { menuExpandedPortrait = false }) {
-                    DropdownMenuItem(text = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                DropdownMenu(
+                    expanded = menuExpandedPortrait,
+                    onDismissRequest = { menuExpandedPortrait = false },
+                    modifier = Modifier.width(360.dp)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        // Note labels
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                             Text(text = "Note labels", modifier = Modifier.weight(1f))
                             Switch(checked = showNoteLabels, onCheckedChange = { showNoteLabels = it })
                         }
-                    }, onClick = { })
+                        Spacer(modifier = Modifier.height(8.dp))
 
-                    DropdownMenuItem(text = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        // Grid lines
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                             Text(text = "Grid lines", modifier = Modifier.weight(1f))
                             Switch(checked = showHorizontalGrid, onCheckedChange = { showHorizontalGrid = it })
                         }
-                    }, onClick = { })
+                        Spacer(modifier = Modifier.height(8.dp))
 
-                    DropdownMenuItem(text = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        // Curve
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                             Text(text = "Curve", modifier = Modifier.weight(1f))
                             Switch(checked = showCurve, onCheckedChange = { showCurve = it })
                         }
-                    }, onClick = { })
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Divider()
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Auto-center moved here
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                            Text(text = "Auto-center", modifier = Modifier.weight(1f))
+                            Switch(checked = autoCenter, onCheckedChange = { autoCenter = it })
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Key width slider
+                        Text(text = "Key width: ${whiteKeyWidthDpFloat.roundToInt()} dp", style = MaterialTheme.typography.bodySmall)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Slider(
+                            value = whiteKeyWidthDpFloat,
+                            onValueChange = { whiteKeyWidthDpFloat = it },
+                            valueRange = 36f..96f,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Divider()
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Smoothing slider (0 = discrete, 1 = very smooth)
+                        Text(text = "Smoothing: ${(smoothing * 100).roundToInt()}%", style = MaterialTheme.typography.bodySmall)
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Slider(
+                            value = smoothing,
+                            onValueChange = { smoothing = it },
+                            valueRange = 0f..1f,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Show white trace toggle
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                            Text(text = "Show white trace", modifier = Modifier.weight(1f))
+                            Switch(checked = showWhiteTrace, onCheckedChange = { showWhiteTrace = it })
+                        }
+                    }
                 }
             }
 
@@ -218,14 +260,6 @@ fun MainScreen() {
                     val noteText = if (activeMidi != null) midiToNoteName(activeMidi!!) else "-"
                     Text(text = "Detected: $noteText")
                 }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Key width control
-            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
-                Text(text = "Key width: ${whiteKeyWidthDpFloat.toInt()} dp — approx ${(config.screenWidthDp / whiteKeyWidthDpFloat).toInt()} keys visible", style = MaterialTheme.typography.bodyMedium)
-                Slider(value = whiteKeyWidthDpFloat, onValueChange = { whiteKeyWidthDpFloat = it }, valueRange = 36f..96f)
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -262,7 +296,9 @@ fun MainScreen() {
                 showHorizontalGrid = showHorizontalGrid,
                 showCurve = showCurve,
                 rotated = false,
-                blackKeyShiftFraction = 0.5f
+                blackKeyShiftFraction = 0.5f,
+                smoothing = smoothing,
+                showWhiteTrace = showWhiteTrace
             )
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -280,8 +316,7 @@ fun MainScreen() {
 
 /**
  * Compact landscape TopAppBar:
- * - compact "tune" icon replaced with emoji button (avoids missing icon dependency)
- * - Auto-center switch, Hold/Resume button and Gear icon laid out horizontally next to it
+ * - holds only Hold/Resume + Gear. Gear contains note labels, grid, curve, auto-center, key width, smoothing and white-trace toggle
  */
 @Composable
 private fun TopAppBarLandscapeCompact(
@@ -300,7 +335,11 @@ private fun TopAppBarLandscapeCompact(
     showHorizontalGrid: Boolean,
     onToggleShowHorizontalGrid: (Boolean) -> Unit,
     showCurve: Boolean,
-    onToggleShowCurve: (Boolean) -> Unit
+    onToggleShowCurve: (Boolean) -> Unit,
+    smoothing: Float,
+    onSmoothingChange: (Float) -> Unit,
+    showWhiteTrace: Boolean,
+    onShowWhiteTraceChange: (Boolean) -> Unit
 ) {
     TopAppBar(
         title = {
@@ -318,75 +357,92 @@ private fun TopAppBarLandscapeCompact(
                     )
                 }
 
-                // Right compact controls: emoji-tune button (opens slider popup), auto-center, hold, gear
+                // Right compact controls: Hold & Gear only (gear contains auto + slider + smoothing + white-trace)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.wrapContentWidth()
                 ) {
-                    // Emoji-based Tune button -> opens a small DropdownMenu containing the slider
-                    var tuneMenuExpanded by remember { mutableStateOf(false) }
-                    Box {
-                        IconButton(onClick = { tuneMenuExpanded = true }) {
-                            // use an emoji so no missing icon dependency
-                            Text(text = "🎚", fontSize = 20.sp)
-                        }
-                        DropdownMenu(
-                            expanded = tuneMenuExpanded,
-                            onDismissRequest = { tuneMenuExpanded = false },
-                            modifier = Modifier.width(220.dp)
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text(text = "Key width: ${whiteKeyWidthDpFloat.roundToInt()} dp", style = MaterialTheme.typography.bodySmall)
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Slider(
-                                    value = whiteKeyWidthDpFloat,
-                                    onValueChange = onWhiteKeyWidthChange,
-                                    valueRange = 36f..96f,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                            }
-                        }
-                    }
-
-                    // Auto-center (compact)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(text = "Auto", style = MaterialTheme.typography.bodySmall)
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Switch(checked = autoCenter, onCheckedChange = onAutoCenterToggle)
-                    }
-
                     // Hold / Resume
                     Button(onClick = onTogglePause) {
                         Text(if (paused) "Resume" else "Hold")
                     }
 
-                    // Gear menu (graph options) - keep the settings icon
+                    // Gear menu (graph options) - now a larger menu with additional controls (auto + key width + smoothing)
                     var menuExpanded by remember { mutableStateOf(false) }
                     IconButton(onClick = { menuExpanded = true }) {
                         Icon(imageVector = Icons.Filled.Settings, contentDescription = "Graph options")
                     }
-                    DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
-                        DropdownMenuItem(text = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                    DropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false },
+                        modifier = Modifier.width(360.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            // Note labels
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                                 Text(text = "Note labels", modifier = Modifier.weight(1f))
                                 Switch(checked = showNoteLabels, onCheckedChange = { onToggleShowNoteLabels(it) })
                             }
-                        }, onClick = { })
+                            Spacer(modifier = Modifier.height(8.dp))
 
-                        DropdownMenuItem(text = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            // Grid lines
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                                 Text(text = "Grid lines", modifier = Modifier.weight(1f))
                                 Switch(checked = showHorizontalGrid, onCheckedChange = { onToggleShowHorizontalGrid(it) })
                             }
-                        }, onClick = { })
+                            Spacer(modifier = Modifier.height(8.dp))
 
-                        DropdownMenuItem(text = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            // Curve
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                                 Text(text = "Curve", modifier = Modifier.weight(1f))
                                 Switch(checked = showCurve, onCheckedChange = { onToggleShowCurve(it) })
                             }
-                        }, onClick = { })
+
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Divider()
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // Auto-center moved here
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                Text(text = "Auto-center", modifier = Modifier.weight(1f))
+                                Switch(checked = autoCenter, onCheckedChange = { onAutoCenterToggle(it) })
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // Key width slider
+                            Text(text = "Key width: ${whiteKeyWidthDpFloat.roundToInt()} dp", style = MaterialTheme.typography.bodySmall)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Slider(
+                                value = whiteKeyWidthDpFloat,
+                                onValueChange = onWhiteKeyWidthChange,
+                                valueRange = 36f..96f,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Divider()
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // Smoothing slider
+                            Text(text = "Smoothing: ${(smoothing * 100).roundToInt()}%", style = MaterialTheme.typography.bodySmall)
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Slider(
+                                value = smoothing,
+                                onValueChange = onSmoothingChange,
+                                valueRange = 0f..1f,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // Show white traced curve toggle
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                Text(text = "Show white trace", modifier = Modifier.weight(1f))
+                                Switch(checked = showWhiteTrace, onCheckedChange = { onShowWhiteTraceChange(it) })
+                            }
+                        }
                     }
                 }
             }

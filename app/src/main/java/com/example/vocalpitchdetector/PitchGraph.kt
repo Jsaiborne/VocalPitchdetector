@@ -4,7 +4,6 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -27,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.flow.collectLatest
 import kotlin.math.log2
 import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.ui.graphics.nativeCanvas
 
 private data class PitchSample(val tMs: Long, val freq: Float, val midi: Float)
@@ -37,6 +37,52 @@ private fun midiToNoteNameLocal(midi: Int): String {
     val names = arrayOf("C","C#","D","D#","E","F","F#","G","G#","A","A#","B")
     val octave = midi / 12 - 1
     return "${names[midi % 12]}$octave"
+}
+
+/** Convert a list of points into a smoothed path using Catmull-Rom -> cubic bezier.
+ * smoothing ∈ [0..1] scales the tension; 0 => no smoothing (linear)
+ */
+private fun buildSmoothedPath(points: List<Offset>, smoothing: Float): Path {
+    val path = Path()
+    if (points.isEmpty()) return path
+    if (points.size == 1) { path.moveTo(points[0].x, points[0].y); return path }
+    if (smoothing <= 0.001f) {
+        // linear connect
+        path.moveTo(points[0].x, points[0].y)
+        for (i in 1 until points.size) path.lineTo(points[i].x, points[i].y)
+        return path
+    }
+
+    // Catmull-Rom to Bezier conversion
+    val t = smoothing // 0..1
+    // we'll use factor = t / 6 to scale the control point offsets (1/6 is standard)
+    val factor = t / 6f
+
+    // For endpoints, duplicate first/last
+    val pts = mutableListOf<Offset>()
+    pts.add(points.first()) // P0 duplicate
+    pts.addAll(points)
+    pts.add(points.last())  // Pn+1 duplicate
+
+    path.moveTo(points[0].x, points[0].y)
+    for (i in 1 until pts.size - 2) {
+        val p0 = pts[i - 1]
+        val p1 = pts[i]
+        val p2 = pts[i + 1]
+        val p3 = pts[i + 2]
+
+        // control points for cubic bezier between p1 -> p2
+        val cp1 = Offset(
+            x = p1.x + (p2.x - p0.x) * factor,
+            y = p1.y + (p2.y - p0.y) * factor
+        )
+        val cp2 = Offset(
+            x = p2.x - (p3.x - p1.x) * factor,
+            y = p2.y - (p3.y - p1.y) * factor
+        )
+        path.cubicTo(cp1.x, cp1.y, cp2.x, cp2.y, p2.x, p2.y)
+    }
+    return path
 }
 
 /**
@@ -58,7 +104,11 @@ fun PitchGraphCard(
     rotated: Boolean = false,
     showNoteLabels: Boolean = true,
     showHorizontalGrid: Boolean = true,
-    showCurve: Boolean = true
+    showCurve: Boolean = true,
+    // new smoothing parameter (0..1)
+    smoothing: Float = 0.5f,
+    // show/hide the white traced curve
+    showWhiteTrace: Boolean = true
 ) {
     Card(modifier = modifier, shape = RoundedCornerShape(12.dp)) {
         Box(modifier = Modifier
@@ -80,7 +130,9 @@ fun PitchGraphCard(
                     blackKeyShiftFraction = blackKeyShiftFraction,
                     showNoteLabels = showNoteLabels,
                     showHorizontalGrid = showHorizontalGrid,
-                    showCurve = showCurve
+                    showCurve = showCurve,
+                    smoothing = smoothing,
+                    showWhiteTrace = showWhiteTrace
                 )
             } else {
                 PitchGraphVertical(
@@ -96,7 +148,9 @@ fun PitchGraphCard(
                     blackKeyShiftFraction = blackKeyShiftFraction,
                     showNoteLabels = showNoteLabels,
                     showHorizontalGrid = showHorizontalGrid,
-                    showCurve = showCurve
+                    showCurve = showCurve,
+                    smoothing = smoothing,
+                    showWhiteTrace = showWhiteTrace
                 )
             }
         }
@@ -120,7 +174,9 @@ fun PitchGraphHorizontal(
     blackKeyShiftFraction: Float = 0.5f,
     showNoteLabels: Boolean = true,
     showHorizontalGrid: Boolean = true,
-    showCurve: Boolean = true
+    showCurve: Boolean = true,
+    smoothing: Float = 0.5f,
+    showWhiteTrace: Boolean = true
 ) {
     val samples = remember { mutableStateListOf<PitchSample>() }
     val stableMarkers = remember { mutableStateListOf<StableMarker>() }
@@ -274,31 +330,39 @@ fun PitchGraphHorizontal(
                     return@Canvas
                 }
 
-                // build path (time -> y, midi -> x)
-                val path = Path()
+                // build path (time -> y, midi -> x) for blue curve (unchanged)
+                val bluePath = Path()
                 var started = false
                 val nowLast = samples.last().tMs
+                val pointsForWhiteTrace = mutableListOf<Offset>()
                 for (s in samples) {
                     val x = xForMidiFloat(s.midi)
                     val y = padTop + innerH * ((s.tMs - (nowLast - windowMs)).toFloat() / windowMs.toFloat())
                     if (!started) {
-                        path.moveTo(x, y)
+                        bluePath.moveTo(x, y)
                         started = true
                     } else {
-                        path.lineTo(x, y)
+                        bluePath.lineTo(x, y)
                     }
+                    pointsForWhiteTrace.add(Offset(x, y))
                 }
 
                 if (showCurve) {
-                    val areaPath = Path().apply { addPath(path) }
+                    val areaPath = Path().apply { addPath(bluePath) }
                     areaPath.lineTo(padLeft + innerW, padTop + innerH)
                     areaPath.lineTo(padLeft, padTop + innerH)
                     areaPath.close()
                     drawPath(path = areaPath, brush = Brush.verticalGradient(listOf(Color(0x5522B6FF), Color(0x1122B6FF))), style = Fill)
-                    drawPath(path = path, color = Color(0xFF7AD3FF), style = Stroke(width = 3f))
+                    drawPath(path = bluePath, color = Color(0xFF7AD3FF), style = Stroke(width = 3f))
                 }
 
-                // points
+                // --- NEW: draw smoothed white trace built from the white dots (controlled by smoothing) ---
+                if (showWhiteTrace && pointsForWhiteTrace.size >= 2) {
+                    val smoothedPath = buildSmoothedPath(pointsForWhiteTrace, smoothing.coerceIn(0f, 1f))
+                    drawPath(path = smoothedPath, color = Color(0xCCFFFFFF), style = Stroke(width = 2f))
+                }
+
+                // points (white dots)
                 for (s in samples) {
                     val x = xForMidiFloat(s.midi)
                     val y = padTop + innerH * ((s.tMs - (nowLast - windowMs)).toFloat() / windowMs.toFloat())
@@ -360,7 +424,9 @@ fun PitchGraphVertical(
     blackKeyShiftFraction: Float = 0.5f,
     showNoteLabels: Boolean = true,
     showHorizontalGrid: Boolean = true,
-    showCurve: Boolean = true
+    showCurve: Boolean = true,
+    smoothing: Float = 0.5f,
+    showWhiteTrace: Boolean = true
 ) {
     val samples = remember { mutableStateListOf<PitchSample>() }
     val stableMarkers = remember { mutableStateListOf<StableMarker>() }
@@ -518,27 +584,35 @@ fun PitchGraphVertical(
                     return padLeft + rel * innerW
                 }
 
-                // path
-                val path = Path()
+                // build path for blue curve (time->x, midi->y)
+                val bluePath = Path()
                 var started = false
+                val pointsForWhiteTrace = mutableListOf<Offset>()
                 for (s in samples) {
                     val x = xForTime(s.tMs)
                     val y = yForMidiFloat(s.midi)
                     if (!started) {
-                        path.moveTo(x, y)
+                        bluePath.moveTo(x, y)
                         started = true
                     } else {
-                        path.lineTo(x, y)
+                        bluePath.lineTo(x, y)
                     }
+                    pointsForWhiteTrace.add(Offset(x, y))
                 }
 
                 if (showCurve) {
-                    val areaPath = Path().apply { addPath(path) }
+                    val areaPath = Path().apply { addPath(bluePath) }
                     areaPath.lineTo(padLeft + innerW, padTop + innerH)
                     areaPath.lineTo(padLeft, padTop + innerH)
                     areaPath.close()
                     drawPath(path = areaPath, brush = Brush.horizontalGradient(listOf(Color(0x5522B6FF), Color(0x1122B6FF))), style = Fill)
-                    drawPath(path = path, color = Color(0xFF7AD3FF), style = Stroke(width = 3f))
+                    drawPath(path = bluePath, color = Color(0xFF7AD3FF), style = Stroke(width = 3f))
+                }
+
+                // --- NEW: draw smoothed white trace built from the white dots (controlled by smoothing) ---
+                if (showWhiteTrace && pointsForWhiteTrace.size >= 2) {
+                    val smoothedPath = buildSmoothedPath(pointsForWhiteTrace, smoothing.coerceIn(0f, 1f))
+                    drawPath(path = smoothedPath, color = Color(0xCCFFFFFF), style = Stroke(width = 2f))
                 }
 
                 // points
@@ -558,15 +632,24 @@ fun PitchGraphVertical(
                     }
                 }
 
-                // stable markers + labels
+                // stable markers (horizontal) + labels (unchanged)
                 for (m in stableMarkers) {
                     val x = xForTime(m.tMs)
                     val y = midiY[m.midi - minMidi]
-                    drawLine(color = Color(0xFFFFD54F), start = Offset(x, padTop), end = Offset(x, padTop + innerH), strokeWidth = 2f)
-                    if (showNoteLabels) drawIntoCanvas { canvas -> canvas.nativeCanvas.drawText(midiToNoteNameLocal(m.midi), x + 6f, y - 10f, yellowPaint) }
+                    drawLine(
+                        color = Color(0xFFFFD54F),
+                        start = Offset(padLeft, y),
+                        end = Offset(padLeft + innerW, y),
+                        strokeWidth = 2f
+                    )
+                    if (showNoteLabels) {
+                        drawIntoCanvas { canvas ->
+                            canvas.nativeCanvas.drawText(midiToNoteNameLocal(m.midi), padLeft + 6f, y - 10f, yellowPaint)
+                        }
+                    }
                 }
 
-                // latest label
+                // latest label (closest sample)
                 val last = samples.last()
                 if (!last.midi.isNaN()) {
                     val nearest = last.midi.toInt().coerceIn(minMidi, maxMidi)
