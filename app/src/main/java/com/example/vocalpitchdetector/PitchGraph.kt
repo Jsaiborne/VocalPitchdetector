@@ -29,7 +29,7 @@ import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.ui.graphics.nativeCanvas
 
-private data class PitchSample(val tMs: Long, val freq: Float, val midi: Float)
+private data class GraphPitchSample(val tMs: Long, val freq: Float, val midi: Float)
 private data class StableMarker(val tMs: Long, val midi: Int)
 
 private fun freqToMidiLocal(f: Double): Double = 69.0 + 12.0 * log2(f / 440.0)
@@ -178,7 +178,7 @@ fun PitchGraphHorizontal(
     smoothing: Float = 0.5f,
     showWhiteTrace: Boolean = true
 ) {
-    val samples = remember { mutableStateListOf<PitchSample>() }
+    val samples = remember { mutableStateListOf<GraphPitchSample>() }
     val stableMarkers = remember { mutableStateListOf<StableMarker>() }
     val density = LocalDensity.current
 
@@ -188,7 +188,7 @@ fun PitchGraphHorizontal(
             if (!paused) {
                 val t = System.currentTimeMillis()
                 val midiF = if (s.frequency > 0f) freqToMidiLocal(s.frequency.toDouble()).toFloat() else Float.NaN
-                samples.add(PitchSample(tMs = t, freq = s.frequency, midi = midiF))
+                samples.add(GraphPitchSample(tMs = t, freq = s.frequency, midi = midiF))
                 val cutoff = t - windowMs
                 while (samples.isNotEmpty() && samples.first().tMs < cutoff) samples.removeAt(0)
             }
@@ -428,7 +428,7 @@ fun PitchGraphVertical(
     smoothing: Float = 0.5f,
     showWhiteTrace: Boolean = true
 ) {
-    val samples = remember { mutableStateListOf<PitchSample>() }
+    val samples = remember { mutableStateListOf<GraphPitchSample>() }
     val stableMarkers = remember { mutableStateListOf<StableMarker>() }
     val density = LocalDensity.current
 
@@ -438,7 +438,7 @@ fun PitchGraphVertical(
             if (!paused) {
                 val t = System.currentTimeMillis()
                 val midiF = if (s.frequency > 0f) freqToMidiLocal(s.frequency.toDouble()).toFloat() else Float.NaN
-                samples.add(PitchSample(tMs = t, freq = s.frequency, midi = midiF))
+                samples.add(GraphPitchSample(tMs = t, freq = s.frequency, midi = midiF))
                 val cutoff = t - windowMs
                 while (samples.isNotEmpty() && samples.first().tMs < cutoff) samples.removeAt(0)
             }

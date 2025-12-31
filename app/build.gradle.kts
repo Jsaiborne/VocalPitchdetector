@@ -59,5 +59,6 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     implementation("com.github.st-h:TarsosDSP:2.4.1")
+    implementation("androidx.compose.material:material-icons-extended")
 
 }

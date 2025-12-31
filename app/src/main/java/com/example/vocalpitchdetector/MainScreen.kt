@@ -2,31 +2,64 @@
 
 package com.example.vocalpitchdetector
 
+import android.Manifest
 import android.content.res.Configuration
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.draw.scale
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.launch
-import androidx.compose.foundation.ScrollState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.runtime.saveable.rememberSaveable
+import java.io.File
+import kotlin.math.log2
 import kotlin.math.roundToInt
+
 
 @Composable
 fun MainScreen() {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val engine = remember { PitchEngine(scope) }
+
+    // single shared RecordingManager instance
+    val recordingManager = remember {
+        RecordingManager(context, engine, 44100, scope)
+    }
+
+    LaunchedEffect(Unit) {
+        engine.attachRecordingManager(recordingManager)
+    }
+
     val state by engine.state.collectAsState()
 
-    // Persist across rotations using rememberSaveable
+    // runtime mic permission state & launcher
+    var hasMicPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        hasMicPermission = granted
+    }
+    val requestMicPermission: () -> Unit = { micLauncher.launch(Manifest.permission.RECORD_AUDIO) }
+
+    // Persistent Settings
     var autoCenter by rememberSaveable { mutableStateOf(true) }
     var whiteKeyWidthDpFloat by rememberSaveable { mutableStateOf(56f) }
     var smoothing by rememberSaveable { mutableStateOf(0.5f) }
@@ -35,12 +68,11 @@ fun MainScreen() {
     var showCurve by rememberSaveable { mutableStateOf(true) }
     var showWhiteTrace by rememberSaveable { mutableStateOf(true) }
 
-    // transient state that doesn't need to persist across rotation
+    // UI States used by main UI (not the recorder)
     var graphPaused by remember { mutableStateOf(false) }
     var stableMidi by remember { mutableStateOf<Int?>(null) }
     var graphAlignmentDp by remember { mutableStateOf(0f) }
 
-    // shared scroll state (will be used horizontally in portrait, vertically in landscape)
     val sharedScroll = rememberScrollState()
 
     DisposableEffect(Unit) {
@@ -48,14 +80,15 @@ fun MainScreen() {
         onDispose { engine.stop() }
     }
 
-    // collect stable notes from engine and update stableMidi
     LaunchedEffect(engine) {
         engine.stableNotes.collect { note -> stableMidi = note.midi }
     }
 
-    // compute nearest MIDI note (nullable) for live highlighting
-    val activeMidi: Int? by remember(state.frequency) {
-        mutableStateOf(if (state.frequency > 0f) freqToMidi(state.frequency.toDouble()).roundToInt() else null)
+    // Use derivedStateOf so this updates only when frequency changes
+    val activeMidi by remember(state.frequency) {
+        derivedStateOf {
+            if (state.frequency > 0f) freqToMidi(state.frequency.toDouble()).roundToInt() else null
+        }
     }
 
     val config = LocalConfiguration.current
@@ -64,16 +97,25 @@ fun MainScreen() {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(6.dp), horizontalAlignment = Alignment.CenterHorizontally
+            .padding(6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        // Use the shared RecordingControls and pass permission helpers and manager
+        RecordingControls(
+            engine = engine,
+            sampleRate = 44100,
+            manager = recordingManager,
+            hasMicPermission = hasMicPermission,
+            requestMicPermission = requestMicPermission
+        )
+
+        Spacer(modifier = Modifier.height(6.dp))
 
         if (isLandscape) {
-            // Top bar spanning full width: detected note, confidence, compact controls (Hold & Gear only)
             TopAppBarLandscapeCompact(
                 detectedFreq = state.frequency,
                 detectedConfidence = state.confidence,
                 activeMidi = activeMidi,
-                // pass current settings
                 whiteKeyWidthDpFloat = whiteKeyWidthDpFloat,
                 onWhiteKeyWidthChange = { whiteKeyWidthDpFloat = it },
                 autoCenter = autoCenter,
@@ -92,234 +134,80 @@ fun MainScreen() {
                 onShowWhiteTraceChange = { showWhiteTrace = it }
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Main content: left piano, right graph — do NOT rotate outer boxes; use rotated=true in components
-            Row(modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)) {
-
-                // Left piano column — instruct Piano to render rotated internally and share vertical scroll
-                Box(modifier = Modifier
-                    .fillMaxHeight()
-                    .width(360.dp)
-                    .padding(6.dp)) {
+            Row(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                Box(modifier = Modifier.fillMaxHeight().width(300.dp).padding(4.dp)) {
                     Piano(
-                        startMidi = 24,
-                        endMidi = 84,
-                        onKeyPressed = { _, _ -> },
-                        activeMidi = activeMidi,
-                        autoCenter = autoCenter,
-                        stableMidi = stableMidi,
-                        whiteKeyWidthDp = whiteKeyWidthDpFloat.dp,
-                        scrollState = sharedScroll,
-                        rotated = true,
-                        blackKeyShiftFraction = 0.5f
+                        startMidi = 24, endMidi = 84, activeMidi = activeMidi,
+                        autoCenter = autoCenter, stableMidi = stableMidi,
+                        whiteKeyWidthDp = whiteKeyWidthDpFloat.dp, scrollState = sharedScroll,
+                        rotated = true, blackKeyShiftFraction = 0.5f
                     )
                 }
-
-                Spacer(modifier = Modifier.width(8.dp))
-
-                // Right graph area — ask PitchGraphCard to render rotated layout and share scroll vertically
-                Box(modifier = Modifier
-                    .fillMaxHeight()
-                    .weight(1f)
-                    .padding(6.dp)) {
+                Box(modifier = Modifier.fillMaxHeight().weight(1f).padding(4.dp)) {
                     PitchGraphCard(
-                        engine = engine,
-                        modifier = Modifier.fillMaxSize(),
-                        paused = graphPaused,
-                        onTogglePause = { graphPaused = !graphPaused },
-                        startMidi = 24,
-                        endMidi = 84,
-                        whiteKeyWidthDp = whiteKeyWidthDpFloat.dp,
-                        scrollState = sharedScroll,
-                        alignmentOffsetDp = graphAlignmentDp.dp,
-                        timeWindowMs = 8000L,
-                        showNoteLabels = showNoteLabels,
-                        showHorizontalGrid = showHorizontalGrid,
-                        showCurve = showCurve,
-                        rotated = true,
-                        blackKeyShiftFraction = 0.5f,
-                        smoothing = smoothing,
-                        showWhiteTrace = showWhiteTrace
+                        engine = engine, modifier = Modifier.fillMaxSize(),
+                        paused = graphPaused, onTogglePause = { graphPaused = !graphPaused },
+                        startMidi = 24, endMidi = 84, whiteKeyWidthDp = whiteKeyWidthDpFloat.dp,
+                        scrollState = sharedScroll, alignmentOffsetDp = graphAlignmentDp.dp,
+                        timeWindowMs = 8000L, showNoteLabels = showNoteLabels,
+                        showHorizontalGrid = showHorizontalGrid, showCurve = showCurve,
+                        rotated = true, blackKeyShiftFraction = 0.5f,
+                        smoothing = smoothing, showWhiteTrace = showWhiteTrace
                     )
                 }
             }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Bottom ad placeholder bar
-            Box(modifier = Modifier
-                .fillMaxWidth()
-                .height(72.dp)
-                .background(MaterialTheme.colorScheme.primaryContainer), contentAlignment = Alignment.Center) {
-                Text(text = "Ad placeholder", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
-            }
-
         } else {
-            // PORTRAIT: header row with hold + gear, info card, piano (horizontal), graph (horizontal)
-
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(text = "Vocal Pitch Monitor", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-
-                Spacer(modifier = Modifier.width(12.dp))
-
-                // Hold button in portrait header
-                Button(onClick = { graphPaused = !graphPaused }) {
-                    Text(text = if (graphPaused) "Resume" else "Hold")
-                }
-
-                Spacer(modifier = Modifier.width(8.dp))
-
-                // Gear menu in portrait header (contains note labels, grid, curve, auto-center, key width slider and smoothing and white-trace toggle)
-                var menuExpandedPortrait by remember { mutableStateOf(false) }
-                IconButton(onClick = { menuExpandedPortrait = true }) { Icon(imageVector = Icons.Filled.Settings, contentDescription = "Options") }
-                DropdownMenu(
-                    expanded = menuExpandedPortrait,
-                    onDismissRequest = { menuExpandedPortrait = false },
-                    modifier = Modifier.width(360.dp)
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        // Note labels
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                            Text(text = "Note labels", modifier = Modifier.weight(1f))
-                            Switch(checked = showNoteLabels, onCheckedChange = { showNoteLabels = it })
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        // Grid lines
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                            Text(text = "Grid lines", modifier = Modifier.weight(1f))
-                            Switch(checked = showHorizontalGrid, onCheckedChange = { showHorizontalGrid = it })
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        // Curve
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                            Text(text = "Curve", modifier = Modifier.weight(1f))
-                            Switch(checked = showCurve, onCheckedChange = { showCurve = it })
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Divider()
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // Auto-center moved here
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                            Text(text = "Auto-center", modifier = Modifier.weight(1f))
-                            Switch(checked = autoCenter, onCheckedChange = { autoCenter = it })
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // Key width slider
-                        Text(text = "Key width: ${whiteKeyWidthDpFloat.roundToInt()} dp", style = MaterialTheme.typography.bodySmall)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Slider(
-                            value = whiteKeyWidthDpFloat,
-                            onValueChange = { whiteKeyWidthDpFloat = it },
-                            valueRange = 36f..96f,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Divider()
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // Smoothing slider (0 = discrete, 1 = very smooth)
-                        Text(text = "Smoothing: ${(smoothing * 100).roundToInt()}%", style = MaterialTheme.typography.bodySmall)
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Slider(
-                            value = smoothing,
-                            onValueChange = { smoothing = it },
-                            valueRange = 0f..1f,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // Show white trace toggle
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                            Text(text = "Show white trace", modifier = Modifier.weight(1f))
-                            Switch(checked = showWhiteTrace, onCheckedChange = { showWhiteTrace = it })
-                        }
+            // PORTRAIT LAYOUT
+            Card(modifier = Modifier.fillMaxWidth().height(80.dp)) {
+                Row(modifier = Modifier.fillMaxSize().padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Column {
+                        Text("Frequency", style = MaterialTheme.typography.bodySmall)
+                        Text("${String.format("%.1f", state.frequency)} Hz", style = MaterialTheme.typography.titleMedium)
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("Note", style = MaterialTheme.typography.bodySmall)
+                        Text(activeMidi?.let { midiToNoteName(it) } ?: "-", style = MaterialTheme.typography.titleMedium)
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text("Confidence", style = MaterialTheme.typography.bodySmall)
+                        Text(String.format("%.2f", state.confidence), style = MaterialTheme.typography.titleMedium)
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(6.dp))
-
-            // Small info card (reduced height)
-            Card(modifier = Modifier.fillMaxWidth().height(100.dp)) {
-                Column(modifier = Modifier.fillMaxSize().padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                    val freqText = if (state.frequency > 0f) "${String.format("%.1f", state.frequency)} Hz" else "--"
-                    Text(text = "Frequency: $freqText")
-                    Text(text = "Confidence: ${String.format("%.2f", state.confidence)}")
-                    Spacer(modifier = Modifier.height(6.dp))
-                    val noteText = if (activeMidi != null) midiToNoteName(activeMidi!!) else "-"
-                    Text(text = "Detected: $noteText")
-                }
+            Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Auto-center", style = MaterialTheme.typography.bodySmall)
+                Switch(checked = autoCenter, onCheckedChange = { autoCenter = it }, modifier = Modifier.scale(0.8f))
+                Spacer(modifier = Modifier.weight(1f))
+                Text("Align: ${graphAlignmentDp.toInt()}dp", style = MaterialTheme.typography.bodySmall)
+                Slider(value = graphAlignmentDp, onValueChange = { graphAlignmentDp = it }, valueRange = -20f..20f, modifier = Modifier.width(100.dp))
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Slider(value = whiteKeyWidthDpFloat, onValueChange = { whiteKeyWidthDpFloat = it }, valueRange = 36f..96f)
 
-            // Piano (horizontal)
             Piano(
-                startMidi = 24,
-                endMidi = 84,
-                onKeyPressed = { _, _ -> },
-                activeMidi = activeMidi,
-                autoCenter = autoCenter,
-                stableMidi = stableMidi,
-                whiteKeyWidthDp = whiteKeyWidthDpFloat.dp,
-                scrollState = sharedScroll,
-                rotated = false,
-                blackKeyShiftFraction = 0.5f
+                startMidi = 24, endMidi = 84, scrollState = sharedScroll, activeMidi = activeMidi,
+                autoCenter = autoCenter, stableMidi = stableMidi,
+                whiteKeyWidthDp = whiteKeyWidthDpFloat.dp, whiteKeyHeight = 120.dp
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Graph (horizontal)
             PitchGraphCard(
-                engine = engine,
-                modifier = Modifier.fillMaxWidth().weight(1f).padding(6.dp),
-                paused = graphPaused,
-                onTogglePause = { graphPaused = !graphPaused },
-                startMidi = 24,
-                endMidi = 84,
-                whiteKeyWidthDp = whiteKeyWidthDpFloat.dp,
-                scrollState = sharedScroll,
-                alignmentOffsetDp = graphAlignmentDp.dp,
-                timeWindowMs = 8000L,
-                showNoteLabels = showNoteLabels,
-                showHorizontalGrid = showHorizontalGrid,
-                showCurve = showCurve,
-                rotated = false,
-                blackKeyShiftFraction = 0.5f,
-                smoothing = smoothing,
-                showWhiteTrace = showWhiteTrace
+                engine = engine, modifier = Modifier.fillMaxWidth().weight(1f),
+                paused = graphPaused, onTogglePause = { graphPaused = !graphPaused },
+                startMidi = 24, endMidi = 84, whiteKeyWidthDp = whiteKeyWidthDpFloat.dp,
+                scrollState = sharedScroll, alignmentOffsetDp = graphAlignmentDp.dp,
+                smoothing = smoothing, showCurve = showCurve
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Bottom placeholder for ads (portrait)
-            Box(modifier = Modifier
-                .fillMaxWidth()
-                .height(72.dp)
-                .background(MaterialTheme.colorScheme.primaryContainer), contentAlignment = Alignment.Center) {
-                Text(text = "Ad placeholder", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+            Box(modifier = Modifier.fillMaxWidth().height(50.dp).background(MaterialTheme.colorScheme.secondaryContainer), contentAlignment = Alignment.Center) {
+                Text("Ad Placeholder", style = MaterialTheme.typography.labelSmall)
             }
         }
     }
 }
 
-/**
- * Compact landscape TopAppBar:
- * - holds only Hold/Resume + Gear. Gear contains note labels, grid, curve, auto-center, key width, smoothing and white-trace toggle
- */
 @Composable
-private fun TopAppBarLandscapeCompact(
+fun TopAppBarLandscapeCompact(
     detectedFreq: Float,
     detectedConfidence: Float,
     activeMidi: Int?,
@@ -329,7 +217,6 @@ private fun TopAppBarLandscapeCompact(
     onAutoCenterToggle: (Boolean) -> Unit,
     paused: Boolean,
     onTogglePause: () -> Unit,
-    // visual toggles lifted here so the gear lives in the top bar
     showNoteLabels: Boolean,
     onToggleShowNoteLabels: (Boolean) -> Unit,
     showHorizontalGrid: Boolean,
@@ -341,111 +228,36 @@ private fun TopAppBarLandscapeCompact(
     showWhiteTrace: Boolean,
     onShowWhiteTraceChange: (Boolean) -> Unit
 ) {
-    TopAppBar(
-        title = {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Left (expands)
-                Column(modifier = Modifier.weight(1f)) {
-                    val noteText = if (activeMidi != null) midiToNoteName(activeMidi) else "-"
-                    Text(text = noteText)
-                    Text(
-                        text = "Confidence: ${String.format("%.2f", detectedConfidence)}",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
+    Surface(tonalElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.padding(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text("${detectedFreq.toInt()}Hz", fontSize = 12.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
 
-                // Right compact controls: Hold & Gear only (gear contains auto + slider + smoothing + white-trace)
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.wrapContentWidth()
-                ) {
-                    // Hold / Resume
-                    Button(onClick = onTogglePause) {
-                        Text(if (paused) "Resume" else "Hold")
-                    }
+            Column(modifier = Modifier.width(100.dp)) {
+                Text("Zoom", fontSize = 10.sp)
+                Slider(value = whiteKeyWidthDpFloat, onValueChange = onWhiteKeyWidthChange, valueRange = 30f..90f)
+            }
 
-                    // Gear menu (graph options) - now a larger menu with additional controls (auto + key width + smoothing)
-                    var menuExpanded by remember { mutableStateOf(false) }
-                    IconButton(onClick = { menuExpanded = true }) {
-                        Icon(imageVector = Icons.Filled.Settings, contentDescription = "Graph options")
-                    }
-                    DropdownMenu(
-                        expanded = menuExpanded,
-                        onDismissRequest = { menuExpanded = false },
-                        modifier = Modifier.width(360.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            // Note labels
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                Text(text = "Note labels", modifier = Modifier.weight(1f))
-                                Switch(checked = showNoteLabels, onCheckedChange = { onToggleShowNoteLabels(it) })
-                            }
-                            Spacer(modifier = Modifier.height(8.dp))
+            FilterChip(
+                selected = autoCenter,
+                onClick = { onAutoCenterToggle(!autoCenter) },
+                label = { Text("Auto-Center", fontSize = 10.sp) }
+            )
 
-                            // Grid lines
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                Text(text = "Grid lines", modifier = Modifier.weight(1f))
-                                Switch(checked = showHorizontalGrid, onCheckedChange = { onToggleShowHorizontalGrid(it) })
-                            }
-                            Spacer(modifier = Modifier.height(8.dp))
+            IconButton(onClick = onTogglePause) {
+                Icon(
+                    imageVector = if (paused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
+                    contentDescription = if (paused) "Resume" else "Pause"
+                )
+            }
 
-                            // Curve
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                Text(text = "Curve", modifier = Modifier.weight(1f))
-                                Switch(checked = showCurve, onCheckedChange = { onToggleShowCurve(it) })
-                            }
-
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Divider()
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // Auto-center moved here
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                Text(text = "Auto-center", modifier = Modifier.weight(1f))
-                                Switch(checked = autoCenter, onCheckedChange = { onAutoCenterToggle(it) })
-                            }
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // Key width slider
-                            Text(text = "Key width: ${whiteKeyWidthDpFloat.roundToInt()} dp", style = MaterialTheme.typography.bodySmall)
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Slider(
-                                value = whiteKeyWidthDpFloat,
-                                onValueChange = onWhiteKeyWidthChange,
-                                valueRange = 36f..96f,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Divider()
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // Smoothing slider
-                            Text(text = "Smoothing: ${(smoothing * 100).roundToInt()}%", style = MaterialTheme.typography.bodySmall)
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Slider(
-                                value = smoothing,
-                                onValueChange = onSmoothingChange,
-                                valueRange = 0f..1f,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // Show white traced curve toggle
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                Text(text = "Show white trace", modifier = Modifier.weight(1f))
-                                Switch(checked = showWhiteTrace, onCheckedChange = { onShowWhiteTraceChange(it) })
-                            }
-                        }
-                    }
-                }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = showCurve, onCheckedChange = onToggleShowCurve)
+                Text("Curve", fontSize = 10.sp)
             }
         }
-    )
+    }
 }

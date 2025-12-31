@@ -1,28 +1,24 @@
 package com.example.vocalpitchdetector
 
+import android.annotation.SuppressLint
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.Process
+import android.util.Log
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import kotlin.math.roundToInt
-import android.annotation.SuppressLint
-import android.util.Log
-import kotlin.collections.get
-import kotlin.compareTo
-import kotlin.div
-import kotlin.inc
-import kotlin.text.compareTo
-import kotlin.text.get
-import kotlin.text.set
-import kotlin.text.toDouble
-import kotlin.times
 
 /**
  * AudioRecord-based detector using YinPitchDetector + exponential smoothing + stability detection.
  *
  * start(onPitchDetected, onStableNote) emits rapid pitch updates via onPitchDetected (threaded callback)
  * and calls onStableNote when a note is held stable for N consecutive frames.
+ *
+ * Integration notes:
+ * - If you want streaming-to-disk while detecting, set `externalRecordingManager = yourRecordingManager`
+ *   (PitchEngine.attachRecordingManager(...) already wires this for you).
  */
 class AudioRecordPitchDetector(
     private val sampleRate: Int = 44100,
@@ -41,14 +37,19 @@ class AudioRecordPitchDetector(
 
     // detector and buffers
     private val yin = YinPitchDetector(sampleRate = sampleRate, bufferSize = bufferSize, minFreq = minFreq, maxFreq = maxFreq)
-    private val floatBuffer = FloatArray(bufferSize)
-    private val shortBuffer = ShortArray(bufferSize)
+    private val shortBuffer = ShortArray(hopSize) // read by hopSize
+    private val window = FloatArray(bufferSize)   // sliding window used by YIN
 
     // smoothing & stability state
     private var smoothedFreq = -1f
     private var stableCount = 0
     private var lastStableMidi = Int.MIN_VALUE
 
+    /**
+     * External RecordingManager bridge (optional). If set, the audio read loop will call
+     * `externalRecordingManager?.writePcmFromShorts(shortBuffer, read)` for each successful read.
+     */
+    var externalRecordingManager: RecordingManager? = null
 
     @SuppressLint("MissingPermission")
     fun start(
@@ -72,23 +73,22 @@ class AudioRecordPitchDetector(
             )
 
             if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
-                Log.e("AudioRecordPitchDetector", "AudioRecord not initialized")
+                Log.e(TAG, "AudioRecord not initialized (state=${audioRecord?.state})")
                 onPitchDetected(-1f, 0f)
                 return
             }
 
-            // startRecording can throw SecurityException if permission is missing
             audioRecord?.startRecording()
         } catch (se: SecurityException) {
-            Log.e("AudioRecordPitchDetector", "Missing RECORD_AUDIO permission", se)
+            Log.e(TAG, "Missing RECORD_AUDIO permission", se)
             onPitchDetected(-1f, 0f)
             return
         } catch (ie: IllegalStateException) {
-            Log.e("AudioRecordPitchDetector", "AudioRecord.startRecording failed", ie)
+            Log.e(TAG, "AudioRecord.startRecording failed", ie)
             onPitchDetected(-1f, 0f)
             return
         } catch (e: Exception) {
-            Log.e("AudioRecordPitchDetector", "AudioRecord init failed", e)
+            Log.e(TAG, "AudioRecord init failed", e)
             onPitchDetected(-1f, 0f)
             return
         }
@@ -96,28 +96,54 @@ class AudioRecordPitchDetector(
         running.set(true)
 
         workerThread = Thread {
-            val window = FloatArray(bufferSize)
+            try {
+                Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+            } catch (e: Throwable) {
+                // ignore if we can't set priority
+            }
+            Thread.currentThread().name = "AudioRecordPitchDetector"
 
+            // keep a simple sliding window: initially zeroed
             while (running.get()) {
                 val read = try {
                     audioRecord?.read(shortBuffer, 0, hopSize) ?: -1
                 } catch (e: Exception) {
-                    Log.e("AudioRecordPitchDetector", "AudioRecord.read failed", e)
+                    Log.e(TAG, "AudioRecord.read failed", e)
                     -1
                 }
 
-                if (read <= 0) continue
+                if (read <= 0) {
+                    // short-circuit if nothing read or error
+                    continue
+                }
 
-                // shift window left and append new samples
-                val shift = read
-                if (shift < bufferSize) {
-                    System.arraycopy(window, shift, window, 0, bufferSize - shift)
-                    for (i in 0 until read) window[bufferSize - read + i] = shortBuffer[i] / 32768f
+                // Forward PCM to RecordingManager (safe-guarded)
+                try {
+                    externalRecordingManager?.writePcmFromShorts(shortBuffer, read)
+                } catch (e: Exception) {
+                    // protect audio thread from errors in recording manager
+                    Log.w(TAG, "RecordingManager write failed", e)
+                }
+
+                // Shift window left by `read` samples then append new samples at end
+                if (read < bufferSize) {
+                    // shift left
+                    System.arraycopy(window, read, window, 0, bufferSize - read)
+                    // append normalized new samples in last `read` positions
+                    val base = bufferSize - read
+                    for (i in 0 until read) window[base + i] = shortBuffer[i] / 32768f
                 } else {
+                    // full overwrite (rare unless hopSize >= bufferSize)
                     for (i in 0 until bufferSize) window[i] = shortBuffer[i] / 32768f
                 }
 
-                val (freq, confidence) = yin.getPitch(window, bufferSize)
+                // Compute pitch via YIN. Wrap in try/catch to avoid unexpected exceptions killing thread.
+                val (freq, confidence) = try {
+                    yin.getPitch(window, bufferSize)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Yin.getPitch failed", e)
+                    Pair(-1f, 0f)
+                }
 
                 if (freq <= 0f || confidence <= 0f) {
                     smoothedFreq = -1f
@@ -126,9 +152,8 @@ class AudioRecordPitchDetector(
                     continue
                 }
 
-                // smoothing
-                if (smoothedFreq <= 0f) smoothedFreq = freq
-                else smoothedFreq = smoothingAlpha * freq + (1f - smoothingAlpha) * smoothedFreq
+                // exponential smoothing
+                smoothedFreq = if (smoothedFreq <= 0f) freq else (smoothingAlpha * freq + (1f - smoothingAlpha) * smoothedFreq)
 
                 onPitchDetected(smoothedFreq, confidence)
 
@@ -150,15 +175,21 @@ class AudioRecordPitchDetector(
                     }
                 }
             }
-
-            try { audioRecord?.stop() } catch (_: Exception) { }
-            audioRecord?.release()
-            audioRecord = null
         }.also { it.start() }
     }
+
     fun stop() {
         running.set(false)
+        // wait briefly for thread to exit
         try { workerThread?.join(300) } catch (_: InterruptedException) { }
         workerThread = null
+
+        try { audioRecord?.stop() } catch (_: Exception) { }
+        try { audioRecord?.release() } catch (_: Exception) { }
+        audioRecord = null
+    }
+
+    companion object {
+        private const val TAG = "AudioRecordPitchDetector"
     }
 }
