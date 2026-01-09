@@ -17,7 +17,7 @@ import kotlin.text.get
 import kotlin.text.set
 import kotlin.text.toDouble
 import kotlin.times
-
+import kotlin.math.sqrt
 /**
  * AudioRecord-based detector using YinPitchDetector + exponential smoothing + stability detection.
  *
@@ -48,6 +48,8 @@ class AudioRecordPitchDetector(
     private var smoothedFreq = -1f
     private var stableCount = 0
     private var lastStableMidi = Int.MIN_VALUE
+    @Volatile
+    var volumeThreshold: Float = 0.02f
 
 
     @SuppressLint("MissingPermission")
@@ -117,6 +119,21 @@ class AudioRecordPitchDetector(
                     for (i in 0 until bufferSize) window[i] = shortBuffer[i] / 32768f
                 }
 
+                var sumSq = 0f
+                for (i in 0 until bufferSize) {
+                    val v = window[i]
+                    sumSq += v * v
+                }
+                val rms = sqrt(sumSq / bufferSize)
+                if (rms < volumeThreshold) {
+                    // treat as silence / too-quiet: clear smoothing/stability and emit "no pitch"
+                    smoothedFreq = -1f
+                    stableCount = 0
+                    onPitchDetected(-1f, 0f)
+                    continue
+                }
+
+
                 val (freq, confidence) = yin.getPitch(window, bufferSize)
 
                 if (freq <= 0f || confidence <= 0f) {
@@ -125,6 +142,8 @@ class AudioRecordPitchDetector(
                     onPitchDetected(-1f, 0f)
                     continue
                 }
+
+
 
                 // smoothing
                 if (smoothedFreq <= 0f) smoothedFreq = freq

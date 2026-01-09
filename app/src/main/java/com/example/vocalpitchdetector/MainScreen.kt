@@ -34,6 +34,11 @@ fun MainScreen() {
     var showHorizontalGrid by rememberSaveable { mutableStateOf(true) }
     var showCurve by rememberSaveable { mutableStateOf(true) }
     var showWhiteTrace by rememberSaveable { mutableStateOf(true) }
+    var volumeThreshold by rememberSaveable { mutableStateOf(0.02f) } // normalized 0..1
+    var thresholdDb by rememberSaveable { mutableStateOf(-34f) }
+
+
+
 
     // transient state that doesn't need to persist across rotation
     var graphPaused by remember { mutableStateOf(false) }
@@ -45,6 +50,7 @@ fun MainScreen() {
 
     DisposableEffect(Unit) {
         engine.start()
+        engine.setVolumeThreshold(dbToRms(thresholdDb)) // apply initial
         onDispose { engine.stop() }
     }
 
@@ -89,7 +95,12 @@ fun MainScreen() {
                 smoothing = smoothing,
                 onSmoothingChange = { smoothing = it },
                 showWhiteTrace = showWhiteTrace,
-                onShowWhiteTraceChange = { showWhiteTrace = it }
+                onShowWhiteTraceChange = { showWhiteTrace = it },
+                thresholdDb = thresholdDb,
+                onThresholdChange = { newDb ->
+                    thresholdDb = newDb
+                    engine.setVolumeThreshold(dbToRms(newDb))
+                }
             )
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -239,6 +250,22 @@ fun MainScreen() {
 
                         Spacer(modifier = Modifier.height(12.dp))
 
+                        // Volume Threshold
+                        Text(text = "Volume threshold: ${thresholdDb.roundToInt()} dB")
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Slider(
+                            value = thresholdDb,
+                            onValueChange = { newDb ->
+                                thresholdDb = newDb
+                                val rms = dbToRms(thresholdDb)
+                                engine.setVolumeThreshold(rms)
+                            },
+                            valueRange = -80f..-6f,
+                            steps = 74, // optional: gives 1 dB steps if you want
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+
                         // Show white trace toggle
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                             Text(text = "Show white trace", modifier = Modifier.weight(1f))
@@ -339,7 +366,10 @@ private fun TopAppBarLandscapeCompact(
     smoothing: Float,
     onSmoothingChange: (Float) -> Unit,
     showWhiteTrace: Boolean,
-    onShowWhiteTraceChange: (Boolean) -> Unit
+    onShowWhiteTraceChange: (Boolean) -> Unit,
+    thresholdDb: Float,
+    onThresholdChange: (Float) -> Unit
+
 ) {
     TopAppBar(
         title = {
@@ -436,6 +466,19 @@ private fun TopAppBarLandscapeCompact(
                             )
 
                             Spacer(modifier = Modifier.height(12.dp))
+
+                            // Volume Threshold
+                            Text(text = "Volume threshold: ${thresholdDb.roundToInt()} dB")
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Slider(
+                                value = thresholdDb,
+                                onValueChange = onThresholdChange,
+                                valueRange = -80f..-6f,
+                                steps = 74, // optional: gives 1 dB steps if you want
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+
 
                             // Show white traced curve toggle
                             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {

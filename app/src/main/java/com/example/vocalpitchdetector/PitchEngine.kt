@@ -35,8 +35,14 @@ class PitchEngine(private val scope: CoroutineScope = CoroutineScope(Dispatchers
     private var detector: AudioRecordPitchDetector? = null
     private var isRunning = false
 
+    // normalized RMS threshold (0f..1f). Default ~0.02 is a reasonable starting point.
+    @Volatile
+    private var volumeThreshold: Float = 0.02f
+
     fun start() {
         if (isRunning) return
+
+        // ensure any previous detector is stopped/cleaned
         stop()
 
         detector = AudioRecordPitchDetector(
@@ -51,8 +57,12 @@ class PitchEngine(private val scope: CoroutineScope = CoroutineScope(Dispatchers
             stabilityRequiredFrames = 3
         )
 
+        // apply stored threshold immediately
+        detector?.volumeThreshold = volumeThreshold
+
+        // wire detector callbacks -> flows
         detector?.start({ freqHz, confidence ->
-// called on detector thread — forward to coroutine scope
+            // called on detector thread — forward to coroutine scope
             scope.launch {
                 _state.emit(PitchState(freqHz, confidence, System.currentTimeMillis()))
             }
@@ -70,4 +80,16 @@ class PitchEngine(private val scope: CoroutineScope = CoroutineScope(Dispatchers
         detector = null
         isRunning = false
     }
+
+    /**
+     * Set the volume (RMS) threshold used by the detector.
+     * Threshold is normalized (0..1). This updates the running detector immediately if present.
+     */
+    fun setVolumeThreshold(threshold: Float) {
+        volumeThreshold = threshold.coerceIn(0f, 1f)
+        detector?.volumeThreshold = volumeThreshold
+    }
+
+    /** Optional convenience: expose running state. */
+    fun isRunning(): Boolean = isRunning
 }
