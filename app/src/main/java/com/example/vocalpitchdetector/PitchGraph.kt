@@ -85,6 +85,7 @@ private fun buildSmoothedPath(points: List<Offset>, smoothing: Float): Path {
     return path
 }
 
+
 /**
  * High-level card that chooses rotated or horizontal rendering.
  */
@@ -101,6 +102,7 @@ fun PitchGraphCard(
     alignmentOffsetDp: Dp = 0.dp,
     blackKeyShiftFraction: Float = 0.5f,
     timeWindowMs: Long = 8000L,
+    bpm: Float = 120f,
     rotated: Boolean = false,
     showNoteLabels: Boolean = true,
     showHorizontalGrid: Boolean = true,
@@ -132,7 +134,8 @@ fun PitchGraphCard(
                     showHorizontalGrid = showHorizontalGrid,
                     showCurve = showCurve,
                     smoothing = smoothing,
-                    showWhiteTrace = showWhiteTrace
+                    showWhiteTrace = showWhiteTrace,
+                    bpm = bpm
                 )
             } else {
                 PitchGraphVertical(
@@ -150,7 +153,8 @@ fun PitchGraphCard(
                     showHorizontalGrid = showHorizontalGrid,
                     showCurve = showCurve,
                     smoothing = smoothing,
-                    showWhiteTrace = showWhiteTrace
+                    showWhiteTrace = showWhiteTrace,
+                    bpm = bpm
                 )
             }
         }
@@ -176,11 +180,21 @@ fun PitchGraphHorizontal(
     showHorizontalGrid: Boolean = true,
     showCurve: Boolean = true,
     smoothing: Float = 0.5f,
-    showWhiteTrace: Boolean = true
+    showWhiteTrace: Boolean = true,
+    bpm: Float = 120f
 ) {
     val samples = remember { mutableStateListOf<PitchSample>() }
     val stableMarkers = remember { mutableStateListOf<StableMarker>() }
     val density = LocalDensity.current
+
+    // tempo-scaled time window — recompute when windowMs or bpm change
+    val windowMsEffective = remember(windowMs, bpm) {
+        (windowMs.toFloat() * (60f / bpm)).toLong()
+    }
+    val beatMs by remember(bpm) {
+        mutableStateOf(60000f / bpm)
+    }
+
 
     // Collect live pitch samples
     LaunchedEffect(engine, paused) {
@@ -189,7 +203,7 @@ fun PitchGraphHorizontal(
                 val t = System.currentTimeMillis()
                 val midiF = if (s.frequency > 0f) freqToMidiLocal(s.frequency.toDouble()).toFloat() else Float.NaN
                 samples.add(PitchSample(tMs = t, freq = s.frequency, midi = midiF))
-                val cutoff = t - windowMs
+                val cutoff = t - windowMsEffective
                 while (samples.isNotEmpty() && samples.first().tMs < cutoff) samples.removeAt(0)
             }
         }
@@ -200,7 +214,7 @@ fun PitchGraphHorizontal(
         engine.stableNotes.collectLatest { sn ->
             val now = System.currentTimeMillis()
             stableMarkers.add(StableMarker(now, sn.midi))
-            val cutoff = now - windowMs
+            val cutoff = now - windowMsEffective
             while (stableMarkers.isNotEmpty() && stableMarkers.first().tMs < cutoff) stableMarkers.removeAt(0)
         }
     }
@@ -337,7 +351,7 @@ fun PitchGraphHorizontal(
                 val pointsForWhiteTrace = mutableListOf<Offset>()
                 for (s in samples) {
                     val x = xForMidiFloat(s.midi)
-                    val y = padTop + innerH * ((s.tMs - (nowLast - windowMs)).toFloat() / windowMs.toFloat())
+                    val y = padTop + innerH * ((s.tMs - (nowLast - windowMsEffective)).toFloat() / windowMsEffective.toFloat())
                     if (!started) {
                         bluePath.moveTo(x, y)
                         started = true
@@ -365,7 +379,7 @@ fun PitchGraphHorizontal(
                 // points (white dots)
                 for (s in samples) {
                     val x = xForMidiFloat(s.midi)
-                    val y = padTop + innerH * ((s.tMs - (nowLast - windowMs)).toFloat() / windowMs.toFloat())
+                    val y = padTop + innerH * ((s.tMs - (nowLast - windowMsEffective)).toFloat() / windowMsEffective.toFloat())
                     drawCircle(color = Color.White, radius = 3f, center = Offset(x, y))
                 }
 
@@ -382,7 +396,7 @@ fun PitchGraphHorizontal(
                 // stable markers + labels
                 for (m in stableMarkers) {
                     val x = midiX[m.midi - minMidi]
-                    val y = padTop + innerH * ((m.tMs - (nowLast - windowMs)).toFloat() / windowMs.toFloat())
+                    val y = padTop + innerH * ((m.tMs - (nowLast - windowMsEffective)).toFloat() / windowMsEffective.toFloat())
                     drawLine(color = Color(0xFFFFD54F), start = Offset(x, padTop), end = Offset(x, padTop + innerH), strokeWidth = 2f)
                     if (showNoteLabels) {
                         drawIntoCanvas { canvas -> canvas.nativeCanvas.drawText(midiToNoteNameLocal(m.midi), x + 6f, y - 10f, yellowPaint) }
@@ -394,7 +408,7 @@ fun PitchGraphHorizontal(
                 if (!last.midi.isNaN()) {
                     val nearest = last.midi.toInt().coerceIn(minMidi, maxMidi)
                     val x = midiX[nearest - minMidi]
-                    val y = padTop + innerH * ((last.tMs - (nowLast - windowMs)).toFloat() / windowMs.toFloat())
+                    val y = padTop + innerH * ((last.tMs - (nowLast - windowMsEffective)).toFloat() / windowMsEffective.toFloat())
                     if (showNoteLabels) {
                         drawIntoCanvas { canvas -> canvas.nativeCanvas.drawText(midiToNoteNameLocal(nearest), x + 6f, y + 10f, labelPaint) }
                     }
@@ -426,11 +440,21 @@ fun PitchGraphVertical(
     showHorizontalGrid: Boolean = true,
     showCurve: Boolean = true,
     smoothing: Float = 0.5f,
-    showWhiteTrace: Boolean = true
+    showWhiteTrace: Boolean = true,
+    bpm: Float = 120f
 ) {
     val samples = remember { mutableStateListOf<PitchSample>() }
     val stableMarkers = remember { mutableStateListOf<StableMarker>() }
     val density = LocalDensity.current
+    // tempo-scaled time window — recompute when windowMs or bpm change
+    val windowMsEffective = remember(windowMs, bpm) {
+        (windowMs.toFloat() * (60f / bpm)).toLong()
+    }
+    val beatMs by remember(bpm) {
+        mutableStateOf(60000f / bpm)
+    }
+
+
 
     // collect live pitch state into samples
     LaunchedEffect(engine, paused) {
@@ -439,7 +463,7 @@ fun PitchGraphVertical(
                 val t = System.currentTimeMillis()
                 val midiF = if (s.frequency > 0f) freqToMidiLocal(s.frequency.toDouble()).toFloat() else Float.NaN
                 samples.add(PitchSample(tMs = t, freq = s.frequency, midi = midiF))
-                val cutoff = t - windowMs
+                val cutoff = t - windowMsEffective
                 while (samples.isNotEmpty() && samples.first().tMs < cutoff) samples.removeAt(0)
             }
         }
@@ -450,7 +474,7 @@ fun PitchGraphVertical(
         engine.stableNotes.collectLatest { sn ->
             val now = System.currentTimeMillis()
             stableMarkers.add(StableMarker(now, sn.midi))
-            val cutoff = now - windowMs
+            val cutoff = now - windowMsEffective
             while (stableMarkers.isNotEmpty() && stableMarkers.first().tMs < cutoff) stableMarkers.removeAt(0)
         }
     }
@@ -580,7 +604,7 @@ fun PitchGraphVertical(
                 // time -> x
                 val nowLast = samples.last().tMs
                 fun xForTime(tMs: Long): Float {
-                    val rel = (tMs - (nowLast - windowMs)).toFloat() / windowMs.toFloat()
+                    val rel = (tMs - (nowLast - windowMsEffective)).toFloat() / windowMsEffective.toFloat()
                     return padLeft + rel * innerW
                 }
 

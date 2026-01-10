@@ -36,6 +36,7 @@ fun MainScreen() {
     var showWhiteTrace by rememberSaveable { mutableStateOf(true) }
     var volumeThreshold by rememberSaveable { mutableStateOf(0.02f) } // normalized 0..1
     var thresholdDb by rememberSaveable { mutableStateOf(-34f) }
+    var bpm by rememberSaveable { mutableStateOf(120f) }
 
 
 
@@ -100,7 +101,9 @@ fun MainScreen() {
                 onThresholdChange = { newDb ->
                     thresholdDb = newDb
                     engine.setVolumeThreshold(dbToRms(newDb))
-                }
+                },
+                bpm = bpm,
+                onBpmChange = { bpm = it },
             )
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -153,7 +156,8 @@ fun MainScreen() {
                         rotated = true,
                         blackKeyShiftFraction = 0.5f,
                         smoothing = smoothing,
-                        showWhiteTrace = showWhiteTrace
+                        showWhiteTrace = showWhiteTrace,
+                        bpm = bpm
                     )
                 }
             }
@@ -250,6 +254,20 @@ fun MainScreen() {
 
                         Spacer(modifier = Modifier.height(12.dp))
 
+                        // BPM slider
+                        Text(text = "Tempo: ${bpm.roundToInt()} BPM", style = MaterialTheme.typography.bodySmall)
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Slider(
+                            value = bpm,
+                            onValueChange = { newBpm -> bpm = newBpm },
+                            valueRange = 40f..240f,
+                            steps = 200, // optional to make it fine-grained
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+
                         // Volume Threshold
                         Text(text = "Volume threshold: ${thresholdDb.roundToInt()} dB")
                         Spacer(modifier = Modifier.height(6.dp))
@@ -325,7 +343,8 @@ fun MainScreen() {
                 rotated = false,
                 blackKeyShiftFraction = 0.5f,
                 smoothing = smoothing,
-                showWhiteTrace = showWhiteTrace
+                showWhiteTrace = showWhiteTrace,
+                bpm = bpm
             )
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -368,7 +387,9 @@ private fun TopAppBarLandscapeCompact(
     showWhiteTrace: Boolean,
     onShowWhiteTraceChange: (Boolean) -> Unit,
     thresholdDb: Float,
-    onThresholdChange: (Float) -> Unit
+    onThresholdChange: (Float) -> Unit,
+    bpm: Float,
+    onBpmChange: (Float) -> Unit
 
 ) {
     TopAppBar(
@@ -465,6 +486,18 @@ private fun TopAppBarLandscapeCompact(
                                 modifier = Modifier.fillMaxWidth()
                             )
 
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // BPM
+                            Text(text = "Tempo: ${bpm.roundToInt()} BPM", style = MaterialTheme.typography.bodySmall)
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Slider(
+                                value = bpm,
+                                onValueChange = onBpmChange,
+                                valueRange = 40f..240f,
+                                steps = 200,
+                                modifier = Modifier.fillMaxWidth()
+                            )
                             Spacer(modifier = Modifier.height(12.dp))
 
                             // Volume Threshold
