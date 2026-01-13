@@ -38,8 +38,8 @@ fun MainScreen() {
     var thresholdDb by rememberSaveable { mutableStateOf(-34f) }
     var bpm by rememberSaveable { mutableStateOf(120f) }
 
-
-
+    // NEW: show rectangular bars instead of dots
+    var showBars by rememberSaveable { mutableStateOf(false) }
 
     // transient state that doesn't need to persist across rotation
     var graphPaused by remember { mutableStateOf(false) }
@@ -104,6 +104,9 @@ fun MainScreen() {
                 },
                 bpm = bpm,
                 onBpmChange = { bpm = it },
+                // NEW: bars
+                showBars = showBars,
+                onToggleShowBars = { showBars = it }
             )
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -157,7 +160,9 @@ fun MainScreen() {
                         blackKeyShiftFraction = 0.5f,
                         smoothing = smoothing,
                         showWhiteTrace = showWhiteTrace,
-                        bpm = bpm
+                        bpm = bpm,
+                        // NEW: pass through the bars toggle
+                        showBars = showBars
                     )
                 }
             }
@@ -214,6 +219,14 @@ fun MainScreen() {
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                             Text(text = "Curve", modifier = Modifier.weight(1f))
                             Switch(checked = showCurve, onCheckedChange = { showCurve = it })
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Show rectangular bars toggle (NEW)
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                            Text(text = "Show rectangular bars", modifier = Modifier.weight(1f))
+                            Switch(checked = showBars, onCheckedChange = { showBars = it })
                         }
 
                         Spacer(modifier = Modifier.height(12.dp))
@@ -344,7 +357,9 @@ fun MainScreen() {
                 blackKeyShiftFraction = 0.5f,
                 smoothing = smoothing,
                 showWhiteTrace = showWhiteTrace,
-                bpm = bpm
+                bpm = bpm,
+                // NEW: pass through the bars toggle
+                showBars = showBars
             )
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -389,7 +404,10 @@ private fun TopAppBarLandscapeCompact(
     thresholdDb: Float,
     onThresholdChange: (Float) -> Unit,
     bpm: Float,
-    onBpmChange: (Float) -> Unit
+    onBpmChange: (Float) -> Unit,
+    // NEW: bars
+    showBars: Boolean,
+    onToggleShowBars: (Boolean) -> Unit
 
 ) {
     TopAppBar(
@@ -448,6 +466,14 @@ private fun TopAppBarLandscapeCompact(
                             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                                 Text(text = "Curve", modifier = Modifier.weight(1f))
                                 Switch(checked = showCurve, onCheckedChange = { onToggleShowCurve(it) })
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            // Show rectangular bars toggle (NEW)
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                Text(text = "Show rectangular bars", modifier = Modifier.weight(1f))
+                                Switch(checked = showBars, onCheckedChange = { onToggleShowBars(it) })
                             }
 
                             Spacer(modifier = Modifier.height(12.dp))
