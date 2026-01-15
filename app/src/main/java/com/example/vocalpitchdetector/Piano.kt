@@ -146,9 +146,9 @@ fun Piano(
                             if (midiToNoteName(midi).startsWith("C")) {
                                 Text(
                                     text = midiToNoteName(midi),
-                                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 6.dp),
+                                    modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 6.dp, end = 6.dp),
                                     color = Color.Black,
-                                    textAlign = TextAlign.Center
+                                    textAlign = TextAlign.End
                                 )
                             }
                         }
@@ -201,7 +201,7 @@ fun Piano(
             }
         }
     } else {
-        // --- ROTATED MODE: FIXED TOUCH LOGIC ---
+        // --- ROTATED MODE: FIXED TOUCH LOGIC + MATCH PORTRAIT ANIMATION & LABELS ---
         BoxWithConstraints(modifier = Modifier.fillMaxHeight()) {
             val parentFullWidthDp = maxWidth
             val visibleWidthDp = parentFullWidthDp * 0.80f
@@ -257,11 +257,13 @@ fun Piano(
                         .width(parentFullWidthDp)
                         .offset(x = -shiftLeftDp)
                 ) {
-                    // White keys column
+                    // White keys column (rotated)
                     Column(modifier = Modifier.fillMaxHeight().fillMaxWidth()) {
                         for ((index, midi) in reversedWhite.withIndex()) {
                             val isActive = activeMidi == midi
                             val isPressed = (pressedMidi == midi) || (pressedIndex == index)
+                            val elevation by animateDpAsState(if (isPressed) 12.dp else if (isActive) 6.dp else 2.dp)
+                            val scale by animateFloatAsState(if (isPressed) 0.985f else 1f)
                             val bg = when {
                                 isPressed -> Color(0xFFBBDEFB)
                                 isActive -> Color(0xFF90CAF9)
@@ -271,40 +273,51 @@ fun Piano(
                                 modifier = Modifier
                                     .height(whiteKeyWidthDp)
                                     .fillMaxWidth()
+                                    .shadow(elevation)
+                                    .graphicsLayer { scaleX = scale; scaleY = scale }
                                     .background(bg)
-                                    .shadow(if (isPressed) 8.dp else 2.dp)
                             ) {
+                                // Match portrait: show C labels at bottom-center of each white key
                                 if (midiToNoteName(midi).startsWith("C")) {
                                     Text(
                                         text = midiToNoteName(midi),
-                                        modifier = Modifier.align(Alignment.CenterStart).padding(start = 6.dp),
-                                        color = Color.Black
+                                        modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 6.dp, end = 6.dp),
+                                        color = Color.Black,
+                                        textAlign = TextAlign.End
                                     )
                                 }
                             }
                         }
                     }
 
-                    // Black keys overlay
+                    // Black keys overlay (rotated) with matching animation
                     for (bk in blackKeys) {
                         val reversedLeft = whiteCount - 1 - bk.leftWhiteIndex
                         val centerDp = whiteKeyWidthDp * (reversedLeft.toFloat() + 0.5f)
                         val offsetTopDp = centerDp - (blackThicknessDp / 2f) - (whiteKeyWidthDp * blackKeyShiftFraction)
 
                         val isPressed = pressedBlackMidi == bk.midi
-                        val bg = if (isPressed) Color(0xFF1565C0) else Color.Black
+                        val isActive = activeMidi == bk.midi
+                        val elevation by animateDpAsState(if (isPressed) 14.dp else if (isActive) 8.dp else 4.dp)
+                        val scale by animateFloatAsState(if (isPressed) 0.99f else 1f)
+                        val bg = when {
+                            isPressed -> Color(0xFF1565C0)
+                            isActive -> Color(0xFF1E88E5)
+                            else -> Color.Black
+                        }
 
                         Box(
                             modifier = Modifier
                                 .offset(x = blackDrawLeftDp, y = offsetTopDp)
                                 .width(blackKeyWidthDp)
                                 .height(blackThicknessDp)
-                                .shadow(if (isPressed) 10.dp else 4.dp)
+                                .shadow(elevation)
+                                .graphicsLayer { scaleX = scale; scaleY = scale }
                                 .background(bg)
                         ) {}
                     }
 
-                    // --- REWRITTEN TOUCH OVERLAY ---
+                    // --- REWRITTEN TOUCH OVERLAY (unchanged logic) ---
                     Box(
                         modifier = Modifier
                             .matchParentSize()
