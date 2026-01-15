@@ -348,11 +348,12 @@ fun PitchGraphHorizontal(
                     return@Canvas
                 }
 
+                val nowLast = samples.last().tMs
+                val windowStart = nowLast - windowMsEffective
+
                 // build path (time -> y, midi -> x) for blue curve (unchanged)
                 val bluePath = Path()
                 var started = false
-                val nowLast = samples.last().tMs
-                val windowStart = nowLast - windowMsEffective
                 val pointsForWhiteTrace = mutableListOf<Offset>()
                 for (s in samples) {
                     val x = xForMidiFloat(s.midi)
@@ -650,9 +651,10 @@ fun PitchGraphVertical(
                     return@Canvas
                 }
 
-                // time -> x
                 val nowLast = samples.last().tMs
                 val windowStart = nowLast - windowMsEffective
+
+                // time -> x
                 fun xForTime(tMs: Long): Float {
                     val rel = (tMs - windowStart).toFloat() / windowMsEffective.toFloat()
                     return padLeft + rel * innerW
@@ -758,7 +760,7 @@ fun PitchGraphVertical(
                     )
                     if (showNoteLabels) {
                         drawIntoCanvas { canvas ->
-                            canvas.nativeCanvas.drawText(midiToNoteNameLocal(m.midi), padLeft + 6f, y - 10f, yellowPaint)
+                            canvas.nativeCanvas.drawText(midiToNoteNameLocal(m.midi), x + 6f, y - 10f, yellowPaint)
                         }
                     }
                 }
