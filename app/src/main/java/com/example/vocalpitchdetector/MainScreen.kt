@@ -6,6 +6,7 @@ import android.content.res.Configuration
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,6 +20,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.saveable.rememberSaveable
 import kotlin.math.roundToInt
+import androidx.compose.ui.unit.Dp
+import androidx.compose.foundation.layout.heightIn
 
 @Composable
 fun MainScreen() {
@@ -135,6 +138,7 @@ fun MainScreen() {
                     )
                 }
 
+                // <-- reduced gap to make more space for piano + graph -->
                 Spacer(modifier = Modifier.width(8.dp))
 
                 // Right graph area — ask PitchGraphCard to render rotated layout and share scroll vertically
@@ -192,7 +196,7 @@ fun MainScreen() {
 
                 Spacer(modifier = Modifier.width(8.dp))
 
-                // Gear menu in portrait header (contains note labels, grid, curve, auto-center, key width slider and smoothing and white-trace toggle)
+                // Gear menu in portrait header
                 var menuExpandedPortrait by remember { mutableStateOf(false) }
                 IconButton(onClick = { menuExpandedPortrait = true }) { Icon(imageVector = Icons.Filled.Settings, contentDescription = "Options") }
                 DropdownMenu(
@@ -200,61 +204,57 @@ fun MainScreen() {
                     onDismissRequest = { menuExpandedPortrait = false },
                     modifier = Modifier.width(360.dp)
                 ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        // Note labels
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                            Text(text = "Note labels", modifier = Modifier.weight(1f))
-                            Switch(checked = showNoteLabels, onCheckedChange = { showNoteLabels = it })
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
+                    // make the portrait menu scrollable with a constrained max height
+                    val portraitMenuScroll = rememberScrollState()
+                    Column(
+                        modifier = Modifier
+                            .padding(12.dp)
+                            .heightIn(max = 360.dp)
+                            .verticalScroll(portraitMenuScroll)
+                    ) {
+                        // --- TOGGLES: stacked vertically ---
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                Text(text = "Note labels", modifier = Modifier.weight(1f))
+                                Switch(checked = showNoteLabels, onCheckedChange = { showNoteLabels = it })
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
 
-                        // Grid lines
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                            Text(text = "Grid lines", modifier = Modifier.weight(1f))
-                            Switch(checked = showHorizontalGrid, onCheckedChange = { showHorizontalGrid = it })
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                Text(text = "Grid lines", modifier = Modifier.weight(1f))
+                                Switch(checked = showHorizontalGrid, onCheckedChange = { showHorizontalGrid = it })
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
 
-                        // Curve
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                            Text(text = "Curve", modifier = Modifier.weight(1f))
-                            Switch(checked = showCurve, onCheckedChange = { showCurve = it })
-                        }
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                Text(text = "Curve", modifier = Modifier.weight(1f))
+                                Switch(checked = showCurve, onCheckedChange = { showCurve = it })
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
 
-                        Spacer(modifier = Modifier.height(8.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                Text(text = "Show rectangular bars", modifier = Modifier.weight(1f))
+                                Switch(checked = showBars, onCheckedChange = { showBars = it })
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
 
-                        // Show rectangular bars toggle (NEW)
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                            Text(text = "Show rectangular bars", modifier = Modifier.weight(1f))
-                            Switch(checked = showBars, onCheckedChange = { showBars = it })
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                Text(text = "Auto-center", modifier = Modifier.weight(1f))
+                                Switch(checked = autoCenter, onCheckedChange = { autoCenter = it })
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                Text(text = "Show white trace", modifier = Modifier.weight(1f))
+                                Switch(checked = showWhiteTrace, onCheckedChange = { showWhiteTrace = it })
+                            }
                         }
 
                         Spacer(modifier = Modifier.height(12.dp))
                         Divider()
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        // Auto-center moved here
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                            Text(text = "Auto-center", modifier = Modifier.weight(1f))
-                            Switch(checked = autoCenter, onCheckedChange = { autoCenter = it })
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // Key width slider
-                        Text(text = "Key width: ${whiteKeyWidthDpFloat.roundToInt()} dp", style = MaterialTheme.typography.bodySmall)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Slider(
-                            value = whiteKeyWidthDpFloat,
-                            onValueChange = { whiteKeyWidthDpFloat = it },
-                            valueRange = 36f..96f,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Divider()
-                        Spacer(modifier = Modifier.height(12.dp))
-
+                        // --- SLIDERS: stacked vertically ---
                         // Smoothing slider (0 = discrete, 1 = very smooth)
                         Text(text = "Smoothing: ${(smoothing * 100).roundToInt()}%", style = MaterialTheme.typography.bodySmall)
                         Spacer(modifier = Modifier.height(6.dp))
@@ -267,19 +267,18 @@ fun MainScreen() {
 
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        // BPM slider
+                        // BPM slider (60 - 240)
                         Text(text = "Tempo: ${bpm.roundToInt()} BPM", style = MaterialTheme.typography.bodySmall)
                         Spacer(modifier = Modifier.height(6.dp))
                         Slider(
                             value = bpm,
                             onValueChange = { newBpm -> bpm = newBpm },
-                            valueRange = 40f..240f,
-                            steps = 200, // optional to make it fine-grained
+                            valueRange = 60f..240f,
+                            steps = 180, // 1 BPM increments across the 60..240 range
                             modifier = Modifier.fillMaxWidth()
                         )
 
                         Spacer(modifier = Modifier.height(12.dp))
-
 
                         // Volume Threshold
                         Text(text = "Volume threshold: ${thresholdDb.roundToInt()} dB")
@@ -292,16 +291,10 @@ fun MainScreen() {
                                 engine.setVolumeThreshold(rms)
                             },
                             valueRange = -80f..-6f,
-                            steps = 74, // optional: gives 1 dB steps if you want
+                            steps = 74, // gives ~1 dB steps
                             modifier = Modifier.fillMaxWidth()
                         )
-                        Spacer(modifier = Modifier.height(12.dp))
 
-                        // Show white trace toggle
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                            Text(text = "Show white trace", modifier = Modifier.weight(1f))
-                            Switch(checked = showWhiteTrace, onCheckedChange = { showWhiteTrace = it })
-                        }
                     }
                 }
             }
@@ -377,7 +370,8 @@ fun MainScreen() {
 
 /**
  * Compact landscape TopAppBar:
- * - holds only Hold/Resume + Gear. Gear contains note labels, grid, curve, auto-center, key width, smoothing and white-trace toggle
+ * - holds only Hold/Resume + Gear. Gear contains grouped toggles first, then sliders (no key width)
+ * - app bar height reduced to reclaim vertical space in landscape
  */
 @Composable
 private fun TopAppBarLandscapeCompact(
@@ -411,33 +405,46 @@ private fun TopAppBarLandscapeCompact(
 
 ) {
     TopAppBar(
+        // smaller height in landscape
+        modifier = Modifier.height(32.dp),
         title = {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Left (expands)
-                Column(modifier = Modifier.weight(1f)) {
+                // Left: note + frequency + confidence on one line to save horizontal space
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     val noteText = if (activeMidi != null) midiToNoteName(activeMidi) else "-"
-                    Text(text = noteText)
+                    val freqText = if (detectedFreq > 0f) "${String.format("%.1f", detectedFreq)} Hz" else "--"
+                    Text(text = noteText, style = MaterialTheme.typography.titleMedium)
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(text = freqText, style = MaterialTheme.typography.bodySmall)
+                    Spacer(modifier = Modifier.width(12.dp))
                     Text(
                         text = "Confidence: ${String.format("%.2f", detectedConfidence)}",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
 
-                // Right compact controls: Hold & Gear only (gear contains auto + slider + smoothing + white-trace)
+                // Right compact controls: Hold & Gear only (gear contains grouped toggles + sliders)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.wrapContentWidth()
                 ) {
-                    // Hold / Resume
-                    Button(onClick = onTogglePause) {
-                        Text(if (paused) "Resume" else "Hold")
+                    // Hold / Resume — slightly smaller to free up space
+                    Button(
+                        onClick = onTogglePause,
+                        modifier = Modifier.height(36.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Text(if (paused) "Resume" else "Hold", style = MaterialTheme.typography.labelSmall)
                     }
 
-                    // Gear menu (graph options) - now a larger menu with additional controls (auto + key width + smoothing)
+                    // Gear menu (graph options) - grouped toggles then sliders
                     var menuExpanded by remember { mutableStateOf(false) }
                     IconButton(onClick = { menuExpanded = true }) {
                         Icon(imageVector = Icons.Filled.Settings, contentDescription = "Graph options")
@@ -447,61 +454,57 @@ private fun TopAppBarLandscapeCompact(
                         onDismissRequest = { menuExpanded = false },
                         modifier = Modifier.width(360.dp)
                     ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            // Note labels
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                Text(text = "Note labels", modifier = Modifier.weight(1f))
-                                Switch(checked = showNoteLabels, onCheckedChange = { onToggleShowNoteLabels(it) })
-                            }
-                            Spacer(modifier = Modifier.height(8.dp))
+                        // make the landscape menu scrollable with constrained max height
+                        val landscapeMenuScroll = rememberScrollState()
+                        Column(
+                            modifier = Modifier
+                                .padding(12.dp)
+                                .heightIn(max = 360.dp)
+                                .verticalScroll(landscapeMenuScroll)
+                        ) {
+                            // --- TOGGLES ---
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                    Text(text = "Note labels", modifier = Modifier.weight(1f))
+                                    Switch(checked = showNoteLabels, onCheckedChange = { onToggleShowNoteLabels(it) })
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
 
-                            // Grid lines
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                Text(text = "Grid lines", modifier = Modifier.weight(1f))
-                                Switch(checked = showHorizontalGrid, onCheckedChange = { onToggleShowHorizontalGrid(it) })
-                            }
-                            Spacer(modifier = Modifier.height(8.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                    Text(text = "Grid lines", modifier = Modifier.weight(1f))
+                                    Switch(checked = showHorizontalGrid, onCheckedChange = { onToggleShowHorizontalGrid(it) })
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
 
-                            // Curve
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                Text(text = "Curve", modifier = Modifier.weight(1f))
-                                Switch(checked = showCurve, onCheckedChange = { onToggleShowCurve(it) })
-                            }
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                    Text(text = "Curve", modifier = Modifier.weight(1f))
+                                    Switch(checked = showCurve, onCheckedChange = { onToggleShowCurve(it) })
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
 
-                            Spacer(modifier = Modifier.height(8.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                    Text(text = "Show rectangular bars", modifier = Modifier.weight(1f))
+                                    Switch(checked = showBars, onCheckedChange = { onToggleShowBars(it) })
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
 
-                            // Show rectangular bars toggle (NEW)
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                Text(text = "Show rectangular bars", modifier = Modifier.weight(1f))
-                                Switch(checked = showBars, onCheckedChange = { onToggleShowBars(it) })
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                    Text(text = "Auto-center", modifier = Modifier.weight(1f))
+                                    Switch(checked = autoCenter, onCheckedChange = { onAutoCenterToggle(it) })
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                    Text(text = "Show white trace", modifier = Modifier.weight(1f))
+                                    Switch(checked = showWhiteTrace, onCheckedChange = { onShowWhiteTraceChange(it) })
+                                }
                             }
 
                             Spacer(modifier = Modifier.height(12.dp))
                             Divider()
                             Spacer(modifier = Modifier.height(12.dp))
 
-                            // Auto-center moved here
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                Text(text = "Auto-center", modifier = Modifier.weight(1f))
-                                Switch(checked = autoCenter, onCheckedChange = { onAutoCenterToggle(it) })
-                            }
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // Key width slider
-                            Text(text = "Key width: ${whiteKeyWidthDpFloat.roundToInt()} dp", style = MaterialTheme.typography.bodySmall)
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Slider(
-                                value = whiteKeyWidthDpFloat,
-                                onValueChange = onWhiteKeyWidthChange,
-                                valueRange = 36f..96f,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Divider()
-                            Spacer(modifier = Modifier.height(12.dp))
-
+                            // --- SLIDERS ---
                             // Smoothing slider
                             Text(text = "Smoothing: ${(smoothing * 100).roundToInt()}%", style = MaterialTheme.typography.bodySmall)
                             Spacer(modifier = Modifier.height(6.dp))
@@ -514,14 +517,14 @@ private fun TopAppBarLandscapeCompact(
 
                             Spacer(modifier = Modifier.height(12.dp))
 
-                            // BPM
+                            // BPM (tempo) slider 60..240
                             Text(text = "Tempo: ${bpm.roundToInt()} BPM", style = MaterialTheme.typography.bodySmall)
                             Spacer(modifier = Modifier.height(6.dp))
                             Slider(
                                 value = bpm,
                                 onValueChange = onBpmChange,
-                                valueRange = 40f..240f,
-                                steps = 200,
+                                valueRange = 60f..240f,
+                                steps = 180,
                                 modifier = Modifier.fillMaxWidth()
                             )
                             Spacer(modifier = Modifier.height(12.dp))
@@ -533,17 +536,10 @@ private fun TopAppBarLandscapeCompact(
                                 value = thresholdDb,
                                 onValueChange = onThresholdChange,
                                 valueRange = -80f..-6f,
-                                steps = 74, // optional: gives 1 dB steps if you want
+                                steps = 74, // ~1 dB steps
                                 modifier = Modifier.fillMaxWidth()
                             )
                             Spacer(modifier = Modifier.height(12.dp))
-
-
-                            // Show white traced curve toggle
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                Text(text = "Show white trace", modifier = Modifier.weight(1f))
-                                Switch(checked = showWhiteTrace, onCheckedChange = { onShowWhiteTraceChange(it) })
-                            }
                         }
                     }
                 }
