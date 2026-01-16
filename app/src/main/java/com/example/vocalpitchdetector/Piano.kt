@@ -1,3 +1,4 @@
+// Piano.kt
 package com.example.vocalpitchdetector
 
 import android.annotation.SuppressLint
@@ -44,7 +45,9 @@ fun Piano(
     whiteKeyWidthDp: Dp = 56.dp,
     blackKeyShiftFraction: Float = 0.5f,
     scrollState: ScrollState? = null,
-    rotated: Boolean = false
+    rotated: Boolean = false,
+    // NEW: whether to use the SamplePlayer instead of the ToneGenerator
+    useSamplePlayer: Boolean = false
 ) {
     val scope = rememberCoroutineScope()
     val sState = scrollState ?: rememberScrollState()
@@ -82,7 +85,7 @@ fun Piano(
     var pressedBlackMidi by remember { mutableStateOf<Int?>(null) }
 
     if (!rotated) {
-        // --- PORTRAIT CODE: UNTOUCHED AS REQUESTED ---
+        // --- PORTRAIT CODE: UNTOUCHED ---
         BoxWithConstraints(modifier = Modifier.fillMaxWidth().height(whiteKeyHeight)) {
             val containerWidthPx = with(density) { maxWidth.toPx() }
             val whiteCount = whiteKeys.size
@@ -132,13 +135,25 @@ fun Piano(
                                     detectTapGestures(onPress = {
                                         pressedMidi = midi
                                         val freq = 440.0 * 2.0.pow((midi - 69) / 12.0)
-                                        ToneGenerator.playToneContinuous(freq)
+                                        if (useSamplePlayer) {
+                                            // Sample player: play sample once on press (no continuous sustain)
+                                            SamplePlayer.play(midi)
+                                        } else {
+                                            // oscillator continuous tone while press is held
+                                            ToneGenerator.playToneContinuous(freq)
+                                        }
                                         try { tryAwaitRelease() } catch (_: Exception) {}
-                                        ToneGenerator.stop()
+                                        if (!useSamplePlayer) {
+                                            ToneGenerator.stop()
+                                        }
                                         pressedMidi = null
                                     }, onTap = {
                                         val freq = 440.0 * 2.0.pow((midi - 69) / 12.0)
-                                        ToneGenerator.playTone(freq, 300)
+                                        if (useSamplePlayer) {
+                                            SamplePlayer.play(midi)
+                                        } else {
+                                            ToneGenerator.playTone(freq, 300)
+                                        }
                                         onKeyPressed?.invoke(midi, freq)
                                     })
                                 }
@@ -186,13 +201,23 @@ fun Piano(
                                 detectTapGestures(onPress = {
                                     pressedMidi = midi
                                     val freq = 440.0 * 2.0.pow((midi - 69) / 12.0)
-                                    ToneGenerator.playToneContinuous(freq)
+                                    if (useSamplePlayer) {
+                                        SamplePlayer.play(midi)
+                                    } else {
+                                        ToneGenerator.playToneContinuous(freq)
+                                    }
                                     try { tryAwaitRelease() } catch (_: Exception) {}
-                                    ToneGenerator.stop()
+                                    if (!useSamplePlayer) {
+                                        ToneGenerator.stop()
+                                    }
                                     pressedMidi = null
                                 }, onTap = {
                                     val freq = 440.0 * 2.0.pow((midi - 69) / 12.0)
-                                    ToneGenerator.playTone(freq, 300)
+                                    if (useSamplePlayer) {
+                                        SamplePlayer.play(midi)
+                                    } else {
+                                        ToneGenerator.playTone(freq, 300)
+                                    }
                                     onKeyPressed?.invoke(midi, freq)
                                 })
                             }
@@ -317,35 +342,42 @@ fun Piano(
                         ) {}
                     }
 
-                    // --- REWRITTEN TOUCH OVERLAY (unchanged logic) ---
+                    // --- ROTATED TOUCH OVERLAY (fixed coordinate math) ---
                     Box(
                         modifier = Modifier
                             .matchParentSize()
                             .pointerInput(Unit) {
                                 detectTapGestures(
                                     onPress = { offset ->
-                                        // FIXED: offset is already relative to this Box's content.
-                                        // Do NOT add sState.value.
+                                        // offset.x / offset.y are relative to this overlay box
                                         val localY = offset.y
                                         val localX = offset.x
 
                                         var hitMidi: Int? = null
 
-                                        // 1. Check Black Keys First
-                                        for (bk in blackKeys) {
-                                            val revIdx = whiteCount - 1 - bk.leftWhiteIndex
-                                            val bCenterY = (revIdx + 0.5f) * keySizePx - (keySizePx * blackKeyShiftFraction)
-                                            val bTop = bCenterY - (blackThicknessPx / 2f)
-                                            val bBottom = bCenterY + (blackThicknessPx / 2f)
+                                        // compute visible dims in px (same frame as overlay coordinates)
+                                        val visibleWidthPx = with(density) { visibleWidthDp.toPx() }
+                                        // center black keys horizontally within the visible area
+                                        val blackLeftPx = (visibleWidthPx - blackKeyWidthPx) / 2f
+                                        val blackRightPx = blackLeftPx + blackKeyWidthPx
 
-                                            if (localY in bTop..bBottom && localX in blackDrawLeftPx..blackDrawRightPx) {
-                                                hitMidi = bk.midi
-                                                pressedBlackMidi = bk.midi
-                                                break
+                                        // 1) Check black keys by Y-range (X must be inside the central black-key column)
+                                        if (localX in blackLeftPx..blackRightPx) {
+                                            for (bk in blackKeys) {
+                                                val revIdx = whiteCount - 1 - bk.leftWhiteIndex
+                                                val bCenterY = (revIdx + 0.5f) * keySizePx - (keySizePx * blackKeyShiftFraction)
+                                                val bTop = bCenterY - (blackThicknessPx / 2f)
+                                                val bBottom = bCenterY + (blackThicknessPx / 2f)
+
+                                                if (localY in bTop..bBottom) {
+                                                    hitMidi = bk.midi
+                                                    pressedBlackMidi = bk.midi
+                                                    break
+                                                }
                                             }
                                         }
 
-                                        // 2. Check White Keys
+                                        // 2) If not a black hit, map Y -> white key
                                         if (hitMidi == null) {
                                             val idx = (localY / keySizePx).toInt().coerceIn(0, whiteCount - 1)
                                             hitMidi = reversedWhite[idx]
@@ -354,11 +386,18 @@ fun Piano(
 
                                         pressedMidi = hitMidi
                                         val freq = 440.0 * 2.0.pow((hitMidi!! - 69) / 12.0)
-                                        ToneGenerator.playToneContinuous(freq)
+
+                                        if (useSamplePlayer) {
+                                            SamplePlayer.play(hitMidi)
+                                        } else {
+                                            ToneGenerator.playToneContinuous(freq)
+                                        }
 
                                         try { tryAwaitRelease() } catch (_: Exception) {}
 
-                                        ToneGenerator.stop()
+                                        if (!useSamplePlayer) {
+                                            ToneGenerator.stop()
+                                        }
                                         pressedMidi = null
                                         pressedIndex = null
                                         pressedBlackMidi = null
@@ -366,15 +405,21 @@ fun Piano(
                                     onTap = { offset ->
                                         val localY = offset.y
                                         val localX = offset.x
+
                                         var hitMidi: Int? = null
 
-                                        for (bk in blackKeys) {
-                                            val revIdx = whiteCount - 1 - bk.leftWhiteIndex
-                                            val bCenterY = (revIdx + 0.5f) * keySizePx - (keySizePx * blackKeyShiftFraction)
-                                            if (localY in (bCenterY - blackThicknessPx/2)..(bCenterY + blackThicknessPx/2) &&
-                                                localX in blackDrawLeftPx..blackDrawRightPx) {
-                                                hitMidi = bk.midi
-                                                break
+                                        val visibleWidthPx = with(density) { visibleWidthDp.toPx() }
+                                        val blackLeftPx = (visibleWidthPx - blackKeyWidthPx) / 2f
+                                        val blackRightPx = blackLeftPx + blackKeyWidthPx
+
+                                        if (localX in blackLeftPx..blackRightPx) {
+                                            for (bk in blackKeys) {
+                                                val revIdx = whiteCount - 1 - bk.leftWhiteIndex
+                                                val bCenterY = (revIdx + 0.5f) * keySizePx - (keySizePx * blackKeyShiftFraction)
+                                                if (localY in (bCenterY - blackThicknessPx/2)..(bCenterY + blackThicknessPx/2)) {
+                                                    hitMidi = bk.midi
+                                                    break
+                                                }
                                             }
                                         }
                                         if (hitMidi == null) {
@@ -383,7 +428,11 @@ fun Piano(
                                         }
 
                                         val freq = 440.0 * 2.0.pow((hitMidi!! - 69) / 12.0)
-                                        ToneGenerator.playTone(freq, 300)
+                                        if (useSamplePlayer) {
+                                            SamplePlayer.play(hitMidi)
+                                        } else {
+                                            ToneGenerator.playTone(freq, 300)
+                                        }
                                         onKeyPressed?.invoke(hitMidi, freq)
                                     }
                                 )

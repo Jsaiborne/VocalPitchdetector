@@ -1,3 +1,4 @@
+// MainScreen.kt
 @file:OptIn(ExperimentalMaterial3Api::class)
 
 package com.example.vocalpitchdetector
@@ -12,6 +13,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
@@ -29,6 +31,8 @@ fun MainScreen() {
     val engine = remember { PitchEngine(scope) }
     val state by engine.state.collectAsState()
 
+    val context = LocalContext.current
+
     // Persist across rotations using rememberSaveable
     var autoCenter by rememberSaveable { mutableStateOf(true) }
     var whiteKeyWidthDpFloat by rememberSaveable { mutableStateOf(56f) }
@@ -41,6 +45,9 @@ fun MainScreen() {
     var thresholdDb by rememberSaveable { mutableStateOf(-34f) }
     var bpm by rememberSaveable { mutableStateOf(120f) }
 
+    // NEW: use sample player toggle
+    var useSamplePlayer by rememberSaveable { mutableStateOf(false) }
+
     // NEW: show rectangular bars instead of dots
     var showBars by rememberSaveable { mutableStateOf(false) }
 
@@ -52,10 +59,25 @@ fun MainScreen() {
     // shared scroll state (will be used horizontally in portrait, vertically in landscape)
     val sharedScroll = rememberScrollState()
 
+    // Start / stop engine as before
     DisposableEffect(Unit) {
         engine.start()
         engine.setVolumeThreshold(dbToRms(thresholdDb)) // apply initial
         onDispose { engine.stop() }
+    }
+
+    // Initialize / release SamplePlayer when toggled
+    DisposableEffect(useSamplePlayer) {
+        if (useSamplePlayer) {
+            SamplePlayer.init(context)
+        } else {
+            // if toggled off, release resources
+            SamplePlayer.release()
+        }
+        onDispose {
+            // ensure release when composable leaves
+            SamplePlayer.release()
+        }
     }
 
     // collect stable notes from engine and update stableMidi
@@ -109,7 +131,10 @@ fun MainScreen() {
                 onBpmChange = { bpm = it },
                 // NEW: bars
                 showBars = showBars,
-                onToggleShowBars = { showBars = it }
+                onToggleShowBars = { showBars = it },
+                // NEW: sample player
+                useSamplePlayer = useSamplePlayer,
+                onToggleUseSamplePlayer = { useSamplePlayer = it }
             )
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -134,7 +159,8 @@ fun MainScreen() {
                         whiteKeyWidthDp = whiteKeyWidthDpFloat.dp,
                         scrollState = sharedScroll,
                         rotated = true,
-                        blackKeyShiftFraction = 0.5f
+                        blackKeyShiftFraction = 0.5f,
+                        useSamplePlayer = useSamplePlayer
                     )
                 }
 
@@ -248,6 +274,14 @@ fun MainScreen() {
                                 Text(text = "Show white trace", modifier = Modifier.weight(1f))
                                 Switch(checked = showWhiteTrace, onCheckedChange = { showWhiteTrace = it })
                             }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            // NEW: Use piano samples toggle placed below the other toggles
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                Text(text = "Use piano samples", modifier = Modifier.weight(1f))
+                                Switch(checked = useSamplePlayer, onCheckedChange = { useSamplePlayer = it })
+                            }
                         }
 
                         Spacer(modifier = Modifier.height(12.dp))
@@ -315,7 +349,7 @@ fun MainScreen() {
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Piano (horizontal)
+            // Piano (horizontal) - pass useSamplePlayer
             Piano(
                 startMidi = 24,
                 endMidi = 84,
@@ -326,7 +360,8 @@ fun MainScreen() {
                 whiteKeyWidthDp = whiteKeyWidthDpFloat.dp,
                 scrollState = sharedScroll,
                 rotated = false,
-                blackKeyShiftFraction = 0.5f
+                blackKeyShiftFraction = 0.5f,
+                useSamplePlayer = useSamplePlayer
             )
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -401,7 +436,10 @@ private fun TopAppBarLandscapeCompact(
     onBpmChange: (Float) -> Unit,
     // NEW: bars
     showBars: Boolean,
-    onToggleShowBars: (Boolean) -> Unit
+    onToggleShowBars: (Boolean) -> Unit,
+    // NEW: sample player
+    useSamplePlayer: Boolean,
+    onToggleUseSamplePlayer: (Boolean) -> Unit
 
 ) {
     TopAppBar(
@@ -497,6 +535,14 @@ private fun TopAppBarLandscapeCompact(
                                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                                     Text(text = "Show white trace", modifier = Modifier.weight(1f))
                                     Switch(checked = showWhiteTrace, onCheckedChange = { onShowWhiteTraceChange(it) })
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                // NEW: Use piano samples toggle placed below the other toggles
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                    Text(text = "Use piano samples", modifier = Modifier.weight(1f))
+                                    Switch(checked = useSamplePlayer, onCheckedChange = { onToggleUseSamplePlayer(it) })
                                 }
                             }
 
