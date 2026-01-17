@@ -22,6 +22,9 @@ import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.asAndroidPath
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -100,7 +103,8 @@ fun PitchGraphCard(
     showCurve: Boolean = true,
     smoothing: Float = 0.5f,
     showWhiteTrace: Boolean = true,
-    showBars: Boolean = false
+    showBars: Boolean = false,
+    showWhiteDots: Boolean = true // <-- NEW
 ) {
     Card(modifier = modifier, shape = RoundedCornerShape(12.dp)) {
         Box(modifier = Modifier
@@ -126,7 +130,8 @@ fun PitchGraphCard(
                     smoothing = smoothing,
                     showWhiteTrace = showWhiteTrace,
                     bpm = bpm,
-                    showBars = showBars
+                    showBars = showBars,
+                    showWhiteDots = showWhiteDots // forwarded
                 )
             } else {
                 PitchGraphVertical(
@@ -146,7 +151,8 @@ fun PitchGraphCard(
                     smoothing = smoothing,
                     showWhiteTrace = showWhiteTrace,
                     bpm = bpm,
-                    showBars = showBars
+                    showBars = showBars,
+                    showWhiteDots = showWhiteDots // forwarded
                 )
             }
         }
@@ -175,7 +181,8 @@ fun PitchGraphHorizontal(
     smoothing: Float = 0.5f,
     showWhiteTrace: Boolean = true,
     bpm: Float = 120f,
-    showBars: Boolean = false
+    showBars: Boolean = false,
+    showWhiteDots: Boolean = true
 
 ) {
     val samples = remember { mutableStateListOf<PitchSample>() }
@@ -241,6 +248,12 @@ fun PitchGraphHorizontal(
     // Define colors for the graph background
     val bgTopColor = Color(0xFF081226)
     val bgBottomColor = Color(0xFF0F2A3F)
+
+    // Halo color for dots (semi-transparent dark)
+    val haloColor = Color(0x88000000)
+    val dotWhite = Color.White
+    // Horizontal bar color: soft translucent blue (matches curve)
+    val horizontalBarColor = Color(0xCC42A5F5)
 
     Box(modifier = modifier) {
         Box(modifier = Modifier
@@ -333,53 +346,106 @@ fun PitchGraphHorizontal(
                 if (samples.isEmpty()) return@Canvas
 
                 // --- FIX 1: Time Anchoring ---
-                // Instead of anchoring to the last sample, anchor to current time.
-                // If paused, we anchor to last sample to prevent scrolling away.
                 val nowTime = if (paused) samples.last().tMs else System.currentTimeMillis()
                 val windowStart = nowTime - windowMsEffective
 
                 // build path (time -> y, midi -> x)
                 val bluePath = Path()
                 var started = false
-                val pointsForWhiteTrace = mutableListOf<Offset>()
+                // We'll collect segments of continuous points so smoothing doesn't bridge silences/gaps
+                val pointsSegments = mutableListOf<MutableList<Offset>>()
+                var currentSeg: MutableList<Offset>? = null
+                var prevPoint: Offset? = null
+                var prevTime: Long = Long.MIN_VALUE
+                val breakDistance = innerH * 0.35f
+                val silenceGapMs = 150L
 
                 for (s in samples) {
                     val x = xForMidiFloat(s.midi)
                     val y = padTop + innerH * ((s.tMs - windowStart).toFloat() / windowMsEffective.toFloat())
 
-                    // Optimization: Skip drawing if points are off-screen (above the top)
-                    if (y < padTop - 50) continue
-
-                    if (!started) {
-                        bluePath.moveTo(x, y)
-                        started = true
-                    } else {
-                        bluePath.lineTo(x, y)
+                    // treat NaN midi as a break in the trace
+                    if (s.midi.isNaN()) {
+                        prevPoint = null
+                        currentSeg = null
+                        started = false
+                        prevTime = Long.MIN_VALUE
+                        continue
                     }
-                    pointsForWhiteTrace.add(Offset(x, y))
+
+                    // Optimization: Skip drawing if points are off-screen (above the top)
+                    if (y < padTop - 50) {
+                        prevPoint = null
+                        currentSeg = null
+                        started = false
+                        prevTime = Long.MIN_VALUE
+                        continue
+                    }
+
+                    val p = Offset(x, y)
+                    val t = s.tMs
+
+                    if (prevPoint == null) {
+                        bluePath.moveTo(p.x, p.y)
+                        started = true
+                        currentSeg = mutableListOf()
+                        pointsSegments.add(currentSeg)
+                        currentSeg.add(p)
+                    } else {
+                        val dx = kotlin.math.abs(p.x - prevPoint.x)
+                        val dy = kotlin.math.abs(p.y - prevPoint.y)
+                        val dist = kotlin.math.hypot(dx.toDouble(), dy.toDouble()).toFloat()
+                        val timeGap = if (prevTime == Long.MIN_VALUE) 0L else t - prevTime
+
+                        if (dist > breakDistance || timeGap > silenceGapMs) {
+                            // gap detected — start a new segment
+                            bluePath.moveTo(p.x, p.y)
+                            currentSeg = mutableListOf()
+                            pointsSegments.add(currentSeg)
+                            currentSeg.add(p)
+                        } else {
+                            bluePath.lineTo(p.x, p.y)
+                            currentSeg?.add(p)
+                        }
+                    }
+
+                    prevPoint = p
+                    prevTime = t
+                }
+
+                // Build smoothed paths for each continuous segment
+                val smoothedPaths = mutableListOf<Path>()
+                for (seg in pointsSegments) {
+                    if (seg.size >= 2) smoothedPaths.add(buildSmoothedPath(seg, smoothing.coerceIn(0f, 1f)))
                 }
 
                 if (showCurve) {
-                    val areaPath = Path().apply { addPath(bluePath) }
-                    areaPath.lineTo(padLeft + innerW, padTop + innerH)
-                    areaPath.lineTo(padLeft, padTop + innerH)
-                    areaPath.close()
-                    drawPath(path = areaPath, brush = Brush.verticalGradient(listOf(Color(0x5522B6FF), Color(0x1122B6FF))), style = Fill)
-                    drawPath(path = bluePath, color = Color(0xFF7AD3FF), style = Stroke(width = 3f))
+                    if (smoothedPaths.isNotEmpty()) {
+                        // draw each smoothed segment separately so we don't bridge silences/gaps
+                        for (segPath in smoothedPaths) {
+                            drawPath(path = segPath, color = Color(0xFF7AD3FF), style = Stroke(width = 3f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                        }
+                    } else {
+                        // fallback: draw the raw polyline stroke only
+                        drawPath(path = bluePath, color = Color(0xFF7AD3FF), style = Stroke(width = 3f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                    }
                 }
 
-                if (showWhiteTrace && pointsForWhiteTrace.size >= 2) {
-                    val smoothedPath = buildSmoothedPath(pointsForWhiteTrace, smoothing.coerceIn(0f, 1f))
-                    drawPath(path = smoothedPath, color = Color(0xCCFFFFFF), style = Stroke(width = 2f))
+                if (showWhiteTrace && smoothedPaths.isNotEmpty()) {
+                    // draw white trace segments on top of the blue stroke
+                    for (segPath in smoothedPaths) {
+                        drawPath(path = segPath, color = Color(0xCCFFFFFF), style = Stroke(width = 2f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                    }
                 }
 
                 // Bar visual parameters
                 val barWidth = (whiteKeyWidthPx * 0.12f).coerceAtLeast(4f).coerceAtMost(18f)
                 val barCorner = CornerRadius(3f, 3f)
                 val minBarLenPx = 6f
-                val barColor = Color(0xCC90CAF9)
+                val barColor = horizontalBarColor
 
                 if (showBars) {
+                    // draw bars (group consecutive same-integer-midi runs)
                     var i = 0
                     while (i < samples.size) {
                         val s0 = samples[i]
@@ -393,19 +459,16 @@ fun PitchGraphHorizontal(
                             j++
                         }
 
-                        // Calculate run times relative to the fixed "nowTime" window
                         val runStart = samples[i].tMs.coerceAtLeast(windowStart)
                         val runEnd = samples[j - 1].tMs.coerceAtMost(nowTime)
 
                         val yStart = padTop + innerH * ((runStart - windowStart).toFloat() / windowMsEffective.toFloat())
                         val yEnd = padTop + innerH * ((runEnd - windowStart).toFloat() / windowMsEffective.toFloat())
 
-                        // Only draw if visible
                         if (yEnd > padTop) {
                             var heightPx = (yEnd - yStart).coerceAtLeast(minBarLenPx)
 
-                            // --- FIX 2: Bar Jitter ---
-                            // Snap xCenter to the integer MIDI value, not the float value of the sample
+                            // Snap xCenter to the integer MIDI value
                             val xCenter = xForMidiFloat(midiInt.toFloat())
 
                             val top = if (heightPx <= minBarLenPx) ( (yStart + yEnd)/2f - minBarLenPx/2f ) else yStart
@@ -419,12 +482,31 @@ fun PitchGraphHorizontal(
                         }
                         i = j
                     }
+
+                    // Draw small white dots on top of bars if the user requested them (halo + white)
+                    if (showWhiteDots) {
+                        for (s in samples) {
+                            if (s.midi.isNaN()) continue
+                            val x = xForMidiFloat(s.midi)
+                            val y = padTop + innerH * ((s.tMs - windowStart).toFloat() / windowMsEffective.toFloat())
+                            if (y > padTop && x >= padLeft && x <= padLeft + innerW) {
+                                // halo below dot
+                                drawCircle(color = haloColor, radius = 4.2f, center = Offset(x, y))
+                                drawCircle(color = dotWhite, radius = 2.6f, center = Offset(x, y))
+                            }
+                        }
+                    }
                 } else {
-                    for (s in samples) {
-                        val x = xForMidiFloat(s.midi)
-                        val y = padTop + innerH * ((s.tMs - windowStart).toFloat() / windowMsEffective.toFloat())
-                        if (y > padTop) {
-                            drawCircle(color = Color.White, radius = 3f, center = Offset(x, y))
+                    // no bars: draw dots if requested (halo + white)
+                    if (showWhiteDots) {
+                        for (s in samples) {
+                            if (s.midi.isNaN()) continue
+                            val x = xForMidiFloat(s.midi)
+                            val y = padTop + innerH * ((s.tMs - windowStart).toFloat() / windowMsEffective.toFloat())
+                            if (y > padTop) {
+                                drawCircle(color = haloColor, radius = 4.2f, center = Offset(x, y))
+                                drawCircle(color = dotWhite, radius = 2.6f, center = Offset(x, y))
+                            }
                         }
                     }
                 }
@@ -451,7 +533,6 @@ fun PitchGraphHorizontal(
                 }
 
                 // --- FIX 3: Fading Exit Effect ---
-                // Draw a gradient rect at the TOP (where old samples exit)
                 val fadeHeight = innerH * 0.15f // Top 15% fades out
                 drawRect(
                     brush = Brush.verticalGradient(
@@ -492,7 +573,8 @@ fun PitchGraphVertical(
     smoothing: Float = 0.5f,
     showWhiteTrace: Boolean = true,
     bpm: Float = 120f,
-    showBars: Boolean = false
+    showBars: Boolean = false,
+    showWhiteDots: Boolean = true // <-- NEW
 ) {
     val samples = remember { mutableStateListOf<PitchSample>() }
     val stableMarkers = remember { mutableStateListOf<StableMarker>() }
@@ -523,7 +605,7 @@ fun PitchGraphVertical(
         }
     }
 
-    // --- ADDED: Missing Paints for Labels ---
+    // paints for labels
     val labelPaint = remember {
         Paint().apply {
             color = android.graphics.Color.WHITE
@@ -557,6 +639,12 @@ fun PitchGraphVertical(
 
     val bgLeftColor = Color(0xFF081226)
     val bgRightColor = Color(0xFF0F2A3F)
+
+    // Halo color and white dot color
+    val haloColor = Color(0x88000000)
+    val dotWhite = Color.White
+    // Vertical bar color: soft translucent coral/salmon
+    val verticalBarColor = Color(0xCCEF9A9A)
 
     Box(modifier = modifier) {
         Box(modifier = Modifier
@@ -657,44 +745,99 @@ fun PitchGraphVertical(
                 // build path
                 val bluePath = Path()
                 var started = false
-                val pointsForWhiteTrace = mutableListOf<Offset>()
+                // We'll collect segments of continuous points so smoothing doesn't bridge silences/gaps
+                val pointsSegments = mutableListOf<MutableList<Offset>>()
+                var currentSeg: MutableList<Offset>? = null
+                var prevPoint: Offset? = null
+                var prevTime: Long = Long.MIN_VALUE
+                val breakDistance = innerW * 0.35f
+                val silenceGapMs = 150L
+
                 for (s in samples) {
                     val x = xForTime(s.tMs)
                     val y = yForMidiFloat(s.midi)
 
-                    if (x < padLeft - 50) continue
-
-                    if (!started) {
-                        bluePath.moveTo(x, y)
-                        started = true
-                    } else {
-                        bluePath.lineTo(x, y)
+                    // treat NaN midi as a break in the trace
+                    if (s.midi.isNaN()) {
+                        prevPoint = null
+                        currentSeg = null
+                        started = false
+                        prevTime = Long.MIN_VALUE
+                        continue
                     }
-                    pointsForWhiteTrace.add(Offset(x, y))
+
+                    if (x < padLeft - 50) {
+                        prevPoint = null
+                        currentSeg = null
+                        started = false
+                        prevTime = Long.MIN_VALUE
+                        continue
+                    }
+
+                    val p = Offset(x, y)
+                    val t = s.tMs
+
+                    if (prevPoint == null) {
+                        bluePath.moveTo(p.x, p.y)
+                        started = true
+                        currentSeg = mutableListOf()
+                        pointsSegments.add(currentSeg)
+                        currentSeg.add(p)
+                    } else {
+                        val dx = kotlin.math.abs(p.x - prevPoint.x)
+                        val dy = kotlin.math.abs(p.y - prevPoint.y)
+                        val dist = kotlin.math.hypot(dx.toDouble(), dy.toDouble()).toFloat()
+                        val timeGap = if (prevTime == Long.MIN_VALUE) 0L else t - prevTime
+
+                        if (dist > breakDistance || timeGap > silenceGapMs) {
+                            bluePath.moveTo(p.x, p.y)
+                            currentSeg = mutableListOf()
+                            pointsSegments.add(currentSeg)
+                            currentSeg.add(p)
+                        } else {
+                            bluePath.lineTo(p.x, p.y)
+                            currentSeg?.add(p)
+                        }
+                    }
+
+                    prevPoint = p
+                    prevTime = t
+                }
+
+                // Build smoothed paths for each continuous segment
+                val smoothedPaths = mutableListOf<Path>()
+                for (seg in pointsSegments) {
+                    if (seg.size >= 2) smoothedPaths.add(buildSmoothedPath(seg, smoothing.coerceIn(0f, 1f)))
                 }
 
                 if (showCurve) {
-                    val areaPath = Path().apply { addPath(bluePath) }
-                    areaPath.lineTo(padLeft + innerW, padTop + innerH)
-                    areaPath.lineTo(padLeft, padTop + innerH)
-                    areaPath.close()
-                    drawPath(path = areaPath, brush = Brush.horizontalGradient(listOf(Color(0x5522B6FF), Color(0x1122B6FF))), style = Fill)
-                    drawPath(path = bluePath, color = Color(0xFF7AD3FF), style = Stroke(width = 3f))
+                    if (smoothedPaths.isNotEmpty()) {
+                        // draw each smoothed segment separately so we don't bridge silences/gaps
+                        for (segPath in smoothedPaths) {
+                            drawPath(path = segPath, color = Color(0xFF7AD3FF), style = Stroke(width = 3f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                        }
+                    } else {
+                        // fallback: draw the raw polyline stroke only
+                        drawPath(path = bluePath, color = Color(0xFF7AD3FF), style = Stroke(width = 3f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                    }
                 }
 
-                if (showWhiteTrace && pointsForWhiteTrace.size >= 2) {
-                    val smoothedPath = buildSmoothedPath(pointsForWhiteTrace, smoothing.coerceIn(0f, 1f))
-                    drawPath(path = smoothedPath, color = Color(0xCCFFFFFF), style = Stroke(width = 2f))
+                if (showWhiteTrace && smoothedPaths.isNotEmpty()) {
+                    // draw white trace segments on top of the blue stroke
+                    for (segPath in smoothedPaths) {
+                        drawPath(path = segPath, color = Color(0xCCFFFFFF), style = Stroke(width = 2f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                    }
                 }
 
                 val barHeight = (keyThicknessPx * 0.12f).coerceAtLeast(4f).coerceAtMost(18f)
                 val barCorner = CornerRadius(3f, 3f)
                 val minBarLenPx = 6f
 
-                // CHANGE: Light Red color
-                val barColor = Color(0xCCEF9A9A)
+                // Vertical bar color
+                val barColor = verticalBarColor
 
                 if (showBars) {
+                    // draw bars grouped by integer MIDI runs
                     var i = 0
                     while (i < samples.size) {
                         val s0 = samples[i]
@@ -729,17 +872,35 @@ fun PitchGraphVertical(
                         }
                         i = j
                     }
+
+                    // draw sample dots on top if requested (halo + white)
+                    if (showWhiteDots) {
+                        for (s in samples) {
+                            if (s.midi.isNaN()) continue
+                            val x = xForTime(s.tMs)
+                            val y = yForMidiFloat(s.midi)
+                            if (x > padLeft && y >= padTop && y <= padTop + innerH) {
+                                drawCircle(color = haloColor, radius = 4.2f, center = Offset(x, y))
+                                drawCircle(color = dotWhite, radius = 2.6f, center = Offset(x, y))
+                            }
+                        }
+                    }
                 } else {
-                    for (s in samples) {
-                        val x = xForTime(s.tMs)
-                        val y = yForMidiFloat(s.midi)
-                        if (x > padLeft) {
-                            drawCircle(color = Color.White, radius = 3f, center = Offset(x, y))
+                    // no bars: draw sample dots if requested (halo + white)
+                    if (showWhiteDots) {
+                        for (s in samples) {
+                            if (s.midi.isNaN()) continue
+                            val x = xForTime(s.tMs)
+                            val y = yForMidiFloat(s.midi)
+                            if (x > padLeft && y >= padTop && y <= padTop + innerH) {
+                                drawCircle(color = haloColor, radius = 4.2f, center = Offset(x, y))
+                                drawCircle(color = dotWhite, radius = 2.6f, center = Offset(x, y))
+                            }
                         }
                     }
                 }
 
-                // --- ADDED: Stable markers logic for Vertical Graph ---
+                // --- Stable markers for Vertical Graph ---
                 for (m in stableMarkers) {
                     val y = midiY[m.midi - minMidi]
                     val x = xForTime(m.tMs)
@@ -758,7 +919,7 @@ fun PitchGraphVertical(
                     }
                 }
 
-                // --- REPLACED: Latest Note Label at fixed right end (snapped to integer MIDI, positioned near right edge) ---
+                // latest note label (snapped to integer MIDI), positioned near right edge
                 if (showNoteLabels) {
                     val lastSample = samples.lastOrNull()
                     if (lastSample != null && !lastSample.midi.isNaN()) {
@@ -775,8 +936,6 @@ fun PitchGraphVertical(
                         }
                     }
                 }
-
-
 
                 // Fade exit
                 val fadeWidth = innerW * 0.15f

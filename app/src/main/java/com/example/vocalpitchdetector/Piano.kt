@@ -25,11 +25,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
-import kotlin.math.abs
 import kotlin.math.pow
-import kotlin.math.roundToInt
 import kotlin.math.max
-import kotlin.math.min
+import kotlin.math.roundToInt
 
 @SuppressLint("UnusedBoxWithConstraintsScope")
 @Composable
@@ -46,7 +44,7 @@ fun Piano(
     blackKeyShiftFraction: Float = 0.5f,
     scrollState: ScrollState? = null,
     rotated: Boolean = false,
-    // NEW: whether to use the SamplePlayer instead of the ToneGenerator
+    // whether to use the SamplePlayer instead of the ToneGenerator
     useSamplePlayer: Boolean = false
 ) {
     val scope = rememberCoroutineScope()
@@ -85,7 +83,7 @@ fun Piano(
     var pressedBlackMidi by remember { mutableStateOf<Int?>(null) }
 
     if (!rotated) {
-        // --- PORTRAIT CODE: UNTOUCHED ---
+        // PORTRAIT
         BoxWithConstraints(modifier = Modifier.fillMaxWidth().height(whiteKeyHeight)) {
             val containerWidthPx = with(density) { maxWidth.toPx() }
             val whiteCount = whiteKeys.size
@@ -124,6 +122,8 @@ fun Piano(
                             isActive -> Color(0xFF90CAF9)
                             else -> Color.White
                         }
+
+                        // per-key flag scoped inside pointerInput so onTap and onPress share it
                         Box(
                             modifier = Modifier
                                 .width(whiteKeyWidthDp)
@@ -132,22 +132,28 @@ fun Piano(
                                 .graphicsLayer { scaleX = scale; scaleY = scale }
                                 .background(bg)
                                 .pointerInput(midi) {
+                                    var playedByPress = false
                                     detectTapGestures(onPress = {
+                                        playedByPress = true
                                         pressedMidi = midi
                                         val freq = 440.0 * 2.0.pow((midi - 69) / 12.0)
                                         if (useSamplePlayer) {
-                                            // Sample player: play sample once on press (no continuous sustain)
                                             SamplePlayer.play(midi)
                                         } else {
-                                            // oscillator continuous tone while press is held
                                             ToneGenerator.playToneContinuous(freq)
                                         }
+                                        // notify callback that key was pressed
+                                        onKeyPressed?.invoke(midi, freq)
                                         try { tryAwaitRelease() } catch (_: Exception) {}
+                                        // on release stop continuous tone (if oscillator)
                                         if (!useSamplePlayer) {
                                             ToneGenerator.stop()
                                         }
                                         pressedMidi = null
+                                        playedByPress = false
                                     }, onTap = {
+                                        // only handle tap-sound if onPress didn't already play
+                                        if (playedByPress) return@detectTapGestures
                                         val freq = 440.0 * 2.0.pow((midi - 69) / 12.0)
                                         if (useSamplePlayer) {
                                             SamplePlayer.play(midi)
@@ -198,7 +204,9 @@ fun Piano(
                             .graphicsLayer { scaleX = scale; scaleY = scale }
                             .background(bg)
                             .pointerInput(midi) {
+                                var playedByPress = false
                                 detectTapGestures(onPress = {
+                                    playedByPress = true
                                     pressedMidi = midi
                                     val freq = 440.0 * 2.0.pow((midi - 69) / 12.0)
                                     if (useSamplePlayer) {
@@ -206,12 +214,15 @@ fun Piano(
                                     } else {
                                         ToneGenerator.playToneContinuous(freq)
                                     }
+                                    onKeyPressed?.invoke(midi, freq)
                                     try { tryAwaitRelease() } catch (_: Exception) {}
                                     if (!useSamplePlayer) {
                                         ToneGenerator.stop()
                                     }
                                     pressedMidi = null
+                                    playedByPress = false
                                 }, onTap = {
+                                    if (playedByPress) return@detectTapGestures
                                     val freq = 440.0 * 2.0.pow((midi - 69) / 12.0)
                                     if (useSamplePlayer) {
                                         SamplePlayer.play(midi)
@@ -226,7 +237,7 @@ fun Piano(
             }
         }
     } else {
-        // --- ROTATED MODE: FIXED TOUCH LOGIC + MATCH PORTRAIT ANIMATION & LABELS ---
+        // ROTATED MODE
         BoxWithConstraints(modifier = Modifier.fillMaxHeight()) {
             val parentFullWidthDp = maxWidth
             val visibleWidthDp = parentFullWidthDp * 0.80f
@@ -302,7 +313,7 @@ fun Piano(
                                     .graphicsLayer { scaleX = scale; scaleY = scale }
                                     .background(bg)
                             ) {
-                                // Match portrait: show C labels at bottom-center of each white key
+                                // show C labels at bottom-center of each white key
                                 if (midiToNoteName(midi).startsWith("C")) {
                                     Text(
                                         text = midiToNoteName(midi),
@@ -342,11 +353,12 @@ fun Piano(
                         ) {}
                     }
 
-                    // --- ROTATED TOUCH OVERLAY (fixed coordinate math) ---
+                    // ROTATED TOUCH OVERLAY (fixed coordinate math + single-play guard)
                     Box(
                         modifier = Modifier
                             .matchParentSize()
                             .pointerInput(Unit) {
+                                var playedByPress = false
                                 detectTapGestures(
                                     onPress = { offset ->
                                         // offset.x / offset.y are relative to this overlay box
@@ -384,6 +396,7 @@ fun Piano(
                                             pressedIndex = idx
                                         }
 
+                                        playedByPress = true
                                         pressedMidi = hitMidi
                                         val freq = 440.0 * 2.0.pow((hitMidi!! - 69) / 12.0)
 
@@ -392,6 +405,7 @@ fun Piano(
                                         } else {
                                             ToneGenerator.playToneContinuous(freq)
                                         }
+                                        onKeyPressed?.invoke(hitMidi, freq)
 
                                         try { tryAwaitRelease() } catch (_: Exception) {}
 
@@ -401,8 +415,12 @@ fun Piano(
                                         pressedMidi = null
                                         pressedIndex = null
                                         pressedBlackMidi = null
+                                        playedByPress = false
                                     },
                                     onTap = { offset ->
+                                        // skip if onPress already played for this tap
+                                        if (playedByPress) return@detectTapGestures
+
                                         val localY = offset.y
                                         val localX = offset.x
 

@@ -44,6 +44,7 @@ fun MainScreen() {
     var volumeThreshold by rememberSaveable { mutableStateOf(0.02f) } // normalized 0..1
     var thresholdDb by rememberSaveable { mutableStateOf(-34f) }
     var bpm by rememberSaveable { mutableStateOf(120f) }
+    var showWhiteDots by rememberSaveable { mutableStateOf(true) } // <-- NEW
 
     // NEW: use sample player toggle
     var useSamplePlayer by rememberSaveable { mutableStateOf(false) }
@@ -134,7 +135,10 @@ fun MainScreen() {
                 onToggleShowBars = { showBars = it },
                 // NEW: sample player
                 useSamplePlayer = useSamplePlayer,
-                onToggleUseSamplePlayer = { useSamplePlayer = it }
+                onToggleUseSamplePlayer = { useSamplePlayer = it },
+                // NEW: white dots toggle (single occurrence)
+                showWhiteDots = showWhiteDots,
+                onShowWhiteDotsChange = { showWhiteDots = it }
             )
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -190,6 +194,7 @@ fun MainScreen() {
                         blackKeyShiftFraction = 0.5f,
                         smoothing = smoothing,
                         showWhiteTrace = showWhiteTrace,
+                        showWhiteDots = showWhiteDots,
                         bpm = bpm,
                         // NEW: pass through the bars toggle
                         showBars = showBars
@@ -273,6 +278,12 @@ fun MainScreen() {
                             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                                 Text(text = "Show white trace", modifier = Modifier.weight(1f))
                                 Switch(checked = showWhiteTrace, onCheckedChange = { showWhiteTrace = it })
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                Text(text = "Show white dots", modifier = Modifier.weight(1f))
+                                Switch(checked = showWhiteDots, onCheckedChange = { showWhiteDots = it })
                             }
 
                             Spacer(modifier = Modifier.height(8.dp))
@@ -385,6 +396,7 @@ fun MainScreen() {
                 blackKeyShiftFraction = 0.5f,
                 smoothing = smoothing,
                 showWhiteTrace = showWhiteTrace,
+                showWhiteDots = showWhiteDots,
                 bpm = bpm,
                 // NEW: pass through the bars toggle
                 showBars = showBars
@@ -439,8 +451,10 @@ private fun TopAppBarLandscapeCompact(
     onToggleShowBars: (Boolean) -> Unit,
     // NEW: sample player
     useSamplePlayer: Boolean,
-    onToggleUseSamplePlayer: (Boolean) -> Unit
-
+    onToggleUseSamplePlayer: (Boolean) -> Unit,
+    // NEW: white dots toggle (parameters must be declared like this)
+    showWhiteDots: Boolean,
+    onShowWhiteDotsChange: (Boolean) -> Unit
 ) {
     TopAppBar(
         // smaller height in landscape
@@ -535,6 +549,12 @@ private fun TopAppBarLandscapeCompact(
                                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                                     Text(text = "Show white trace", modifier = Modifier.weight(1f))
                                     Switch(checked = showWhiteTrace, onCheckedChange = { onShowWhiteTraceChange(it) })
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                    Text(text = "Show white dots", modifier = Modifier.weight(1f))
+                                    Switch(checked = showWhiteDots, onCheckedChange = { onShowWhiteDotsChange(it) })
                                 }
 
                                 Spacer(modifier = Modifier.height(8.dp))
