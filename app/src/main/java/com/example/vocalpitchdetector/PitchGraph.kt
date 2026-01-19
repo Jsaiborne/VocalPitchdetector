@@ -696,7 +696,7 @@ fun PitchGraphVertical(
                         val reversedLeft = whiteCount - 1 - left
                         val center = (reversedLeft + 0.5f) * keyThicknessPx
                         val shiftPx = keyThicknessPx * blackKeyShiftFraction
-                        padTop + center + shiftPx + alignPx
+                        padTop + center - shiftPx + alignPx
                     }
                     midiY[idx] = y
                 }
