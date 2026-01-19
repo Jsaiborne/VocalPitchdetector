@@ -193,7 +193,7 @@ fun PitchGraphHorizontal(
         (windowMs.toFloat() * (60f / bpm)).toLong()
     }
 
-    LaunchedEffect(engine, paused) {
+    LaunchedEffect(engine, paused, windowMsEffective) {
         engine.state.collectLatest { s ->
             if (!paused) {
                 val t = System.currentTimeMillis()
@@ -205,7 +205,7 @@ fun PitchGraphHorizontal(
         }
     }
 
-    LaunchedEffect(engine) {
+    LaunchedEffect(engine, windowMsEffective) {
         engine.stableNotes.collectLatest { sn ->
             val now = System.currentTimeMillis()
             stableMarkers.add(StableMarker(now, sn.midi))
@@ -584,7 +584,7 @@ fun PitchGraphVertical(
         (windowMs.toFloat() * (60f / bpm)).toLong()
     }
 
-    LaunchedEffect(engine, paused) {
+    LaunchedEffect(engine, paused, windowMsEffective) {
         engine.state.collectLatest { s ->
             if (!paused) {
                 val t = System.currentTimeMillis()
@@ -596,7 +596,7 @@ fun PitchGraphVertical(
         }
     }
 
-    LaunchedEffect(engine) {
+    LaunchedEffect(engine, windowMsEffective) {
         engine.stableNotes.collectLatest { sn ->
             val now = System.currentTimeMillis()
             stableMarkers.add(StableMarker(now, sn.midi))

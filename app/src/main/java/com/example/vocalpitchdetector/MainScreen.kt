@@ -70,7 +70,7 @@ fun MainScreen() {
     // Initialize / release SamplePlayer when toggled
     DisposableEffect(useSamplePlayer) {
         if (useSamplePlayer) {
-            SamplePlayer.init(context)
+            SamplePlayer.init(context.applicationContext)
         } else {
             // if toggled off, release resources
             SamplePlayer.release()
@@ -130,13 +130,13 @@ fun MainScreen() {
                 },
                 bpm = bpm,
                 onBpmChange = { bpm = it },
-                // NEW: bars
+                // bars
                 showBars = showBars,
                 onToggleShowBars = { showBars = it },
-                // NEW: sample player
+                // sample player
                 useSamplePlayer = useSamplePlayer,
                 onToggleUseSamplePlayer = { useSamplePlayer = it },
-                // NEW: white dots toggle (single occurrence)
+                // white dots toggle
                 showWhiteDots = showWhiteDots,
                 onShowWhiteDotsChange = { showWhiteDots = it }
             )
@@ -148,11 +148,11 @@ fun MainScreen() {
                 .fillMaxWidth()
                 .weight(1f)) {
 
-                // Left piano column — instruct Piano to render rotated internally and share vertical scroll
+                // Left piano column — Reduced width from 360.dp to 250.dp to remove empty gap
                 Box(modifier = Modifier
                     .fillMaxHeight()
-                    .width(360.dp)
-                    .padding(6.dp)) {
+                    .width(250.dp) // <--- CHANGED: Reduced width significantly
+                    .padding(vertical = 6.dp, horizontal = 2.dp)) { // <--- CHANGED: Tighter padding
                     Piano(
                         startMidi = 24,
                         endMidi = 84,
@@ -168,14 +168,14 @@ fun MainScreen() {
                     )
                 }
 
-                // <-- reduced gap to make more space for piano + graph -->
-                Spacer(modifier = Modifier.width(8.dp))
+                // <-- reduced spacer from 8.dp to 2.dp for tighter fit -->
+                Spacer(modifier = Modifier.width(2.dp))
 
                 // Right graph area — ask PitchGraphCard to render rotated layout and share scroll vertically
                 Box(modifier = Modifier
                     .fillMaxHeight()
                     .weight(1f)
-                    .padding(6.dp)) {
+                    .padding(vertical = 6.dp, horizontal = 2.dp)) { // <--- CHANGED: Tighter padding
                     PitchGraphCard(
                         engine = engine,
                         modifier = Modifier.fillMaxSize(),
@@ -196,7 +196,7 @@ fun MainScreen() {
                         showWhiteTrace = showWhiteTrace,
                         showWhiteDots = showWhiteDots,
                         bpm = bpm,
-                        // NEW: pass through the bars toggle
+                        // pass through the bars toggle
                         showBars = showBars
                     )
                 }
