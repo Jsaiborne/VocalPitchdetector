@@ -29,15 +29,26 @@ android {
             )
         }
     }
+
+    // Use Java 17 for Compose toolchain compatibility
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
+
+    // Kotlin jvm target
     kotlinOptions {
-        jvmTarget = "11"
+        jvmTarget = "17"
     }
+
     buildFeatures {
         compose = true
+    }
+
+    // IMPORTANT: set the Compose Compiler (kotlin compiler extension) version that matches your Kotlin
+    composeOptions {
+        // If you know your Kotlin version is older than 1.9.x, see note below.
+        kotlinCompilerExtensionVersion = "1.5.14"
     }
 }
 
@@ -51,6 +62,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
@@ -58,6 +70,8 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
-    implementation("com.github.st-h:TarsosDSP:2.4.1")
 
+    implementation("com.github.st-h:TarsosDSP:2.4.1")
+    // bump navigation-compose to stable 2.8.7
+    implementation("androidx.navigation:navigation-compose:2.8.7")
 }

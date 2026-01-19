@@ -9,6 +9,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
 import com.example.vocalpitchdetector.ui.theme.VocalPitchdetectorTheme
 
 class MainActivity : ComponentActivity() {
@@ -24,13 +27,21 @@ class MainActivity : ComponentActivity() {
         audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
 
         setContent {
-            // Use your app theme (Material3) and a Surface colored by the theme's background
             VocalPitchdetectorTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MainScreen()
+                    // NavController + NavHost
+                    val navController = rememberNavController()
+                    NavHost(navController = navController, startDestination = "main") {
+                        composable("main") {
+                            MainScreen(navController = navController)
+                        }
+                        composable("about") {
+                            AboutScreen(navController = navController)
+                        }
+                    }
                 }
             }
         }

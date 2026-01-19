@@ -1,4 +1,3 @@
-// MainScreen.kt
 @file:OptIn(ExperimentalMaterial3Api::class)
 
 package com.example.vocalpitchdetector
@@ -24,9 +23,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import kotlin.math.roundToInt
 import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.layout.heightIn
+import androidx.navigation.NavHostController
 
 @Composable
-fun MainScreen() {
+fun MainScreen(navController: NavHostController? = null) {
     val scope = rememberCoroutineScope()
     val engine = remember { PitchEngine(scope) }
     val state by engine.state.collectAsState()
@@ -138,7 +138,9 @@ fun MainScreen() {
                 onToggleUseSamplePlayer = { useSamplePlayer = it },
                 // white dots toggle
                 showWhiteDots = showWhiteDots,
-                onShowWhiteDotsChange = { showWhiteDots = it }
+                onShowWhiteDotsChange = { showWhiteDots = it },
+                // pass optional nav controller for About navigation
+                navController = navController
             )
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -341,6 +343,19 @@ fun MainScreen() {
                         )
 
                     }
+
+                    // Divider + About button (added)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Divider()
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    DropdownMenuItem(
+                        text = { Text("About") },
+                        onClick = {
+                            menuExpandedPortrait = false
+                            navController?.navigate("about")
+                        }
+                    )
                 }
             }
 
@@ -454,7 +469,9 @@ private fun TopAppBarLandscapeCompact(
     onToggleUseSamplePlayer: (Boolean) -> Unit,
     // NEW: white dots toggle (parameters must be declared like this)
     showWhiteDots: Boolean,
-    onShowWhiteDotsChange: (Boolean) -> Unit
+    onShowWhiteDotsChange: (Boolean) -> Unit,
+    // optional nav controller to navigate to about
+    navController: NavHostController? = null
 ) {
     TopAppBar(
         // smaller height in landscape
@@ -607,6 +624,19 @@ private fun TopAppBarLandscapeCompact(
                             )
                             Spacer(modifier = Modifier.height(12.dp))
                         }
+
+                        // Divider + About (added)
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Divider()
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        DropdownMenuItem(
+                            text = { Text("About") },
+                            onClick = {
+                                menuExpanded = false
+                                navController?.navigate("about")
+                            }
+                        )
                     }
                 }
             }
