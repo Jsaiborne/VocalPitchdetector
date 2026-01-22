@@ -3,9 +3,9 @@ package com.example.vocalpitchdetector
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
+import kotlin.concurrent.thread
 import kotlin.math.PI
 import kotlin.math.sin
-import kotlin.concurrent.thread
 
 /**
  * ToneGenerator with two modes:
@@ -33,16 +33,33 @@ object ToneGenerator {
             val sample = (amp * sin(2.0 * PI * i * freqHz / sampleRate)).toInt()
             buffer[i] = sample.toShort()
         }
-        val minBufSize = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        staticTrack = AudioTrack(AudioManager.STREAM_MUSIC, sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(minBufSize, buffer.size * 2), AudioTrack.MODE_STATIC)
+        val minBufSize = AudioTrack.getMinBufferSize(
+            sampleRate,
+            AudioFormat.CHANNEL_OUT_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
+        staticTrack = AudioTrack(
+            AudioManager.STREAM_MUSIC,
+            sampleRate,
+            AudioFormat.CHANNEL_OUT_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+            maxOf(minBufSize, buffer.size * 2),
+            AudioTrack.MODE_STATIC
+        )
         staticTrack?.write(buffer, 0, buffer.size)
         staticTrack?.play()
     }
 
     private fun stopStatic() {
         staticTrack?.let {
-            try { it.stop() } catch (_: Exception) {}
-            try { it.release() } catch (_: Exception) {}
+            try {
+                it.stop()
+            } catch (_: Exception) {
+            }
+            try {
+                it.release()
+            } catch (_: Exception) {
+            }
         }
         staticTrack = null
     }
@@ -52,9 +69,20 @@ object ToneGenerator {
         stop() // stop any existing streaming tone
         streaming = true
 
-        val minBufSize = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        val minBufSize = AudioTrack.getMinBufferSize(
+            sampleRate,
+            AudioFormat.CHANNEL_OUT_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
 // create streaming audio track
-        streamTrack = AudioTrack(AudioManager.STREAM_MUSIC, sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT, minBufSize, AudioTrack.MODE_STREAM)
+        streamTrack = AudioTrack(
+            AudioManager.STREAM_MUSIC,
+            sampleRate,
+            AudioFormat.CHANNEL_OUT_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+            minBufSize,
+            AudioTrack.MODE_STREAM
+        )
         streamTrack?.play()
 
         streamThread = thread(start = true) {
@@ -73,8 +101,14 @@ object ToneGenerator {
 // swallow write exceptions
                 }
             }
-            try { streamTrack?.stop() } catch (_: Exception) {}
-            try { streamTrack?.release() } catch (_: Exception) {}
+            try {
+                streamTrack?.stop()
+            } catch (_: Exception) {
+            }
+            try {
+                streamTrack?.release()
+            } catch (_: Exception) {
+            }
             streamTrack = null
         }
     }
@@ -85,11 +119,18 @@ object ToneGenerator {
         streaming = false
         try {
             streamThread?.join(200)
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
         streamThread = null
         streamTrack?.let {
-            try { it.stop() } catch (_: Exception) {}
-            try { it.release() } catch (_: Exception) {}
+            try {
+                it.stop()
+            } catch (_: Exception) {
+            }
+            try {
+                it.release()
+            } catch (_: Exception) {
+            }
         }
         streamTrack = null
     }

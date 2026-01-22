@@ -5,15 +5,31 @@ import android.annotation.SuppressLint
 import android.util.Log
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.ScrollState
 import androidx.compose.material3.Text
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
@@ -24,10 +40,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
 import kotlin.math.pow
-import kotlin.math.max
 import kotlin.math.roundToInt
+import kotlinx.coroutines.launch
 
 @SuppressLint("UnusedBoxWithConstraintsScope")
 @Composable
@@ -99,7 +114,11 @@ fun Piano(
 
     if (!rotated) {
         // PORTRAIT
-        BoxWithConstraints(modifier = Modifier.fillMaxWidth().height(whiteKeyHeight)) {
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(whiteKeyHeight)
+        ) {
             val containerWidthPx = with(density) { maxWidth.toPx() }
             val whiteCount = whiteKeys.size
             val whiteKeyWidthPx = with(density) { whiteKeyWidthDp.toPx() }
@@ -118,14 +137,20 @@ fun Piano(
                         if (bk != null) {
                             val center = (bk.leftWhiteIndex + 0.5f) * whiteKeyWidthPx
                             center - containerWidthPx / 2f
-                        } else 0f
+                        } else {
+                            0f
+                        }
                     }
                 }
                 val bounded = targetPx.coerceIn(0f, maxOf(0f, contentWidthPx - containerWidthPx))
                 scope.launch { sState.animateScrollTo(bounded.roundToInt()) }
             }
 
-            Box(modifier = Modifier.width(contentWidthDp).horizontalScroll(sState)) {
+            Box(
+                modifier = Modifier
+                    .width(contentWidthDp)
+                    .horizontalScroll(sState)
+            ) {
                 Row(modifier = Modifier.fillMaxSize(), verticalAlignment = Alignment.Top) {
                     for ((index, midi) in whiteKeys.withIndex()) {
                         val isActive = activeMidi == midi
@@ -156,7 +181,10 @@ fun Piano(
                                         playNoteSafely(midi, freq, true)
                                         // notify callback that key was pressed
                                         onKeyPressed?.invoke(midi, freq)
-                                        try { tryAwaitRelease() } catch (_: Exception) {}
+                                        try {
+                                            tryAwaitRelease()
+                                        } catch (_: Exception) {
+                                        }
                                         // on release stop continuous tone (if oscillator)
                                         if (!useSamplePlayer) {
                                             ToneGenerator.stop()
@@ -164,18 +192,20 @@ fun Piano(
                                         pressedMidi = null
                                         playedByPress = false
                                     }, onTap = {
-                                        // only handle tap-sound if onPress didn't already play
-                                        if (playedByPress) return@detectTapGestures
-                                        val freq = 440.0 * 2.0.pow((midi - 69) / 12.0)
-                                        playNoteSafely(midi, freq, false)
-                                        onKeyPressed?.invoke(midi, freq)
-                                    })
+                                            // only handle tap-sound if onPress didn't already play
+                                            if (playedByPress) return@detectTapGestures
+                                            val freq = 440.0 * 2.0.pow((midi - 69) / 12.0)
+                                            playNoteSafely(midi, freq, false)
+                                            onKeyPressed?.invoke(midi, freq)
+                                        })
                                 }
                         ) {
                             if (midiToNoteName(midi).startsWith("C")) {
                                 Text(
                                     text = midiToNoteName(midi),
-                                    modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 6.dp, end = 6.dp),
+                                    modifier = Modifier
+                                        .align(Alignment.BottomEnd)
+                                        .padding(bottom = 6.dp, end = 6.dp),
                                     color = Color.Black,
                                     textAlign = TextAlign.End
                                 )
@@ -219,18 +249,21 @@ fun Piano(
                                     val freq = 440.0 * 2.0.pow((midi - 69) / 12.0)
                                     playNoteSafely(midi, freq, true)
                                     onKeyPressed?.invoke(midi, freq)
-                                    try { tryAwaitRelease() } catch (_: Exception) {}
+                                    try {
+                                        tryAwaitRelease()
+                                    } catch (_: Exception) {
+                                    }
                                     if (!useSamplePlayer) {
                                         ToneGenerator.stop()
                                     }
                                     pressedMidi = null
                                     playedByPress = false
                                 }, onTap = {
-                                    if (playedByPress) return@detectTapGestures
-                                    val freq = 440.0 * 2.0.pow((midi - 69) / 12.0)
-                                    playNoteSafely(midi, freq, false)
-                                    onKeyPressed?.invoke(midi, freq)
-                                })
+                                        if (playedByPress) return@detectTapGestures
+                                        val freq = 440.0 * 2.0.pow((midi - 69) / 12.0)
+                                        playNoteSafely(midi, freq, false)
+                                        onKeyPressed?.invoke(midi, freq)
+                                    })
                             }
                     ) {}
                 }
@@ -262,7 +295,9 @@ fun Piano(
                             val reversedLeft = whiteCount - 1 - bk.leftWhiteIndex
                             val center = (reversedLeft + 0.5f) * keySizePx
                             center - containerHeightPx / 2f
-                        } else 0f
+                        } else {
+                            0f
+                        }
                     }
                 }
                 val bounded = targetPx.coerceIn(0f, maxOf(0f, contentHeightPx - containerHeightPx))
@@ -294,7 +329,11 @@ fun Piano(
                         .offset(x = -shiftLeftDp)
                 ) {
                     // White keys column (rotated)
-                    Column(modifier = Modifier.fillMaxHeight().fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth()
+                    ) {
                         for ((index, midi) in reversedWhite.withIndex()) {
                             val isActive = activeMidi == midi
                             val isPressed = (pressedMidi == midi) || (pressedIndex == index)
@@ -317,7 +356,12 @@ fun Piano(
                                 if (midiToNoteName(midi).startsWith("C")) {
                                     Text(
                                         text = midiToNoteName(midi),
-                                        modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 6.dp, end = 6.dp),
+                                        modifier = Modifier
+                                            .align(Alignment.BottomEnd)
+                                            .padding(
+                                                bottom = 6.dp,
+                                                end = 6.dp
+                                            ),
                                         color = Color.Black,
                                         textAlign = TextAlign.End
                                     )
@@ -377,7 +421,8 @@ fun Piano(
                                         if (localX in blackLeftPx..blackRightPx) {
                                             for (bk in blackKeys) {
                                                 val revIdx = whiteCount - 1 - bk.leftWhiteIndex
-                                                val bCenterY = (revIdx + 0.5f) * keySizePx - (keySizePx * blackKeyShiftFraction)
+                                                val bCenterY =
+                                                    (revIdx + 0.5f) * keySizePx - (keySizePx * blackKeyShiftFraction)
                                                 val bTop = bCenterY - (blackThicknessPx / 2f)
                                                 val bBottom = bCenterY + (blackThicknessPx / 2f)
 
@@ -404,7 +449,10 @@ fun Piano(
                                         playNoteSafely(hitMidi, freq, true)
                                         onKeyPressed?.invoke(hitMidi, freq)
 
-                                        try { tryAwaitRelease() } catch (_: Exception) {}
+                                        try {
+                                            tryAwaitRelease()
+                                        } catch (_: Exception) {
+                                        }
 
                                         if (!useSamplePlayer) {
                                             ToneGenerator.stop()
@@ -430,8 +478,9 @@ fun Piano(
                                         if (localX in blackLeftPx..blackRightPx) {
                                             for (bk in blackKeys) {
                                                 val revIdx = whiteCount - 1 - bk.leftWhiteIndex
-                                                val bCenterY = (revIdx + 0.5f) * keySizePx - (keySizePx * blackKeyShiftFraction)
-                                                if (localY in (bCenterY - blackThicknessPx/2)..(bCenterY + blackThicknessPx/2)) {
+                                                val bCenterY =
+                                                    (revIdx + 0.5f) * keySizePx - (keySizePx * blackKeyShiftFraction)
+                                                if (localY in (bCenterY - blackThicknessPx / 2)..(bCenterY + blackThicknessPx / 2)) {
                                                     hitMidi = bk.midi
                                                     break
                                                 }

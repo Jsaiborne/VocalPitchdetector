@@ -1,8 +1,6 @@
 package com.example.vocalpitchdetector
 
 import kotlin.math.abs
-import kotlin.math.max
-import kotlin.math.min
 
 /**
  * YIN pitch detector (Kotlin).

@@ -2,6 +2,32 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    id("org.jlleitschuh.gradle.ktlint")
+    id("io.gitlab.arturbosch.detekt")
+}
+
+// ktlint configuration
+ktlint {
+    android.set(true)
+    verbose.set(true)
+    enableExperimentalRules.set(false)
+
+    filter {
+        exclude("**/build/**")
+    }
+
+    reporters {
+        reporter(org.jlleitschuh.gradle.ktlint.reporter.ReporterType.PLAIN)
+    }
+}
+
+// detekt configuration
+detekt {
+    toolVersion = "1.23.0"
+    buildUponDefaultConfig = true
+    baseline = file("detekt-baseline.xml")
+    parallel = true
+    ignoreFailures = false
 }
 
 android {
