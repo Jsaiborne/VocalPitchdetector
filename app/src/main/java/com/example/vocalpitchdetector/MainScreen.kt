@@ -296,20 +296,27 @@ fun MainScreen(navController: NavHostController? = null) {
                         // --- TOGGLES: stacked vertically ---
                         Column(modifier = Modifier.fillMaxWidth()) {
                             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                Text(text = "Note labels", modifier = Modifier.weight(1f))
+                                Text(text = "Show note labels", modifier = Modifier.weight(1f))
                                 Switch(checked = showNoteLabels, onCheckedChange = { showNoteLabels = it })
                             }
                             Spacer(modifier = Modifier.height(8.dp))
 
                             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                Text(text = "Grid lines", modifier = Modifier.weight(1f))
+                                Text(text = "Show grid lines", modifier = Modifier.weight(1f))
                                 Switch(checked = showHorizontalGrid, onCheckedChange = { showHorizontalGrid = it })
                             }
                             Spacer(modifier = Modifier.height(8.dp))
 
+                            // COMBINED TOGGLE: Curve + White trace
                             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                Text(text = "Curve", modifier = Modifier.weight(1f))
-                                Switch(checked = showCurve, onCheckedChange = { showCurve = it })
+                                Text(text = "Show curve & trace", modifier = Modifier.weight(1f))
+                                Switch(
+                                    checked = showCurve && showWhiteTrace,
+                                    onCheckedChange = { checked ->
+                                        showCurve = checked
+                                        showWhiteTrace = checked
+                                    }
+                                )
                             }
                             Spacer(modifier = Modifier.height(8.dp))
 
@@ -323,14 +330,9 @@ fun MainScreen(navController: NavHostController? = null) {
                                 Text(text = "Auto-center", modifier = Modifier.weight(1f))
                                 Switch(checked = autoCenter, onCheckedChange = { autoCenter = it })
                             }
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                Text(text = "Show white trace", modifier = Modifier.weight(1f))
-                                Switch(checked = showWhiteTrace, onCheckedChange = { showWhiteTrace = it })
-                            }
 
                             Spacer(modifier = Modifier.height(8.dp))
+
                             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                                 Text(text = "Show white dots", modifier = Modifier.weight(1f))
                                 Switch(checked = showWhiteDots, onCheckedChange = { showWhiteDots = it })
@@ -607,7 +609,7 @@ private fun TopAppBarLandscapeCompact(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Text(text = "Note labels", modifier = Modifier.weight(1f))
+                                    Text(text = "Show note labels", modifier = Modifier.weight(1f))
                                     Switch(checked = showNoteLabels, onCheckedChange = { onToggleShowNoteLabels(it) })
                                 }
                                 Spacer(modifier = Modifier.height(8.dp))
@@ -616,7 +618,7 @@ private fun TopAppBarLandscapeCompact(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Text(text = "Grid lines", modifier = Modifier.weight(1f))
+                                    Text(text = "Show grid lines", modifier = Modifier.weight(1f))
                                     Switch(
                                         checked = showHorizontalGrid,
                                         onCheckedChange = { onToggleShowHorizontalGrid(it) }
@@ -624,12 +626,19 @@ private fun TopAppBarLandscapeCompact(
                                 }
                                 Spacer(modifier = Modifier.height(8.dp))
 
+                                // COMBINED TOGGLE: Curve + White trace
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Text(text = "Curve", modifier = Modifier.weight(1f))
-                                    Switch(checked = showCurve, onCheckedChange = { onToggleShowCurve(it) })
+                                    Text(text = "Show curve & trace", modifier = Modifier.weight(1f))
+                                    Switch(
+                                        checked = showCurve && showWhiteTrace,
+                                        onCheckedChange = { checked ->
+                                            onToggleShowCurve(checked)
+                                            onShowWhiteTraceChange(checked)
+                                        }
+                                    )
                                 }
                                 Spacer(modifier = Modifier.height(8.dp))
 
@@ -651,15 +660,6 @@ private fun TopAppBarLandscapeCompact(
                                 }
                                 Spacer(modifier = Modifier.height(8.dp))
 
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text(text = "Show white trace", modifier = Modifier.weight(1f))
-                                    Switch(checked = showWhiteTrace, onCheckedChange = { onShowWhiteTraceChange(it) })
-                                }
-
-                                Spacer(modifier = Modifier.height(8.dp))
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier.fillMaxWidth()

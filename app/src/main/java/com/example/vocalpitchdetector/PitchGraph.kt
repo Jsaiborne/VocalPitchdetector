@@ -263,7 +263,7 @@ fun PitchGraphHorizontal(
     val haloColor = Color(0x88000000)
     val dotWhite = Color.White
     // Horizontal bar color: soft translucent blue (matches curve)
-    val horizontalBarColor = Color(0xCC42A5F5)
+    val horizontalBarColor = Color(0xCCEF9A9A)
 
     Box(modifier = modifier) {
         Box(
@@ -718,7 +718,7 @@ fun PitchGraphVertical(
     // Halo color and white dot color
     val haloColor = Color(0x88000000)
     val dotWhite = Color.White
-    // Vertical bar color: soft translucent coral/salmon
+    // Vertical bar color
     val verticalBarColor = Color(0xCCEF9A9A)
 
     Box(modifier = modifier) {

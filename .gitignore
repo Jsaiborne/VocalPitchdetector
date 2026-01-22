@@ -1,15 +1,45 @@
+# === Gradle ===
+.gradle/
+build/
+**/build/
+
+# === Android Studio / IntelliJ ===
 *.iml
-.gradle
-/local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
-.DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
+.idea/
+!.idea/codeStyles/
+!.idea/codeStyles/Project.xml   # Keep shared code style if you want consistent formatting
+!.idea/gradle.xml                # Optional: keep if you rely on shared Gradle settings
+!.idea/misc.xml                  # Optional: safe to keep
+
+# === Local machine config ===
 local.properties
+
+# === Keystore files (never commit) ===
+*.jks
+*.keystore
+
+# === OS files ===
+.DS_Store
+Thumbs.db
+
+# === Android build outputs ===
+/captures/
+app/release/
+app/debug/
+
+# === External native build ===
+.externalNativeBuild/
+.cxx/
+
+# === Logs ===
+*.log
+
+# === Kapt / generated ===
+build/generated/
+
+# === Lint / detekt reports (generated) ===
+app/build/reports/
+
+# === Temporary files ===
+*.swp
+*~

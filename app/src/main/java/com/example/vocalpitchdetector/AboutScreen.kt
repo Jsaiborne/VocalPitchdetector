@@ -43,9 +43,9 @@ fun AboutScreen(navController: NavHostController) {
     val uriHandler = LocalUriHandler.current
 
     // TODO: replace these with your real contact details
-    val EMAIL = "you@example.com"
-    val WEBSITE = "https://example.com"
-    val GITHUB = "https://github.com/yourusername"
+    val EMAIL = "bahehdowski@gmail.com"
+    val WEBSITE = "https://jsaiborne-portfolio.netlify.app/"
+    val GITHUB = "https://github.com/Jsaiborne"
 
     var selectedTab by remember { mutableStateOf(0) }
     val tabs = listOf("App", "Dev")
@@ -88,7 +88,11 @@ fun AboutScreen(navController: NavHostController) {
                     Text(text = "Version: $version", style = MaterialTheme.typography.bodyMedium)
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = "This app displays live vocal pitch information, confidence, and a scrollable pitch trace. It uses on-device audio analysis and a few visualization tweaks."
+                        text = """
+This app shows your singing voice in real time — the musical pitch, a confidence score, and a scrolling pitch trace so you can see how steady you are. Tap the piano to play notes or compare your pitch.
+
+Piano sound samples by jobro -- https://freesound.org/ -- License: Attribution 3.0
+                        """.trimIndent()
                     )
                 }
             }
@@ -103,8 +107,15 @@ fun AboutScreen(navController: NavHostController) {
                 ) {
                     Text(text = "Developer", style = MaterialTheme.typography.titleLarge)
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text(text = "Your Name Here", style = MaterialTheme.typography.bodyLarge)
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = """
+Hey! I’m Jotham Saiborne — a Master’s student in Computer Science, web and Android developer, and hobbyist musician. I love building clean, easy-to-use apps, whether that’s full-stack web projects with React and Node or native Android apps with Kotlin and Jetpack Compose. I enjoy taking ideas from a rough sketch to a polished, working product — and I’m always experimenting with new tech and creative projects along the way.
+
+Outside code, I have a deep interest in music — which keeps my creativity sharp and helps me think about rhythm and structure in software. Finally, I am a devoted Christian and my faith in the Lord Jesus Christ is most important to me.
+                        """.trimIndent(),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(20.dp))
 
                     Text(text = "Contact", style = MaterialTheme.typography.titleMedium)
                     Spacer(modifier = Modifier.height(8.dp))
