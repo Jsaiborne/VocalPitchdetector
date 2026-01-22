@@ -75,7 +75,6 @@
     <ID>MagicNumber:PitchGraph.kt$0x22FFFFFF</ID>
     <ID>MagicNumber:PitchGraph.kt$0x33FFFFFF</ID>
     <ID>MagicNumber:PitchGraph.kt$0x88000000</ID>
-    <ID>MagicNumber:PitchGraph.kt$0xCC42A5F5</ID>
     <ID>MagicNumber:PitchGraph.kt$0xCCEF9A9A</ID>
     <ID>MagicNumber:PitchGraph.kt$0xCCFFFFFF</ID>
     <ID>MagicNumber:PitchGraph.kt$0xFF081226</ID>
@@ -127,7 +126,6 @@
     <ID>MagicNumber:Utils.kt$80f</ID>
     <ID>MagicNumber:YinPitchDetector.kt$YinPitchDetector$0.5f</ID>
     <ID>MagicNumber:YinPitchDetector.kt$YinPitchDetector$1e-12f</ID>
-    <ID>MaxLineLength:AboutScreen.kt$text = "This app displays live vocal pitch information, confidence, and a scrollable pitch trace. It uses on-device audio analysis and a few visualization tweaks."</ID>
     <ID>MaxLineLength:Piano.kt$// 1) Check black keys by Y-range (X must be inside the central black-key column)</ID>
     <ID>MaxLineLength:Piano.kt$if</ID>
     <ID>MayBeConst:ToneGenerator.kt$ToneGenerator$private val defaultSampleRate = 44100</ID>
@@ -146,8 +144,8 @@
     <ID>UnusedParameter:PitchGraph.kt$onTogglePause: () -&gt; Unit</ID>
     <ID>UnusedPrivateProperty:MainScreen.kt$var volumeThreshold by rememberSaveable { mutableStateOf(0.02f) } // normalized 0..1</ID>
     <ID>UnusedPrivateProperty:Piano.kt$val blackDrawRightPx = blackDrawLeftPx + blackKeyWidthPx</ID>
-    <ID>VariableNaming:AboutScreen.kt$val EMAIL = "you@example.com"</ID>
-    <ID>VariableNaming:AboutScreen.kt$val GITHUB = "https://github.com/yourusername"</ID>
-    <ID>VariableNaming:AboutScreen.kt$val WEBSITE = "https://example.com"</ID>
+    <ID>VariableNaming:AboutScreen.kt$val EMAIL = "bahehdowski@gmail.com"</ID>
+    <ID>VariableNaming:AboutScreen.kt$val GITHUB = "https://github.com/Jsaiborne"</ID>
+    <ID>VariableNaming:AboutScreen.kt$val WEBSITE = "https://jsaiborne-portfolio.netlify.app/"</ID>
   </CurrentIssues>
 </SmellBaseline>
