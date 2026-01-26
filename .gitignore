@@ -43,3 +43,8 @@ app/build/reports/
 # === Temporary files ===
 *.swp
 *~
+
+
+# Keystore secrets
+keystore.properties
+*.jks
