@@ -1,5 +1,5 @@
-import java.util.Properties
 import java.io.FileInputStream
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
@@ -10,10 +10,9 @@ plugins {
 }
 
 val keystorePropertiesFile = rootProject.file("local.properties")
-val keystoreProperties = Properties().also {
-    if (keystorePropertiesFile.exists()) {
-        it.load(FileInputStream(keystorePropertiesFile))
-    }
+val keystoreProperties = Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
 // ktlint configuration
@@ -65,7 +64,9 @@ android {
                 keyAlias = keystoreProperties["keyAlias"] as String
                 keyPassword = keystoreProperties["keyPassword"] as String
             }
-        } else null
+        } else {
+            null
+        }
 
         release {
             isMinifyEnabled = false
