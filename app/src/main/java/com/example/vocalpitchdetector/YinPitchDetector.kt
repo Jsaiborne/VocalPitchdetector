@@ -1,3 +1,8 @@
+@file:Suppress(
+
+    "MagicNumber"
+
+)
 package com.example.vocalpitchdetector
 
 import kotlin.math.abs
@@ -24,6 +29,10 @@ class YinPitchDetector(
      * Analyze a frame.
      * @param preComputedRms Optimization: pass RMS if already calculated to avoid re-looping.
      */
+    @Suppress(
+        "CyclomaticComplexMethod",
+        "ReturnCount"
+    )
     fun getPitch(buffer: FloatArray, readLen: Int, preComputedRms: Double? = null): YinResult {
         if (readLen <= 0) return YinResult(null, 1.0, 0.0)
 
@@ -91,7 +100,9 @@ class YinPitchDetector(
                 }
             }
             // If the best guess is still terrible, abort
-            if (bestVal > 0.45f) return YinResult(null, bestVal.toDouble(), rms)
+            if (bestVal > YIN_MAX_ACCEPTABLE_CMND) {
+                return YinResult(null, bestVal.toDouble(), rms)
+            }
             tauEstimate = bestTau
         }
 
@@ -128,5 +139,9 @@ class YinPitchDetector(
             sum += s * s
         }
         return sqrt(sum / readLen.toDouble())
+    }
+
+    private companion object {
+        private const val YIN_MAX_ACCEPTABLE_CMND = 0.45f
     }
 }

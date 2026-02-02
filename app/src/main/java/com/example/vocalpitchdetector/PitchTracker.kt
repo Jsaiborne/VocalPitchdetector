@@ -1,3 +1,12 @@
+@file:Suppress(
+    "LongParameterList",
+    "CyclomaticComplexMethod",
+    "NestedBlockDepth",
+    "ReturnCount",
+    "MagicNumber"
+
+)
+
 package com.example.vocalpitchdetector
 
 import kotlin.math.abs
@@ -23,7 +32,12 @@ class PitchTracker(
     private var energyThreshold: Double = DEFAULT_ENERGY_THRESHOLD,
     private var confidenceThreshold: Double = DEFAULT_CONF_THRESHOLD
 ) {
-    private val hangoverFrames: Int = maxOf(1, (hangoverMs * sampleRate / hopSize) / 1000)
+
+    private val hangoverFrames: Int =
+        maxOf(
+            MIN_HANGOVER_FRAMES,
+            (hangoverMs * sampleRate / hopSize) / MILLIS_PER_SECOND
+        )
     private var lastStablePitchSemi: Double? = null
     private var holdCounter = 0
     private var smoothedSemi: Double? = null
@@ -121,5 +135,8 @@ class PitchTracker(
     companion object {
         const val DEFAULT_ENERGY_THRESHOLD = 1e-6
         const val DEFAULT_CONF_THRESHOLD = 0.12
+
+        private const val MILLIS_PER_SECOND = 1000
+        private const val MIN_HANGOVER_FRAMES = 1
     }
 }

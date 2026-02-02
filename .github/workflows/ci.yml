@@ -31,5 +31,11 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x ./gradlew
 
-      - name: Run lint, detekt, tests, and build
-        run: ./gradlew ktlintCheck detekt test assembleDebug --no-daemon
+      - name: Run ktlint, detekt (with config), tests, and build
+        run: |
+          ./gradlew \
+            ktlintCheck \
+            :app:detekt \
+            test \
+            assembleDebug \
+            --no-daemon

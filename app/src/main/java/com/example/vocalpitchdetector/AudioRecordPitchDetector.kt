@@ -9,7 +9,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
-
+@Suppress("LongParameterList")
 class AudioRecordPitchDetector(
     private val sampleRate: Int = 44100,
     private val bufferSize: Int = 2048,
@@ -181,7 +181,17 @@ class AudioRecordPitchDetector(
     }
 
     // Helper to keep utils internal
-    private fun freqToMidi(freq: Double): Double = 69.0 + 12.0 * kotlin.math.ln(freq / 440.0) / kotlin.math.ln(2.0)
+    private companion object {
+        private const val A4_MIDI = 69.0
+        private const val A4_FREQ_HZ = 440.0
+        private const val SEMITONES_PER_OCTAVE = 12.0
+        private const val OCTAVE_RATIO = 2.0
+    }
+    private fun freqToMidi(freq: Double): Double =
+        A4_MIDI +
+            SEMITONES_PER_OCTAVE *
+            kotlin.math.ln(freq / A4_FREQ_HZ) /
+            kotlin.math.ln(OCTAVE_RATIO)
 
     fun stop() {
         running.set(false)

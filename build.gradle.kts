@@ -6,3 +6,5 @@ plugins {
     id("io.gitlab.arturbosch.detekt") version "1.23.0" apply false
     id("org.jlleitschuh.gradle.ktlint") version "11.4.2" apply false
 }
+
+

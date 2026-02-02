@@ -37,6 +37,7 @@ detekt {
     baseline = file("detekt-baseline.xml")
     parallel = true
     ignoreFailures = false
+    config.setFrom(files("$rootDir/config/detekt/detekt.yml"))
 }
 
 android {

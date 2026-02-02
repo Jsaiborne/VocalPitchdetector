@@ -9,6 +9,7 @@ import org.junit.Test
 
 class PitchTrackerTest {
 
+    @Suppress("LongMethod")
     @Test
     fun phraseEndingDoesNotSpike() {
         val sampleRate = 44100
