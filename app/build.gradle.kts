@@ -41,13 +41,13 @@ detekt {
 }
 
 android {
-    namespace = "com.example.vocalpitchdetector"
+    namespace = "com.jsaiborne.vocalpitchdetector"
     compileSdk {
         version = release(36)
     }
 
     defaultConfig {
-        applicationId = "com.example.vocalpitchdetector"
+        applicationId = "com.jsaiborne.vocalpitchdetector"
         minSdk = 24
         targetSdk = 36
         versionCode = 1
