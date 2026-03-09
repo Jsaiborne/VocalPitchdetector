@@ -245,7 +245,7 @@ fun Piano(
                             .shadow(elevation)
                             .graphicsLayer { scaleX = scale; scaleY = scale }
                             .background(bg)
-                            .pointerInput(midi,useSamplePlayer) {
+                            .pointerInput(midi, useSamplePlayer) {
                                 var playedByPress = false
                                 detectTapGestures(onPress = {
                                     playedByPress = true

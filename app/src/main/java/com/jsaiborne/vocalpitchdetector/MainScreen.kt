@@ -2,7 +2,11 @@
 
 package com.jsaiborne.vocalpitchdetector
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.content.res.Configuration
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -49,6 +53,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.navigation.NavHostController
 import kotlin.math.roundToInt
 
@@ -88,10 +93,36 @@ fun MainScreen(navController: NavHostController? = null) {
     val sharedScroll = rememberScrollState()
 
     // Start / stop engine as before
-    DisposableEffect(Unit) {
-        engine.start()
-        engine.setVolumeThreshold(dbToRms(thresholdDb)) // apply initial
-        onDispose { engine.stop() }
+    // 1. Track whether we have permission in a Compose state
+    var hasMicPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    // 2. Create a launcher to request permission if we don't have it
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        hasMicPermission = isGranted
+    }
+
+    // 3. Request permission on first launch if needed
+    LaunchedEffect(Unit) {
+        if (!hasMicPermission) {
+            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    // 4. ONLY start the engine when hasMicPermission is true
+    DisposableEffect(hasMicPermission) {
+        if (hasMicPermission) {
+            engine.start()
+            engine.setVolumeThreshold(dbToRms(thresholdDb))
+        }
+        onDispose {
+            engine.stop()
+        }
     }
 
     // Initialize / release SamplePlayer when toggled

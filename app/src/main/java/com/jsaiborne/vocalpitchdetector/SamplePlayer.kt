@@ -51,6 +51,7 @@ object SamplePlayer {
 
         return true // Successfully played
     }
+
     // This function must exist for MainScreen.kt to compile
     fun release() {
         soundPool?.release()
