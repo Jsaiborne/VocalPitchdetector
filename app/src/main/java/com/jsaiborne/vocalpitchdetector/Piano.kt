@@ -70,12 +70,16 @@ fun Piano(
     val playNoteSafely: (Int, Double, Boolean) -> Unit = { midi, freq, sustain ->
         try {
             if (useSamplePlayer) {
-                SamplePlayer.play(midi)
+                // Check if the sample actually played
+                val didPlay = SamplePlayer.play(midi)
+                if (!didPlay) {
+                    // Fallback while samples are loading
+                    if (sustain) ToneGenerator.playToneContinuous(freq) else ToneGenerator.playTone(freq, 300)
+                }
             } else {
                 if (sustain) ToneGenerator.playToneContinuous(freq) else ToneGenerator.playTone(freq, 300)
             }
         } catch (e: Exception) {
-            // fallback: use oscillator so user hears something
             Log.w("Piano", "SamplePlayer.play failed for midi=$midi, falling back to ToneGenerator: ${e.message}")
             if (sustain) ToneGenerator.playToneContinuous(freq) else ToneGenerator.playTone(freq, 300)
         }
@@ -171,7 +175,7 @@ fun Piano(
                                 .shadow(elevation)
                                 .graphicsLayer { scaleX = scale; scaleY = scale }
                                 .background(bg)
-                                .pointerInput(midi) {
+                                .pointerInput(midi, useSamplePlayer) {
                                     var playedByPress = false
                                     detectTapGestures(onPress = {
                                         playedByPress = true
@@ -241,7 +245,7 @@ fun Piano(
                             .shadow(elevation)
                             .graphicsLayer { scaleX = scale; scaleY = scale }
                             .background(bg)
-                            .pointerInput(midi) {
+                            .pointerInput(midi,useSamplePlayer) {
                                 var playedByPress = false
                                 detectTapGestures(onPress = {
                                     playedByPress = true
@@ -401,7 +405,7 @@ fun Piano(
                     Box(
                         modifier = Modifier
                             .matchParentSize()
-                            .pointerInput(Unit) {
+                            .pointerInput(useSamplePlayer) {
                                 var playedByPress = false
                                 detectTapGestures(
                                     onPress = { offset ->

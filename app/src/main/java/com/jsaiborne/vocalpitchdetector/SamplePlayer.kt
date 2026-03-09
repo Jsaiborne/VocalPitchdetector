@@ -36,23 +36,21 @@ object SamplePlayer {
         }
     }
 
-    fun play(midi: Int) {
-        if (soundPool == null || loadedSamplesCount < AVAILABLE_SAMPLES.size) return
+    fun play(midi: Int): Boolean {
+        // Return false if not ready
+        if (soundPool == null || loadedSamplesCount < AVAILABLE_SAMPLES.size) return false
 
-        // 1. Find the closest sample we have to the requested midi note
-        val bestBaseMidi = sampleMap.keys.minByOrNull { abs(it - midi) } ?: return
-        val sampleId = sampleMap[bestBaseMidi] ?: return
+        val bestBaseMidi = sampleMap.keys.minByOrNull { abs(it - midi) } ?: return false
+        val sampleId = sampleMap[bestBaseMidi] ?: return false
 
-        // 2. Calculate the rate shift from THAT specific sample
         val semitoneDelta = (midi - bestBaseMidi).toDouble()
         val rate = 2.0.pow(semitoneDelta / 12.0).toFloat()
-
-        // 3. Clamp the rate (though with a sample every octave, this will stay between 0.7-1.4)
         val clampedRate = rate.coerceIn(0.5f, 2.0f)
 
         soundPool?.play(sampleId, 1f, 1f, 1, 0, clampedRate)
-    }
 
+        return true // Successfully played
+    }
     // This function must exist for MainScreen.kt to compile
     fun release() {
         soundPool?.release()
