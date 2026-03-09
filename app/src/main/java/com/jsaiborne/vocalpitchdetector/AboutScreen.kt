@@ -56,7 +56,7 @@ fun AboutScreen(navController: NavHostController) {
     val WEBSITE = "https://jsaiborne-portfolio.netlify.app/"
     val GITHUB = "https://github.com/Jsaiborne"
     // added X (if you prefer a different handle change this string)
-    val X_URL = "https://x.com/Jsaiborne"
+    val xUrl = "https://x.com/Jsaiborne"
 
     var selectedTab by remember { mutableStateOf(0) }
     val tabs = listOf("App", "Dev")
@@ -220,7 +220,7 @@ Outside code, I have a deep interest in music — which keeps my creativity shar
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { uriHandler.openUri(X_URL) }
+                            .clickable { uriHandler.openUri(xUrl) }
                             .padding(vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -230,14 +230,14 @@ Outside code, I have a deep interest in music — which keeps my creativity shar
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(12.dp))
-                        Text(text = "X: $X_URL", style = MaterialTheme.typography.bodyMedium)
+                        Text(text = "X: $xUrl", style = MaterialTheme.typography.bodyMedium)
                         Spacer(modifier = Modifier.weight(1f))
                         Icon(
                             imageVector = Icons.Filled.OpenInNew,
                             contentDescription = "Open X",
                             modifier = Modifier
                                 .padding(start = 8.dp)
-                                .clickable { uriHandler.openUri(X_URL) }
+                                .clickable { uriHandler.openUri(xUrl) }
                         )
                     }
                 }

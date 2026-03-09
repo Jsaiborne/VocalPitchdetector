@@ -16,44 +16,37 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
-// Professional Audio Palette
-private val DarkTealPrimary = Color(0xFF4DB6AC)
-private val DarkTealSecondary = Color(0xFF00796B)
-private val MidnightBackground = Color(0xFF0B0E0E)
-private val DeepSurface = Color(0xFF1A1C1C)
-
 private val DarkColorScheme = darkColorScheme(
     primary = DarkTealPrimary,
     secondary = DarkTealSecondary,
-    tertiary = Color(0xFFFFB74D), // Warm accent for highlights
+    tertiary = WarmAccent,
     background = MidnightBackground,
     surface = DeepSurface,
     onPrimary = Color.Black,
     onSecondary = Color.White,
     onTertiary = Color.Black,
-    onBackground = Color(0xFFE1E3E3),
-    onSurface = Color(0xFFE1E3E3),
-    surfaceVariant = Color(0xFF3F4948) // For cards and sliders
+    onBackground = OnSurfaceLight,
+    onSurface = OnSurfaceLight,
+    surfaceVariant = SurfaceVariantDark
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = Color(0xFF006A60),
-    secondary = Color(0xFF4A635F),
-    tertiary = Color(0xFF825500),
-    background = Color(0xFFFBFDFA),
-    surface = Color(0xFFFBFDFA),
+    primary = LightPrimary,
+    secondary = LightSecondary,
+    tertiary = LightTertiary,
+    background = LightBackground,
+    surface = LightBackground,
     onPrimary = Color.White,
     onSecondary = Color.White,
     onTertiary = Color.White,
-    onBackground = Color(0xFF191C1B),
-    onSurface = Color(0xFF191C1B),
-    surfaceVariant = Color(0xFFDAE5E3)
+    onBackground = OnBackgroundLight,
+    onSurface = OnBackgroundLight,
+    surfaceVariant = SurfaceVariantLight
 )
 
 @Composable
-fun VocalPitchdetectorTheme(
+fun vocalPitchDetectorTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    // Set to false for a consistent "branded" look for an instrument app
     dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {

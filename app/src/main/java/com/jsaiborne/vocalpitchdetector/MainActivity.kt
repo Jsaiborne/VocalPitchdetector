@@ -10,13 +10,13 @@ import androidx.compose.ui.Modifier
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import com.jsaiborne.vocalpitchdetector.ui.theme.VocalPitchdetectorTheme
+import com.jsaiborne.vocalpitchdetector.ui.theme.vocalPitchDetectorTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            VocalPitchdetectorTheme {
+            vocalPitchDetectorTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background

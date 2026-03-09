@@ -62,3 +62,4 @@ val Typography = Typography(
         letterSpacing = 0.5.sp
     )
 )
+// VocalPitchdetectorTheme
