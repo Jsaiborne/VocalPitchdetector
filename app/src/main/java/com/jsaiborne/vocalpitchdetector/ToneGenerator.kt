@@ -41,6 +41,9 @@ object ToneGenerator {
     // - >0.0 => exponential curve; larger values make the curve more pronounced
     private const val EXP_SHAPE = 6.0
 
+    private const val SILENCE_BUFFER_SIZE = 64
+    private const val THREAD_JOIN_TIMEOUT_MS = 300L
+
     /**
      * Exponential-style envelope mapping.
      * progress in [0..1] -> returns value in [0..1].
@@ -179,7 +182,11 @@ object ToneGenerator {
                         fadeOutRemaining > 0 -> {
                             // fadeOutRemaining counts down from totalFadeOutSamples -> 0
                             // map to progress in [0..1] where 1 => full amplitude, 0 => silence
-                            val progress = if (totalFadeOutSamples > 0) (fadeOutRemaining.toDouble() / totalFadeOutSamples) else 0.0
+                            val progress = if (totalFadeOutSamples > 0) {
+                                (fadeOutRemaining.toDouble() / totalFadeOutSamples)
+                            } else {
+                                0.0
+                            }
                             fadeOutRemaining--
                             expEnv(progress)
                         }
@@ -205,7 +212,7 @@ object ToneGenerator {
 
             // Flush a tiny bit of silence to ensure the track consumes final samples
             try {
-                val silence = ShortArray(64)
+                val silence = ShortArray(SILENCE_BUFFER_SIZE)
                 streamTrack?.write(silence, 0, silence.size)
             } catch (_: Exception) {
             }
@@ -228,7 +235,7 @@ object ToneGenerator {
         // signal streaming thread to begin fade-out
         streaming = false
         try {
-            streamThread?.join(300) // wait briefly for fade-out to finish
+            streamThread?.join(THREAD_JOIN_TIMEOUT_MS) // wait briefly for fade-out to finish
         } catch (_: Exception) {
         }
         streamThread = null

@@ -2,18 +2,25 @@
 
 package com.jsaiborne.vocalpitchdetector
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -27,9 +34,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 
@@ -46,6 +55,8 @@ fun AboutScreen(navController: NavHostController) {
     val EMAIL = "bahehdowski@gmail.com"
     val WEBSITE = "https://jsaiborne-portfolio.netlify.app/"
     val GITHUB = "https://github.com/Jsaiborne"
+    // added X (if you prefer a different handle change this string)
+    val X_URL = "https://x.com/Jsaiborne"
 
     var selectedTab by remember { mutableStateOf(0) }
     val tabs = listOf("App", "Dev")
@@ -60,7 +71,10 @@ fun AboutScreen(navController: NavHostController) {
             }
         )
 
-        TabRow(selectedTabIndex = selectedTab) {
+        TabRow(
+            selectedTabIndex = selectedTab,
+            modifier = Modifier.fillMaxWidth()
+        ) {
             tabs.forEachIndexed { i, title ->
                 Tab(selected = selectedTab == i, onClick = { selectedTab = i }) {
                     Text(title, modifier = Modifier.padding(16.dp))
@@ -80,7 +94,8 @@ fun AboutScreen(navController: NavHostController) {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(16.dp),
+                        .padding(16.dp)
+                        .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.Top
                 ) {
                     Text(text = "Vocal Pitch Monitor", style = MaterialTheme.typography.titleLarge)
@@ -120,33 +135,111 @@ Outside code, I have a deep interest in music — which keeps my creativity shar
                     Text(text = "Contact", style = MaterialTheme.typography.titleMedium)
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    Text(
-                        text = "Email: $EMAIL",
+                    // Email row with icon
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { uriHandler.openUri("mailto:$EMAIL") }
-                            .padding(8.dp)
-                    )
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Email,
+                            contentDescription = "Email",
+                            modifier = Modifier.width(28.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(text = "Email: $EMAIL", style = MaterialTheme.typography.bodyMedium)
+                        Spacer(modifier = Modifier.weight(1f))
+                        Icon(
+                            imageVector = Icons.Filled.OpenInNew,
+                            contentDescription = "Open email",
+                            modifier = Modifier
+                                .padding(start = 8.dp)
+                                .clickable { uriHandler.openUri("mailto:$EMAIL") }
+                        )
+                    }
 
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    Text(
-                        text = "Website: $WEBSITE",
+                    // Website row with icon
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { uriHandler.openUri(WEBSITE) }
-                            .padding(8.dp)
-                    )
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Language,
+                            contentDescription = "Website",
+                            modifier = Modifier.width(28.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(text = "Website: $WEBSITE", style = MaterialTheme.typography.bodyMedium)
+                        Spacer(modifier = Modifier.weight(1f))
+                        Icon(
+                            imageVector = Icons.Filled.OpenInNew,
+                            contentDescription = "Open website",
+                            modifier = Modifier
+                                .padding(start = 8.dp)
+                                .clickable { uriHandler.openUri(WEBSITE) }
+                        )
+                    }
 
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    Text(
-                        text = "GitHub: $GITHUB",
+                    // GitHub row — use imported vector drawable
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { uriHandler.openUri(GITHUB) }
-                            .padding(8.dp)
-                    )
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Image(
+                            painter = painterResource(id = R.drawable.ic_logo_github),
+                            contentDescription = "GitHub logo",
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(text = "GitHub: $GITHUB", style = MaterialTheme.typography.bodyMedium)
+                        Spacer(modifier = Modifier.weight(1f))
+                        Icon(
+                            imageVector = Icons.Filled.OpenInNew,
+                            contentDescription = "Open GitHub",
+                            modifier = Modifier
+                                .padding(start = 8.dp)
+                                .clickable { uriHandler.openUri(GITHUB) }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    // X row — use imported vector drawable
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { uriHandler.openUri(X_URL) }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Image(
+                            painter = painterResource(id = R.drawable.ic_logo_x),
+                            contentDescription = "X logo",
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(text = "X: $X_URL", style = MaterialTheme.typography.bodyMedium)
+                        Spacer(modifier = Modifier.weight(1f))
+                        Icon(
+                            imageVector = Icons.Filled.OpenInNew,
+                            contentDescription = "Open X",
+                            modifier = Modifier
+                                .padding(start = 8.dp)
+                                .clickable { uriHandler.openUri(X_URL) }
+                        )
+                    }
                 }
             }
         }
