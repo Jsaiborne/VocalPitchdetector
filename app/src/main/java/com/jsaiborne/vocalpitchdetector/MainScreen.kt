@@ -816,8 +816,10 @@ private fun TopAppBarLandscapeCompact(
                                     )
                                     Switch(
                                         checked = showCurve && showWhiteTrace,
-                                        onCheckedChange = { checked -> onToggleShowCurve(checked);
-                                            onShowWhiteTraceChange(checked) }
+                                        onCheckedChange = { checked ->
+                                            onToggleShowCurve(checked)
+                                            onShowWhiteTraceChange(checked)
+                                        }
                                     )
                                 }
                                 Row(
@@ -875,8 +877,10 @@ private fun TopAppBarLandscapeCompact(
                             HorizontalDivider()
 
                             // --- SLIDERS ---
-                            Text("Smoothing: ${(smoothing * 100).roundToInt()}%",
-                                style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                "Smoothing: ${(smoothing * 100).roundToInt()}%",
+                                style = MaterialTheme.typography.bodySmall
+                            )
                             Slider(
                                 value = smoothing,
                                 onValueChange = onSmoothingChange,
