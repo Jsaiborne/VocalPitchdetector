@@ -2,6 +2,7 @@
 
 package com.jsaiborne.vocalpitchdetector
 
+import android.util.Log
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -21,10 +22,12 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -47,7 +50,7 @@ import androidx.navigation.NavHostController
  * Replace the placeholder contact constants with your real info.
  */
 @Composable
-fun AboutScreen(navController: NavHostController) {
+fun AboutScreen(navController: NavHostController, consentManager: ConsentManager) {
     val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
 
@@ -83,165 +86,211 @@ fun AboutScreen(navController: NavHostController) {
         }
 
         when (selectedTab) {
-            0 -> {
-                val version = try {
-                    val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
-                    pInfo.versionName ?: "?"
-                } catch (e: Exception) {
-                    "?"
-                }
+            0 -> AppTabContent(
+                consentManager = consentManager,
+                navController = navController,
+                contextPackageName = context.packageName,
+                context = context
+            )
 
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.Top
-                ) {
-                    Text(text = "Vocal Pitch Monitor", style = MaterialTheme.typography.titleLarge)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(text = "Version: $version", style = MaterialTheme.typography.bodyMedium)
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = """
+            1 -> DevTabContent(
+                uriHandler = uriHandler,
+                EMAIL = EMAIL,
+                WEBSITE = WEBSITE,
+                GITHUB = GITHUB,
+                xUrl = xUrl
+            )
+        }
+    }
+}
+
+@Composable
+private fun AppTabContent(
+    consentManager: ConsentManager,
+    navController: NavHostController,
+    contextPackageName: String,
+    context: android.content.Context
+) {
+    val version = try {
+        val pInfo = context.packageManager.getPackageInfo(contextPackageName, 0)
+        pInfo.versionName ?: "?"
+    } catch (e: Exception) {
+        "?"
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.Top
+    ) {
+        Text(text = "Vocal Pitch Monitor", style = MaterialTheme.typography.titleLarge)
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(text = "Version: $version", style = MaterialTheme.typography.bodyMedium)
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+            text = """
 This app shows your singing voice in real time — the musical pitch, a confidence score, and a scrolling pitch trace so you can see how steady you are. Tap the piano to play notes or compare your pitch.
 
 Piano sound samples by jobro -- https://freesound.org/ -- License: Attribution 3.0
-                        """.trimIndent()
-                    )
-                }
-            }
+            """.trimIndent()
+        )
+        Spacer(modifier = Modifier.height(24.dp))
 
-            1 -> {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.Top
-                ) {
-                    Text(text = "Developer", style = MaterialTheme.typography.titleLarge)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = """
+        // --- THE PRIVACY BUTTON ---
+        // This only shows up if the user is in a regulated region (EEA/UK/etc.)
+        if (consentManager.isPrivacyOptionsRequired()) {
+            OutlinedButton(
+                onClick = {
+                    consentManager.showPrivacyOptionsForm { error ->
+                        if (error != null) {
+                            Log.e("UMP", "Error showing privacy form: $error")
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Privacy Settings")
+            }
+            Text(
+                text = "Manage your ad personalization and data preferences.",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        // Back Button
+        Button(
+            onClick = { navController.popBackStack() },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Back")
+        }
+    }
+}
+
+@Suppress("FunctionParameterNaming")
+@Composable
+private fun DevTabContent(
+    uriHandler: androidx.compose.ui.platform.UriHandler,
+    EMAIL: String,
+    WEBSITE: String,
+    GITHUB: String,
+    xUrl: String
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.Top
+    ) {
+        Text(text = "Developer", style = MaterialTheme.typography.titleLarge)
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = """
 Hey! I’m Jotham Saiborne — a Master’s student in Computer Science, web and Android developer, and hobbyist musician. I love building clean, easy-to-use apps, whether that’s full-stack web projects with React and Node or native Android apps with Kotlin and Jetpack Compose. I enjoy taking ideas from a rough sketch to a polished, working product — and I’m always experimenting with new tech and creative projects along the way.
 
 Outside code, I have a deep interest in music — which keeps my creativity sharp and helps me think about rhythm and structure in software. Finally, I am a devoted Christian and my faith in the Lord Jesus Christ is most important to me.
-                        """.trimIndent(),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Spacer(modifier = Modifier.height(20.dp))
+            """.trimIndent(),
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Spacer(modifier = Modifier.height(20.dp))
 
-                    Text(text = "Contact", style = MaterialTheme.typography.titleMedium)
-                    Spacer(modifier = Modifier.height(8.dp))
+        Text(text = "Contact", style = MaterialTheme.typography.titleMedium)
+        Spacer(modifier = Modifier.height(8.dp))
 
-                    // Email row with icon
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { uriHandler.openUri("mailto:$EMAIL") }
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Email,
-                            contentDescription = "Email",
-                            modifier = Modifier.width(28.dp)
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(text = "Email: $EMAIL", style = MaterialTheme.typography.bodyMedium)
-                        Spacer(modifier = Modifier.weight(1f))
-                        Icon(
-                            imageVector = Icons.Filled.OpenInNew,
-                            contentDescription = "Open email",
-                            modifier = Modifier
-                                .padding(start = 8.dp)
-                                .clickable { uriHandler.openUri("mailto:$EMAIL") }
-                        )
-                    }
+        // Email row with icon
+        ContactRow(
+            leading = {
+                Icon(
+                    imageVector = Icons.Filled.Email,
+                    contentDescription = "Email",
+                    modifier = Modifier.width(28.dp)
+                )
+            },
+            label = "Email: $EMAIL",
+            uri = "mailto:$EMAIL",
+            uriHandler = uriHandler
+        )
 
-                    Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(6.dp))
 
-                    // Website row with icon
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { uriHandler.openUri(WEBSITE) }
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Language,
-                            contentDescription = "Website",
-                            modifier = Modifier.width(28.dp)
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(text = "Website: $WEBSITE", style = MaterialTheme.typography.bodyMedium)
-                        Spacer(modifier = Modifier.weight(1f))
-                        Icon(
-                            imageVector = Icons.Filled.OpenInNew,
-                            contentDescription = "Open website",
-                            modifier = Modifier
-                                .padding(start = 8.dp)
-                                .clickable { uriHandler.openUri(WEBSITE) }
-                        )
-                    }
+        // Website row with icon
+        ContactRow(
+            leading = {
+                Icon(
+                    imageVector = Icons.Filled.Language,
+                    contentDescription = "Website",
+                    modifier = Modifier.width(28.dp)
+                )
+            },
+            label = "Website: $WEBSITE",
+            uri = WEBSITE,
+            uriHandler = uriHandler
+        )
 
-                    Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(6.dp))
 
-                    // GitHub row — use imported vector drawable
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { uriHandler.openUri(GITHUB) }
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Image(
-                            painter = painterResource(id = R.drawable.ic_logo_github),
-                            contentDescription = "GitHub logo",
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(text = "GitHub: $GITHUB", style = MaterialTheme.typography.bodyMedium)
-                        Spacer(modifier = Modifier.weight(1f))
-                        Icon(
-                            imageVector = Icons.Filled.OpenInNew,
-                            contentDescription = "Open GitHub",
-                            modifier = Modifier
-                                .padding(start = 8.dp)
-                                .clickable { uriHandler.openUri(GITHUB) }
-                        )
-                    }
+        // GitHub row — use imported vector drawable
+        ContactRow(
+            leading = {
+                Image(
+                    painter = painterResource(id = R.drawable.ic_logo_github),
+                    contentDescription = "GitHub logo",
+                    modifier = Modifier.size(24.dp)
+                )
+            },
+            label = "GitHub: $GITHUB",
+            uri = GITHUB,
+            uriHandler = uriHandler
+        )
 
-                    Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(6.dp))
 
-                    // X row — use imported vector drawable
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { uriHandler.openUri(xUrl) }
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Image(
-                            painter = painterResource(id = R.drawable.ic_logo_x),
-                            contentDescription = "X logo",
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(text = "X: $xUrl", style = MaterialTheme.typography.bodyMedium)
-                        Spacer(modifier = Modifier.weight(1f))
-                        Icon(
-                            imageVector = Icons.Filled.OpenInNew,
-                            contentDescription = "Open X",
-                            modifier = Modifier
-                                .padding(start = 8.dp)
-                                .clickable { uriHandler.openUri(xUrl) }
-                        )
-                    }
-                }
-            }
-        }
+        // X row — use imported vector drawable
+        ContactRow(
+            leading = {
+                Image(
+                    painter = painterResource(id = R.drawable.ic_logo_x),
+                    contentDescription = "X logo",
+                    modifier = Modifier.size(16.dp)
+                )
+            },
+            label = "X: $xUrl",
+            uri = xUrl,
+            uriHandler = uriHandler
+        )
+    }
+}
+
+@Composable
+private fun ContactRow(
+    leading: @Composable () -> Unit,
+    label: String,
+    uri: String,
+    uriHandler: androidx.compose.ui.platform.UriHandler,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable { uriHandler.openUri(uri) }
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        leading()
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(text = label, style = MaterialTheme.typography.bodyMedium)
+        Spacer(modifier = Modifier.weight(1f))
+        Icon(
+            imageVector = Icons.Filled.OpenInNew,
+            contentDescription = "Open",
+            modifier = Modifier
+                .padding(start = 8.dp)
+                .clickable { uriHandler.openUri(uri) }
+        )
     }
 }
