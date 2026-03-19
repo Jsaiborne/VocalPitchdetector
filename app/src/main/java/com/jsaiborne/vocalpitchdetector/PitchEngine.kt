@@ -39,6 +39,10 @@ class PitchEngine(
     private val _state = MutableStateFlow(PitchState())
     val state: StateFlow<PitchState> = _state
 
+    // NEW: Expose volume to the UI continuously
+    private val _volumeRms = MutableStateFlow(0f)
+    val volumeRms: StateFlow<Float> = _volumeRms
+
     private val _stableNotes = MutableSharedFlow<StableNote>(replay = 0)
     val stableNotes: SharedFlow<StableNote> = _stableNotes
 
@@ -80,6 +84,10 @@ class PitchEngine(
                             )
                         )
                     }
+                },
+                // NEW: Collect and emit the live volume RMS
+                onVolumeDetected = { rms ->
+                    _volumeRms.value = rms
                 },
                 onStableNote = { midiNote, frequencyHz ->
                     scope.launch {

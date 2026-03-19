@@ -47,7 +47,8 @@ class AudioRecordPitchDetector(
     @SuppressLint("MissingPermission")
     fun start(
         onPitchDetected: (frequencyHz: Float, confidence: Float) -> Unit,
-        onStableNote: ((midiNote: Int, frequencyHz: Float) -> Unit)? = null
+        onStableNote: ((midiNote: Int, frequencyHz: Float) -> Unit)? = null,
+        onVolumeDetected: (Float) -> Unit
     ) {
         if (running.get()) return
 
@@ -113,6 +114,15 @@ class AudioRecordPitchDetector(
                     sumSq += v * v
                 }
                 val rms = sqrt(sumSq / bufferSize)
+
+                // Invoke the volume callback immediately
+                onVolumeDetected(rms)
+
+                // Continue with existing Pitch Detection logic
+                if (rms < volumeThreshold) {
+                    handleSilence(onPitchDetected)
+                    continue
+                }
 
                 // Gate: Early exit on silence
                 if (rms < volumeThreshold) {

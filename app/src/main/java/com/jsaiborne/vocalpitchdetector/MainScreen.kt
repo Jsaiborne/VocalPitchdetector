@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
@@ -35,6 +36,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
@@ -53,6 +55,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -72,7 +75,9 @@ fun MainScreen(navController: NavHostController? = null) {
     val scope = rememberCoroutineScope()
     val engine = remember { PitchEngine(scope) }
     val state by engine.state.collectAsState()
-
+// Collect raw volume and convert to dB
+    val volumeRms by engine.volumeRms.collectAsState()
+    val currentVolumeDb = rmsToDb(volumeRms)
     val context = LocalContext.current
 
     // small UI constants (purely visual)
@@ -220,6 +225,7 @@ fun MainScreen(navController: NavHostController? = null) {
                 showWhiteTrace = showWhiteTrace,
                 onShowWhiteTraceChange = { showWhiteTrace = it },
                 thresholdDb = thresholdDb,
+                currentVolumeDb = currentVolumeDb,
                 onThresholdChange = { newDb ->
                     thresholdDb = newDb
                     engine.setVolumeThreshold(dbToRms(newDb))
@@ -541,19 +547,14 @@ fun MainScreen(navController: NavHostController? = null) {
                                         modifier = Modifier.fillMaxWidth()
                                     )
 
-                                    Text(
-                                        "Volume threshold: ${thresholdDb.roundToInt()} dB",
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-                                    Slider(
-                                        value = thresholdDb,
-                                        onValueChange = { newDb ->
+                                    // NEW: Active live volume slider component
+                                    LiveVolumeSlider(
+                                        thresholdDb = thresholdDb,
+                                        currentVolumeDb = currentVolumeDb,
+                                        onThresholdChange = { newDb ->
                                             thresholdDb = newDb
-                                            engine.setVolumeThreshold(dbToRms(thresholdDb))
-                                        },
-                                        valueRange = -80f..-6f,
-                                        steps = 74,
-                                        modifier = Modifier.fillMaxWidth()
+                                            engine.setVolumeThreshold(dbToRms(newDb))
+                                        }
                                     )
                                 }
 
@@ -697,6 +698,7 @@ private fun TopAppBarLandscapeCompact(
     onSmoothingChange: (Float) -> Unit,
     showWhiteTrace: Boolean,
     onShowWhiteTraceChange: (Boolean) -> Unit,
+    currentVolumeDb: Float,
     thresholdDb: Float,
     onThresholdChange: (Float) -> Unit,
     bpm: Float,
@@ -941,16 +943,10 @@ private fun TopAppBarLandscapeCompact(
                                 modifier = Modifier.fillMaxWidth()
                             )
 
-                            Text(
-                                "Volume threshold: ${thresholdDb.roundToInt()} dB",
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                            Slider(
-                                value = thresholdDb,
-                                onValueChange = onThresholdChange,
-                                valueRange = -80f..-6f,
-                                steps = 74,
-                                modifier = Modifier.fillMaxWidth()
+                            LiveVolumeSlider(
+                                thresholdDb = thresholdDb,
+                                currentVolumeDb = currentVolumeDb,
+                                onThresholdChange = onThresholdChange
                             )
                         }
 
@@ -977,5 +973,65 @@ private fun TopAppBarLandscapeCompact(
                 }
             }
         }
+    }
+}
+
+// NEW COMPOSABLE: Extracts the visual logic for the actively reacting volume slider
+@Suppress("MagicNumber")
+@Composable
+fun LiveVolumeSlider(
+    thresholdDb: Float,
+    currentVolumeDb: Float,
+    onThresholdChange: (Float) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                "Volume threshold: ${thresholdDb.roundToInt()} dB",
+                style = MaterialTheme.typography.bodySmall
+            )
+            // Turns primary color if the live volume is higher than the threshold line
+            Text(
+                "Live: ${currentVolumeDb.roundToInt()} dB",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (currentVolumeDb >= thresholdDb) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            )
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        // Ensure bounds mathematically fit the slider bounds
+        val fraction = ((currentVolumeDb - (-80f)) / (-6f - (-80f))).coerceIn(0f, 1f)
+
+        LinearProgressIndicator(
+            progress = fraction,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(6.dp)
+                .clip(CircleShape),
+            color = if (currentVolumeDb >= thresholdDb) {
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+            } else {
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+            },
+            trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
+        )
+
+        Slider(
+            value = thresholdDb,
+            onValueChange = onThresholdChange,
+            valueRange = -80f..-6f,
+            steps = 74,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(32.dp)
+        )
     }
 }
