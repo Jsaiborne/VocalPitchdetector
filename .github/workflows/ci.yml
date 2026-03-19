@@ -36,4 +36,6 @@ jobs:
           ./gradlew \
             test \
             assembleDebug \
+            --stacktrace \
+            --info \
             --no-daemon
