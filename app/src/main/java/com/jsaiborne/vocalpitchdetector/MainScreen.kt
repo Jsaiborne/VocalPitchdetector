@@ -91,7 +91,7 @@ fun MainScreen(navController: NavHostController? = null) {
     var showWhiteTrace by rememberSaveable { mutableStateOf(true) }
 //    var volumeThreshold by rememberSaveable { mutableFloatStateOf(0.02f) } // normalized 0..1
     var thresholdDb by rememberSaveable { mutableFloatStateOf(-34f) }
-    var bpm by rememberSaveable { mutableFloatStateOf(120f) }
+    var bpm by rememberSaveable { mutableFloatStateOf(60f) }
     var showWhiteDots by rememberSaveable { mutableStateOf(true) } // <-- NEW
 
     // NEW: use sample player toggle
@@ -235,6 +235,24 @@ fun MainScreen(navController: NavHostController? = null) {
                 // white dots toggle
                 showWhiteDots = showWhiteDots,
                 onShowWhiteDotsChange = { showWhiteDots = it },
+                onResetDefaults = {
+                    // Reset Sliders
+                    smoothing = 0.5f
+                    bpm = 60f
+                    thresholdDb = -34f
+                    engine.setVolumeThreshold(dbToRms(-34f))
+                    whiteKeyWidthDpFloat = 56f
+
+                    // Reset Toggles
+                    autoCenter = true
+                    showNoteLabels = true
+                    showHorizontalGrid = true
+                    showCurve = true
+                    showWhiteTrace = true
+                    showWhiteDots = true
+                    useSamplePlayer = false
+                    showBars = false
+                },
                 // pass optional nav controller for About navigation
                 navController = navController,
                 canShowAds = canShowAds
@@ -544,6 +562,28 @@ fun MainScreen(navController: NavHostController? = null) {
                                 Spacer(modifier = Modifier.height(8.dp))
 
                                 DropdownMenuItem(
+                                    text = { Text("Reset to Defaults") },
+                                    onClick = {
+                                        smoothing = 0.5f
+                                        bpm = 60f
+                                        thresholdDb = -34f
+                                        engine.setVolumeThreshold(dbToRms(-34f))
+                                        whiteKeyWidthDpFloat = 56f
+
+                                        // Reset Toggles
+                                        autoCenter = true
+                                        showNoteLabels = true
+                                        showHorizontalGrid = true
+                                        showCurve = true
+                                        showWhiteTrace = true
+                                        showWhiteDots = true
+                                        useSamplePlayer = false
+                                        showBars = false
+                                        // Note: We don't close the menu here so the user
+                                        // can actually see the sliders visually snap back.
+                                    }
+                                )
+                                DropdownMenuItem(
                                     text = { Text("About") },
                                     onClick = {
                                         menuExpandedPortrait = false
@@ -667,6 +707,7 @@ private fun TopAppBarLandscapeCompact(
     onToggleUseSamplePlayer: (Boolean) -> Unit,
     showWhiteDots: Boolean,
     onShowWhiteDotsChange: (Boolean) -> Unit,
+    onResetDefaults: () -> Unit,
     canShowAds: Boolean, // NEW PARAMETER
     navController: NavHostController? = null
 ) {
@@ -916,6 +957,14 @@ private fun TopAppBarLandscapeCompact(
                         Spacer(modifier = Modifier.height(12.dp))
                         HorizontalDivider()
                         Spacer(modifier = Modifier.height(8.dp))
+
+                        // DEFAULT BUTTON
+                        DropdownMenuItem(
+                            text = { Text("Reset to Defaults") },
+                            onClick = {
+                                onResetDefaults()
+                            }
+                        )
 
                         DropdownMenuItem(
                             text = { Text("About") },
