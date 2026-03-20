@@ -1,6 +1,5 @@
 package com.jsaiborne.vocalpitchdetector
 import android.app.Activity
-import com.google.android.ump.ConsentDebugSettings
 import com.google.android.ump.ConsentInformation
 import com.google.android.ump.ConsentRequestParameters
 import com.google.android.ump.UserMessagingPlatform
@@ -20,17 +19,17 @@ class ConsentManager(private val activity: Activity) {
     ) {
         // For testing, uncomment the following block to force the GDPR form
 
-        // In ConsentManager.kt or wherever you gather consent
-        val debugSettings = ConsentDebugSettings.Builder(activity)
-            .addTestDeviceHashedId("96ED80C1FB84FC5068E3B64760D45864") // Use your ID from Logcat
-            .setDebugGeography(ConsentDebugSettings.DebugGeography.DEBUG_GEOGRAPHY_EEA)
-            .build()
+//         In ConsentManager.kt or wherever you gather consent
+//        val debugSettings = ConsentDebugSettings.Builder(activity)
+//            .addTestDeviceHashedId("96ED80C1FB84FC5068E3B64760D45864") // Use your ID from Logcat
+//            .setDebugGeography(ConsentDebugSettings.DebugGeography.DEBUG_GEOGRAPHY_EEA)
+//            .build()
+//
+//        val params = ConsentRequestParameters.Builder()
+//            .setConsentDebugSettings(debugSettings)
+//            .build()
 
-        val params = ConsentRequestParameters.Builder()
-            .setConsentDebugSettings(debugSettings)
-            .build()
-
-//        val params = ConsentRequestParameters.Builder().build()
+        val params = ConsentRequestParameters.Builder().build()
 
         consentInformation.requestConsentInfoUpdate(
             activity,

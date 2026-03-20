@@ -104,6 +104,7 @@ fun AboutScreen(navController: NavHostController, consentManager: ConsentManager
     }
 }
 
+@Suppress("UNUSED_PARAMETER")
 @Composable
 private fun AppTabContent(
     consentManager: ConsentManager,
@@ -111,13 +112,7 @@ private fun AppTabContent(
     contextPackageName: String,
     context: android.content.Context
 ) {
-    val version = try {
-        val pInfo = context.packageManager.getPackageInfo(contextPackageName, 0)
-        pInfo.versionName ?: "?"
-    } catch (e: Exception) {
-        "?"
-    }
-
+    val version = BuildConfig.VERSION_NAME
     Column(
         modifier = Modifier
             .fillMaxSize()

@@ -8,6 +8,7 @@ plugins {
     alias(libs.plugins.kotlin.compose) // This handles your Compose compiler version automatically
     id("org.jlleitschuh.gradle.ktlint")
     id("io.gitlab.arturbosch.detekt")
+    id("com.google.android.libraries.mapsplatform.secrets-gradle-plugin")
 }
 
 val keystorePropertiesFile = rootProject.file("local.properties")
@@ -49,8 +50,8 @@ android {
         applicationId = "com.jsaiborne.vocalpitchdetector"
         minSdk = 24
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.0.1"
+        versionCode = 4
+        versionName = "1.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -87,14 +88,26 @@ android {
             )
         }
 
-        // FIXED: Merged both release blocks into one
         getByName("release") {
             isMinifyEnabled = true // Set to true for production optimization
-            manifestPlaceholders["adMobAppId"] = "ca-app-pub-XXXXXXXXXXXXXXXX~XXXXXXXXXX"
+
+            // Read from local.properties instead of hardcoding
+            val realAppId = keystoreProperties.getProperty("ADMOB_APP_ID") ?: ""
+            val realBannerId = keystoreProperties.getProperty("ADMOB_BANNER_ID") ?: ""
+            val realLandscapeId = keystoreProperties.getProperty("ADMOB_BANNER_LANDSCAPE_ID") ?: ""
+
+            manifestPlaceholders["adMobAppId"] = realAppId
+
             buildConfigField(
                 "String",
                 "BANNER_AD_UNIT_ID",
-                "\"ca-app-pub-XXXXXXXXXXXXXXXX/XXXXXXXXXX\""
+                "\"$realBannerId\""
+            )
+
+            buildConfigField(
+                "String",
+                "BANNER_AD_UNIT_LANDSCAPE_ID",
+                "\"$realLandscapeId\""
             )
 
             proguardFiles(

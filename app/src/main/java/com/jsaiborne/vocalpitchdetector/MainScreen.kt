@@ -485,17 +485,6 @@ fun MainScreen(navController: NavHostController? = null) {
                                             modifier = Modifier.fillMaxWidth()
                                         ) {
                                             Text(
-                                                "Auto-center",
-                                                modifier = Modifier.weight(1f),
-                                                style = MaterialTheme.typography.bodyMedium
-                                            )
-                                            Switch(checked = autoCenter, onCheckedChange = { autoCenter = it })
-                                        }
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Text(
                                                 "Show white dots",
                                                 modifier = Modifier.weight(1f),
                                                 style = MaterialTheme.typography.bodyMedium
@@ -505,6 +494,18 @@ fun MainScreen(navController: NavHostController? = null) {
                                                 onCheckedChange = { showWhiteDots = it }
                                             )
                                         }
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Text(
+                                                "Auto-center",
+                                                modifier = Modifier.weight(1f),
+                                                style = MaterialTheme.typography.bodyMedium
+                                            )
+                                            Switch(checked = autoCenter, onCheckedChange = { autoCenter = it })
+                                        }
+
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
                                             modifier = Modifier.fillMaxWidth()
@@ -881,6 +882,17 @@ private fun TopAppBarLandscapeCompact(
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Text(
+                                        "Show white dots",
+                                        modifier = Modifier.weight(1f),
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Switch(checked = showWhiteDots, onCheckedChange = onShowWhiteDotsChange)
+                                }
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
                                         "Auto-center",
                                         modifier = Modifier.weight(1f),
                                         style = MaterialTheme.typography.bodyMedium
@@ -890,17 +902,7 @@ private fun TopAppBarLandscapeCompact(
                                         onCheckedChange = onAutoCenterToggle
                                     )
                                 }
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text(
-                                        "Show white dots",
-                                        modifier = Modifier.weight(1f),
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                    Switch(checked = showWhiteDots, onCheckedChange = onShowWhiteDotsChange)
-                                }
+
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier.fillMaxWidth()
