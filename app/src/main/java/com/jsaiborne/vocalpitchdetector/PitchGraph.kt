@@ -328,17 +328,26 @@ fun PitchGraphHorizontal(
 
                 fun xForMidiFloat(midiFloat: Float): Float {
                     if (midiFloat.isNaN()) return -10000f
+
                     val floorM = midiFloat.toInt().coerceIn(minMidi, maxMidi)
                     val ceilM = (floorM + 1).coerceAtMost(maxMidi)
-                    val x0 = midiX[floorM - minMidi]
-                    val x1 = midiX[ceilM - minMidi]
+
+                    // FIX: Safely clamp the indices to ensure they never exceed the midiX array bounds
+                    val floorIndex = (floorM - minMidi).coerceIn(0, midiX.lastIndex)
+                    val ceilIndex = (ceilM - minMidi).coerceIn(0, midiX.lastIndex)
+
+                    val x0 = midiX[floorIndex]
+                    val x1 = midiX[ceilIndex]
                     val frac = midiFloat - floorM
+
                     return x0 + frac * (x1 - x0)
                 }
 
                 // Grid and Semitone Lines
                 for (m in minMidi..maxMidi) {
-                    val x = midiX[m - minMidi]
+                    // FIX: Clamp the index for X grid lines
+                    val targetIndex = (m - minMidi).coerceIn(0, midiX.lastIndex)
+                    val x = midiX[targetIndex]
                     val isNatural = !midiToNoteNameLocal(m).contains("#")
                     if (isNatural) {
                         drawLine(
@@ -569,7 +578,9 @@ fun PitchGraphHorizontal(
 
                 // stable markers
                 for (m in stableMarkers) {
-                    val x = midiX[m.midi - minMidi]
+                    // FIX: Clamp marker X position
+                    val targetIndex = (m.midi - minMidi).coerceIn(0, midiX.lastIndex)
+                    val x = midiX[targetIndex]
                     val y = padTop + innerH * ((m.tMs - windowStart).toFloat() / windowMsEffective.toFloat())
                     drawLine(
                         color = Color(0xFFFFD54F),
@@ -592,15 +603,23 @@ fun PitchGraphHorizontal(
                 // latest label
                 val last = samples.last()
                 if (!last.midi.isNaN()) {
-                    val nearest = last.midi.toInt().coerceIn(minMidi, maxMidi)
-                    val x = midiX[nearest - minMidi]
-                    val y = padTop + innerH * ((last.tMs - windowStart).toFloat() / windowMsEffective.toFloat())
+                    // FIX 1: Use roundToInt() instead of toInt() to stop the C4 -> B flickering
+                    val nearest = last.midi.roundToInt().coerceIn(minMidi, maxMidi)
+
+                    // FIX 2: Safely clamp the index to prevent the OutOfBounds crash
+                    val targetIndex = (nearest - minMidi).coerceIn(0, midiX.lastIndex)
+                    val x = midiX[targetIndex]
+
+                    // FIX 3: Lock the Y position to the physical bottom of the graph to stop the shaking
+                    // (padTop + innerH represents the newest/bottom edge of your horizontal scrolling view)
+                    val y = padTop + innerH
+
                     if (showNoteLabels) {
                         drawIntoCanvas { canvas ->
                             canvas.nativeCanvas.drawText(
                                 midiToNoteNameLocal(nearest),
                                 x + 6f,
-                                y + 10f,
+                                y - 10f, // Changed to - 10f so the text draws just above the bottom cut-off
                                 labelPaint
                             )
                         }
@@ -782,11 +801,18 @@ fun PitchGraphVertical(
 
                 fun yForMidiFloat(midiFloat: Float): Float {
                     if (midiFloat.isNaN()) return -10000f
+
                     val floorM = midiFloat.toInt().coerceIn(minMidi, maxMidi)
                     val ceilM = (floorM + 1).coerceAtMost(maxMidi)
-                    val y0 = midiY[floorM - minMidi]
-                    val y1 = midiY[ceilM - minMidi]
+
+                    // FIX: Clamp both the floor and ceiling indices!
+                    val floorIndex = (floorM - minMidi).coerceIn(0, midiY.lastIndex)
+                    val ceilIndex = (ceilM - minMidi).coerceIn(0, midiY.lastIndex)
+
+                    val y0 = midiY[floorIndex]
+                    val y1 = midiY[ceilIndex]
                     val frac = midiFloat - floorM
+
                     return y0 + frac * (y1 - y0)
                 }
 
@@ -795,7 +821,9 @@ fun PitchGraphVertical(
 
                 // draw pitch lines
                 for (m in minMidi..maxMidi) {
-                    val y = midiY[m - minMidi]
+                    // FIX: Clamp the index for Y grid lines
+                    val targetIndex = (m - minMidi).coerceIn(0, midiY.lastIndex)
+                    val y = midiY[targetIndex]
                     val isNatural = !midiToNoteNameLocal(m).contains("#")
                     val col = if (isNatural) Color(0x33FFFFFF) else Color(0x22FFFFFF)
                     drawLine(
@@ -1014,7 +1042,9 @@ fun PitchGraphVertical(
 
                 // --- Stable markers for Vertical Graph ---
                 for (m in stableMarkers) {
-                    val y = midiY[m.midi - minMidi]
+                    // FIX: Clamp marker Y position
+                    val targetIndex = (m.midi - minMidi).coerceIn(0, midiY.lastIndex)
+                    val y = midiY[targetIndex]
                     val x = xForTime(m.tMs)
                     drawLine(
                         color = Color(0xFFFFD54F),
@@ -1041,7 +1071,8 @@ fun PitchGraphVertical(
                     val lastSample = samples.lastOrNull()
                     if (lastSample != null && !lastSample.midi.isNaN()) {
                         val nearest = lastSample.midi.roundToInt().coerceIn(minMidi, maxMidi)
-                        val y = midiY[nearest - minMidi]
+                        val targetIndex = (nearest - minMidi).coerceIn(0, midiY.lastIndex)
+                        val y = midiY[targetIndex]
                         val noteName = midiToNoteNameLocal(nearest)
                         val textWidth = labelPaint.measureText(noteName)
                         val rightEdge = padLeft + innerW

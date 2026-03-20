@@ -27,7 +27,7 @@ class PitchTracker(
     private val hopSize: Int,
     private val hangoverMs: Int = 200,
     private val medianWindow: Int = 5,
-    private val smoothingAlpha: Double = 0.18,
+    private val smoothingAlpha: Double = 0.45,
     private val maxJumpSemitonesPerFrame: Double = 12.0,
     private var energyThreshold: Double = DEFAULT_ENERGY_THRESHOLD,
     private var confidenceThreshold: Double = DEFAULT_CONF_THRESHOLD
@@ -91,14 +91,20 @@ class PitchTracker(
         // Median Smoothing (Zero Allocation)
         if (medianBuffer.size >= medianWindow) medianBuffer.removeFirst()
         medianBuffer.addLast(chosenSemi)
-
         val med = calculateMedian()
 
         // Exponential Smoothing
         smoothedSemi = if (smoothedSemi == null) {
             med
         } else {
-            (smoothingAlpha * med + (1 - smoothingAlpha) * smoothedSemi!!)
+            // FIX: Lowered threshold from 3.0 to 1.0.
+            // Any jump larger than 1 semitone (a half-step) will now instantly snap,
+            // eliminating the "slide" from neighboring wrong notes during transients.
+            if (abs(med - smoothedSemi!!) > 1.0) {
+                med
+            } else {
+                (smoothingAlpha * med + (1 - smoothingAlpha) * smoothedSemi!!)
+            }
         }
 
         lastStablePitchSemi = smoothedSemi

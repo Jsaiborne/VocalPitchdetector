@@ -16,7 +16,7 @@ class AudioRecordPitchDetector(
     private val hopSize: Int = 512,
     private val minFreq: Float = 60f,
     private val maxFreq: Float = 1200f,
-    private val smoothingAlpha: Float = 0.18f, // Default updated to match Tracker default
+    private val smoothingAlpha: Float = 0.45f, // Default updated to match Tracker default
     private val stabilityCentsThreshold: Float = 30f,
     private val stabilityConfidenceThreshold: Float = 0.55f,
     private val stabilityRequiredFrames: Int = 3,

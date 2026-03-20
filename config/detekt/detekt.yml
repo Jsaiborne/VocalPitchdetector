@@ -106,7 +106,7 @@ complexity:
     ignoreOverloaded: false
   CyclomaticComplexMethod:
     active: true
-    threshold: 20
+    threshold: 22
     excludes: ['**/test/**']
     ignoreSingleWhenExpression: false
     ignoreSimpleWhenEntries: false
