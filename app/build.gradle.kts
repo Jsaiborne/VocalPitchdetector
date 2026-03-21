@@ -58,12 +58,21 @@ android {
 
     // FIXED: Moved signingConfigs outside of buildTypes and before it
     signingConfigs {
+        // Check if the file exists AND if it actually contains the required keys
         if (keystorePropertiesFile.exists()) {
-            create("releaseSigning") {
-                storeFile = file(keystoreProperties["storeFile"] as String)
-                storePassword = keystoreProperties["storePassword"] as String
-                keyAlias = keystoreProperties["keyAlias"] as String
-                keyPassword = keystoreProperties["keyPassword"] as String
+            val sFile = keystoreProperties["storeFile"] as? String
+            val sPassword = keystoreProperties["storePassword"] as? String
+            val kAlias = keystoreProperties["keyAlias"] as? String
+            val kPassword = keystoreProperties["keyPassword"] as? String
+
+            // Only create the config if none of the values are null
+            if (sFile != null && sPassword != null && kAlias != null && kPassword != null) {
+                create("releaseSigning") {
+                    storeFile = file(sFile)
+                    storePassword = sPassword
+                    keyAlias = kAlias
+                    keyPassword = kPassword
+                }
             }
         }
     }
@@ -115,9 +124,10 @@ android {
                 "proguard-rules.pro"
             )
 
-            // Attach signing config if the file was found
-            if (keystorePropertiesFile.exists()) {
-                signingConfig = signingConfigs.getByName("releaseSigning")
+            // Safely attach signing config ONLY if it was successfully created earlier
+            val releaseSignConfig = signingConfigs.findByName("releaseSigning")
+            if (releaseSignConfig != null) {
+                signingConfig = releaseSignConfig
             }
         }
     }
