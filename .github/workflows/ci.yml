@@ -39,3 +39,6 @@ jobs:
             --stacktrace \
             --info \
             --no-daemon
+
+      - name: Create empty local.properties
+        run: touch local.properties
