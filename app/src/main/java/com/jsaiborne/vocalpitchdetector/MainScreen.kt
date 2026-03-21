@@ -68,6 +68,7 @@ import com.google.android.gms.ads.AdView
 import com.google.android.gms.ads.MobileAds
 import java.util.Locale
 import kotlin.math.roundToInt
+
 // Ensure your app's BuildConfig is imported if your IDE complains
 @Suppress("MagicNumber", "LongMethod")
 @Composable

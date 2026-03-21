@@ -4,7 +4,10 @@ import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
@@ -23,39 +26,46 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // 1. Enable Edge-to-Edge for Android 15 compatibility
+        enableEdgeToEdge()
+
         consentManager = ConsentManager(this)
 
-        // 1. Gather consent flow
+        // 2. Gather consent flow
         consentManager.gatherConsent { error ->
             if (error != null) {
                 Log.e("UMP", "Consent error: $error")
             }
 
-            // 2. Try to initialize ads if allowed by the user/region
+            // 3. Try to initialize ads if allowed by the user/region
             if (consentManager.canRequestAds()) {
                 initializeMobileAdsSdk()
             }
         }
 
-        // 3. Fallback: even if form is skipped, check if we can still request ads
+        // 4. Fallback: even if form is skipped, check if we can still request ads
         if (consentManager.canRequestAds()) {
             initializeMobileAdsSdk()
         }
 
         setContent {
             vocalPitchDetectorTheme {
+                // 1. Surface stretches to fill the whole screen (including behind the status bar)
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    val navController = rememberNavController()
-                    NavHost(navController = navController, startDestination = "main") {
-                        composable("main") {
-                            // Passing consentManager here so you can show the "Privacy Settings" button
-                            MainScreen(navController = navController)
-                        }
-                        composable("about") {
-                            AboutScreen(navController = navController, consentManager = consentManager)
+                    // 2. Wrap the NavHost in a Box and apply the padding HERE
+                    Box(modifier = Modifier.safeDrawingPadding()) {
+                        val navController = rememberNavController()
+                        NavHost(navController = navController, startDestination = "main") {
+                            composable("main") {
+                                // Passing consentManager here so you can show the "Privacy Settings" button
+                                MainScreen(navController = navController)
+                            }
+                            composable("about") {
+                                AboutScreen(navController = navController, consentManager = consentManager)
+                            }
                         }
                     }
                 }
