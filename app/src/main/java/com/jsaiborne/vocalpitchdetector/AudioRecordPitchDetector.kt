@@ -5,10 +5,16 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.util.Log
+import java.io.DataOutputStream
+import java.io.File
+import java.io.FileOutputStream
+import java.io.RandomAccessFile
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import kotlin.math.roundToInt
-import kotlin.math.sqrt
+
+
+
 @Suppress("LongParameterList")
 class AudioRecordPitchDetector(
     private val sampleRate: Int = 44100,
@@ -16,7 +22,7 @@ class AudioRecordPitchDetector(
     private val hopSize: Int = 512,
     private val minFreq: Float = 60f,
     private val maxFreq: Float = 1200f,
-    private val smoothingAlpha: Float = 0.45f, // Default updated to match Tracker default
+    private val smoothingAlpha: Float = 0.45f,
     private val stabilityCentsThreshold: Float = 30f,
     private val stabilityConfidenceThreshold: Float = 0.55f,
     private val stabilityRequiredFrames: Int = 3,
@@ -27,140 +33,202 @@ class AudioRecordPitchDetector(
     private val running = AtomicBoolean(false)
     private var workerThread: Thread? = null
 
+    // --- NEW: Disk Recording State ---
+    private var recordingStream: DataOutputStream? = null
+    private val isRecordingToDisk = AtomicBoolean(false)
+    private val isDiskRecordingPaused = AtomicBoolean(false)
+    private var recordedBytes = 0
+    private var currentOutputFile: File? = null
+
     private val yin = YinPitchDetector(
         sampleRate = sampleRate,
-        bufferSize = bufferSize, // Note: bufferSize in YIN should match window size
+        bufferSize = bufferSize,
         minFreq = minFreq,
         maxFreq = maxFreq
     )
-    private val shortBuffer = ShortArray(hopSize)
 
-    // State
-    private var smoothedFreq = -1f
-    private var stableCount = 0
-    private var framesWithPitch = 0
-    private var lastStableMidi = Int.MIN_VALUE
+    private val tracker = PitchTracker(
+        sampleRate = sampleRate,
+        hopSize = hopSize,
+        smoothingAlpha = smoothingAlpha.toDouble()
+    )
 
-    @Volatile
     var volumeThreshold: Float = 0.02f
+
+    private var smoothedFreq: Float = -1f
+    private var framesWithPitch: Int = 0
+    private var stableCount: Int = 0
+    private var lastStableMidi: Int = -1
 
     @SuppressLint("MissingPermission")
     fun start(
-        onPitchDetected: (frequencyHz: Float, confidence: Float) -> Unit,
-        onStableNote: ((midiNote: Int, frequencyHz: Float) -> Unit)? = null,
-        onVolumeDetected: (Float) -> Unit
+        onPitchDetected: (Float, Float) -> Unit,
+        onVolumeDetected: (Float) -> Unit,
+        onStableNote: ((Int, Float) -> Unit)? = null
     ) {
         if (running.get()) return
 
-        val channelConfig = AudioFormat.CHANNEL_IN_MONO
-        val audioFormat = AudioFormat.ENCODING_PCM_16BIT
-        val minBufferBytes = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
-        val readBufferBytes = maxOf(minBufferBytes, bufferSize * 4)
+        val minBufferSize = AudioRecord.getMinBufferSize(
+            sampleRate,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
+        val actualBufferSize = maxOf(bufferSize * 2, minBufferSize)
 
-        try {
-            audioRecord = AudioRecord(
-                MediaRecorder.AudioSource.MIC,
-                sampleRate,
-                channelConfig,
-                audioFormat,
-                readBufferBytes
-            )
-            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
-                Log.e("PitchDetector", "AudioRecord not initialized")
-                return
-            }
-            audioRecord?.startRecording()
-        } catch (e: Exception) {
-            Log.e("PitchDetector", "AudioRecord init failed", e)
+        audioRecord = AudioRecord(
+            MediaRecorder.AudioSource.MIC,
+            sampleRate,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+            actualBufferSize
+        )
+
+        if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+            Log.e("AudioRecordPitch", "AudioRecord initialization failed")
             return
         }
 
+        audioRecord?.startRecording()
         running.set(true)
-
-        // Fix: Use the class-level smoothingAlpha
-        val pitchTracker = PitchTracker(
-            sampleRate = sampleRate,
-            hopSize = hopSize,
-            hangoverMs = 200,
-            medianWindow = 5,
-            smoothingAlpha = smoothingAlpha.toDouble(),
-            energyThreshold = volumeThreshold.toDouble(),
-            confidenceThreshold = pitchConfidenceThreshold.toDouble()
-        )
+        resetPitchState(onPitchDetected)
 
         workerThread = Thread {
-            val window = FloatArray(bufferSize)
-
-            // Priority boost for audio thread
-            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
+            val audioBuffer = ShortArray(bufferSize)
+            val floatBuffer = FloatArray(bufferSize)
 
             while (running.get()) {
-                val read = try {
-                    audioRecord?.read(shortBuffer, 0, hopSize) ?: -1
-                } catch (e: Exception) { -1 }
+                val read = audioRecord?.read(audioBuffer, 0, bufferSize) ?: 0
+                if (read > 0) {
+                    // --- NEW: Write raw PCM to disk if recording is active ---
+                    if (isRecordingToDisk.get() && !isDiskRecordingPaused.get()) {
+                        try {
+                            for (i in 0 until read) {
+                                // WAV expects Little Endian, AudioBuffer gives Big Endian natively
+                                recordingStream?.writeShort(java.lang.Short.reverseBytes(audioBuffer[i]).toInt())
+                            }
+                            recordedBytes += read * 2 // 2 bytes per Short
+                        } catch (e: Exception) {
+                            Log.e("AudioRecordPitch", "Failed to write audio stream", e)
+                        }
+                    }
 
-                if (read <= 0) continue
+                    // 1. Calculate RMS volume
+                    var sumSquares = 0f
+                    for (i in 0 until read) {
+                        val norm = audioBuffer[i] / 32768f
+                        floatBuffer[i] = norm
+                        sumSquares += norm * norm
+                    }
+                    val rms = kotlin.math.sqrt(sumSquares / read)
+                    onVolumeDetected(rms)
 
-                // Shift window and append new data
-                System.arraycopy(window, read, window, 0, bufferSize - read)
-                for (i in 0 until read) {
-                    window[bufferSize - read + i] = shortBuffer[i] / 32768f
+                    // 2. Pitch Detection
+                    if (rms >= volumeThreshold) {
+                        val yinResult = yin.getPitch(floatBuffer, read, rms.toDouble())
+                        val confidence = (1.0 - yinResult.cmndfMin).coerceIn(0.0, 1.0).toFloat()
+
+                        if (confidence >= pitchConfidenceThreshold) {
+                            val finalPitch = tracker.processFrame(yinResult.pitchHz, rms.toDouble(), confidence.toDouble())
+                            if (finalPitch != null) {
+                                framesWithPitch++
+                                if (framesWithPitch >= minContiguousFrames) {
+                                    smoothedFreq = finalPitch.toFloat()
+                                    onPitchDetected(smoothedFreq, confidence)
+                                    checkStability(smoothedFreq, confidence, onStableNote)
+                                }
+                            } else {
+                                resetPitchState(onPitchDetected)
+                            }
+                        } else {
+                            resetPitchState(onPitchDetected)
+                        }
+                    } else {
+                        resetPitchState(onPitchDetected)
+                    }
                 }
-
-                // 1. Calculate RMS once
-                var sumSq = 0f
-                for (i in 0 until bufferSize) {
-                    val v = window[i]
-                    sumSq += v * v
-                }
-                val rms = sqrt(sumSq / bufferSize)
-
-                // Invoke the volume callback immediately
-                onVolumeDetected(rms)
-
-                // Continue with existing Pitch Detection logic
-                if (rms < volumeThreshold) {
-                    handleSilence(onPitchDetected)
-                    continue
-                }
-
-                // Gate: Early exit on silence
-                if (rms < volumeThreshold) {
-                    handleSilence(onPitchDetected)
-                    continue
-                }
-
-                // 2. Pitch Detection (Pass the calculated RMS!)
-                val yinRes = yin.getPitch(window, bufferSize, rms.toDouble())
-
-                // 3. Track & Smooth
-                val outHz = pitchTracker.processFrame(yinRes.pitchHz, yinRes.cmndfMin, yinRes.rms)
-
-                if (outHz == null) {
-                    handleSilence(onPitchDetected)
-                    continue
-                }
-
-                // 4. Debounce
-                framesWithPitch++
-                if (framesWithPitch < minContiguousFrames) {
-                    onPitchDetected(-1f, 0f)
-                    continue
-                }
-
-                smoothedFreq = outHz.toFloat()
-                val confidence = (1.0 - yinRes.cmndfMin).coerceIn(0.0, 1.0).toFloat()
-
-                onPitchDetected(smoothedFreq, confidence)
-                checkStability(smoothedFreq, confidence, onStableNote)
             }
-
-            try { audioRecord?.stop(); audioRecord?.release() } catch (_: Exception) {}
-            audioRecord = null
-        }.also { it.start() }
+        }
+        workerThread?.priority = Thread.MAX_PRIORITY
+        workerThread?.start()
     }
 
-    private fun handleSilence(onPitchDetected: (Float, Float) -> Unit) {
+    // --- NEW: Recording Control Methods ---
+    fun startDiskRecording(outputFile: File) {
+        try {
+            currentOutputFile = outputFile
+            recordedBytes = 0
+            recordingStream = DataOutputStream(FileOutputStream(outputFile))
+            // Write 44 bytes of empty space to hold the WAV header later
+            recordingStream?.write(ByteArray(44))
+            isRecordingToDisk.set(true)
+        } catch (e: Exception) {
+            Log.e("AudioRecordPitch", "Failed to start disk recording", e)
+        }
+    }
+
+    fun stopDiskRecording() {
+        isRecordingToDisk.set(false)
+        try {
+            recordingStream?.close()
+            recordingStream = null
+
+            // Rewrite the file header with the exact byte lengths
+            currentOutputFile?.let { file ->
+                RandomAccessFile(file, "rw").use { raf ->
+                    writeWavHeader(raf, recordedBytes, sampleRate, 1, 16)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("AudioRecordPitch", "Error stopping disk recording", e)
+        } finally {
+            currentOutputFile = null
+        }
+
+
+    }
+
+    // --- PAUSE methods ---
+    fun pauseDiskRecording() {
+        isDiskRecordingPaused.set(true)
+    }
+
+    fun resumeDiskRecording() {
+        isDiskRecordingPaused.set(false)
+    }
+    // -----------------------------
+    private fun writeWavHeader(raf: RandomAccessFile, audioLen: Int, sampleRate: Int, channels: Int, bitDepth: Int) {
+        val byteRate = sampleRate * channels * bitDepth / 8
+        val totalDataLen = audioLen + 36
+
+        // RandomAccessFile writes in Big Endian, so we use Integer.reverseBytes for Little Endian WAV spec
+        raf.seek(0)
+        raf.write("RIFF".toByteArray(Charsets.US_ASCII))
+        raf.writeInt(Integer.reverseBytes(totalDataLen))
+        raf.write("WAVE".toByteArray(Charsets.US_ASCII))
+        raf.write("fmt ".toByteArray(Charsets.US_ASCII))
+        raf.writeInt(Integer.reverseBytes(16)) // Subchunk1Size (16 for PCM)
+        raf.writeShort(java.lang.Short.reverseBytes(1.toShort()).toInt()) // AudioFormat (1 for PCM)
+        raf.writeShort(java.lang.Short.reverseBytes(channels.toShort()).toInt())
+        raf.writeInt(Integer.reverseBytes(sampleRate))
+        raf.writeInt(Integer.reverseBytes(byteRate))
+        raf.writeShort(java.lang.Short.reverseBytes((channels * bitDepth / 8).toShort()).toInt()) // BlockAlign
+        raf.writeShort(java.lang.Short.reverseBytes(bitDepth.toShort()).toInt()) // BitsPerSample
+        raf.write("data".toByteArray(Charsets.US_ASCII))
+        raf.writeInt(Integer.reverseBytes(audioLen))
+    }
+    // --------------------------------------
+
+    fun stop() {
+        running.set(false)
+        workerThread?.join()
+        workerThread = null
+
+        audioRecord?.stop()
+        audioRecord?.release()
+        audioRecord = null
+    }
+
+    private fun resetPitchState(onPitchDetected: (Float, Float) -> Unit) {
         smoothedFreq = -1f
         framesWithPitch = 0
         stableCount = 0
@@ -188,24 +256,5 @@ class AudioRecordPitchDetector(
                 onStableNote?.invoke(nearestMidi, freq)
             }
         }
-    }
-
-    // Helper to keep utils internal
-    private companion object {
-        private const val A4_MIDI = 69.0
-        private const val A4_FREQ_HZ = 440.0
-        private const val SEMITONES_PER_OCTAVE = 12.0
-        private const val OCTAVE_RATIO = 2.0
-    }
-    private fun freqToMidi(freq: Double): Double =
-        A4_MIDI +
-            SEMITONES_PER_OCTAVE *
-            kotlin.math.ln(freq / A4_FREQ_HZ) /
-            kotlin.math.ln(OCTAVE_RATIO)
-
-    fun stop() {
-        running.set(false)
-        try { workerThread?.join(300) } catch (_: Exception) {}
-        workerThread = null
     }
 }
