@@ -52,45 +52,7 @@ private fun midiToNoteNameLocal(midi: Int): String {
     return "${names[midi % 12]}$octave"
 }
 
-private fun buildSmoothedPath(points: List<Offset>, smoothing: Float): Path {
-    val path = Path()
-    if (points.isEmpty()) return path
-    if (points.size == 1) {
-        path.moveTo(points[0].x, points[0].y); return path
-    }
-    if (smoothing <= 0.001f) {
-        path.moveTo(points[0].x, points[0].y)
-        for (i in 1 until points.size) path.lineTo(points[i].x, points[i].y)
-        return path
-    }
 
-    val t = smoothing
-    val factor = t / 6f
-
-    val pts = mutableListOf<Offset>()
-    pts.add(points.first())
-    pts.addAll(points)
-    pts.add(points.last())
-
-    path.moveTo(points[0].x, points[0].y)
-    for (i in 1 until pts.size - 2) {
-        val p0 = pts[i - 1]
-        val p1 = pts[i]
-        val p2 = pts[i + 1]
-        val p3 = pts[i + 2]
-
-        val cp1 = Offset(
-            x = p1.x + (p2.x - p0.x) * factor,
-            y = p1.y + (p2.y - p0.y) * factor
-        )
-        val cp2 = Offset(
-            x = p2.x - (p3.x - p1.x) * factor,
-            y = p2.y - (p3.y - p1.y) * factor
-        )
-        path.cubicTo(cp1.x, cp1.y, cp2.x, cp2.y, p2.x, p2.y)
-    }
-    return path
-}
 
 @Composable
 fun PitchGraphCard(
