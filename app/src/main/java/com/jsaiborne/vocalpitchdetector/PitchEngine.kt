@@ -1,5 +1,9 @@
+@file:Suppress("TooGenericExceptionCaught", "PrintStackTrace")
+
 package com.jsaiborne.vocalpitchdetector
 
+import java.io.File
+import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -9,9 +13,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.File
-import kotlin.math.roundToInt
 
+@Suppress("TooManyFunctions")
 class PitchEngine(
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default)
 ) {
@@ -69,6 +72,7 @@ class PitchEngine(
     private val recordedStableNotes = mutableListOf<RecordedPitchPoint>()
 
     private var currentPitchFile: File? = null
+
     // NEW: Track the audio file so we can delete it if discarded
     private var currentAudioFile: File? = null
 
@@ -98,8 +102,10 @@ class PitchEngine(
                             )
                         )
                     }
-
-                    if (isRecordingSession && !isRecordingPaused && freqHz > 0 && confidence >= pitchConfidenceThreshold) {
+                    @Suppress("ComplexCondition")
+                    if (isRecordingSession && !isRecordingPaused && freqHz > 0 &&
+                        confidence >= pitchConfidenceThreshold
+                    ) {
                         val relativeTimeMs = System.currentTimeMillis() - recordingStartTimeMs - accumulatedPauseTimeMs
                         val midiNote = freqToMidi(freqHz.toDouble()).roundToInt()
 

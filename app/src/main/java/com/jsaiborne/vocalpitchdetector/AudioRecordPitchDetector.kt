@@ -1,3 +1,5 @@
+@file:Suppress("MagicNumber")
+
 package com.jsaiborne.vocalpitchdetector
 
 import android.annotation.SuppressLint
@@ -12,8 +14,6 @@ import java.io.RandomAccessFile
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import kotlin.math.roundToInt
-
-
 
 @Suppress("LongParameterList")
 class AudioRecordPitchDetector(
@@ -128,7 +128,11 @@ class AudioRecordPitchDetector(
                         val confidence = (1.0 - yinResult.cmndfMin).coerceIn(0.0, 1.0).toFloat()
 
                         if (confidence >= pitchConfidenceThreshold) {
-                            val finalPitch = tracker.processFrame(yinResult.pitchHz, rms.toDouble(), confidence.toDouble())
+                            val finalPitch = tracker.processFrame(
+                                yinResult.pitchHz,
+                                rms.toDouble(),
+                                confidence.toDouble()
+                            )
                             if (finalPitch != null) {
                                 framesWithPitch++
                                 if (framesWithPitch >= minContiguousFrames) {
@@ -183,8 +187,6 @@ class AudioRecordPitchDetector(
         } finally {
             currentOutputFile = null
         }
-
-
     }
 
     // --- PAUSE methods ---
@@ -195,6 +197,7 @@ class AudioRecordPitchDetector(
     fun resumeDiskRecording() {
         isDiskRecordingPaused.set(false)
     }
+
     // -----------------------------
     private fun writeWavHeader(raf: RandomAccessFile, audioLen: Int, sampleRate: Int, channels: Int, bitDepth: Int) {
         val byteRate = sampleRate * channels * bitDepth / 8

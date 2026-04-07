@@ -52,8 +52,6 @@ private fun midiToNoteNameLocal(midi: Int): String {
     return "${names[midi % 12]}$octave"
 }
 
-
-
 @Composable
 fun PitchGraphCard(
     engine: PitchEngine,

@@ -1,3 +1,5 @@
+@file:Suppress("MagicNumber")
+
 package com.jsaiborne.vocalpitchdetector
 
 import androidx.compose.animation.core.Animatable
@@ -15,14 +17,20 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -34,6 +42,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
+@Suppress("LongParameterList", "LongMethod", "CyclomaticComplexMethod")
 @Composable
 fun LandscapePlaybackPitchGraph(
     pitchData: List<RecordedPitchPoint>,
@@ -105,23 +114,29 @@ fun LandscapePlaybackPitchGraph(
         android.graphics.Paint().apply {
             color = android.graphics.Color.WHITE
             textSize = 28f
-            typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+            typeface = android.graphics.Typeface.create(
+                android.graphics.Typeface.DEFAULT,
+                android.graphics.Typeface.BOLD
+            )
             isAntiAlias = true
         }
     }
-    val smallPaint = remember {
-        android.graphics.Paint().apply {
-            color = android.graphics.Color.argb(200, 255, 255, 255)
-            textSize = 18f
-            isAntiAlias = true
-        }
-    }
+//    val smallPaint = remember {
+//        android.graphics.Paint().apply {
+//            color = android.graphics.Color.argb(200, 255, 255, 255)
+//            textSize = 18f
+//            isAntiAlias = true
+//        }
+//    }
     val yellowPaint = remember {
         android.graphics.Paint().apply {
             color = android.graphics.Color.YELLOW
             textSize = 18f
             isAntiAlias = true
-            typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+            typeface = android.graphics.Typeface.create(
+                android.graphics.Typeface.DEFAULT,
+                android.graphics.Typeface.BOLD
+            )
         }
     }
 
@@ -209,7 +224,10 @@ fun LandscapePlaybackPitchGraph(
                     val noteName = getNoteName(midi)
                     if (!noteName.contains("#")) {
                         drawContext.canvas.nativeCanvas.drawText(
-                            noteName, viewportX + 16f, y - 8f, labelPaint
+                            noteName,
+                            viewportX + 16f,
+                            y - 8f,
+                            labelPaint
                         )
                     }
                 }

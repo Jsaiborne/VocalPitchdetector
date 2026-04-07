@@ -29,9 +29,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.LibraryMusic
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -333,8 +333,8 @@ fun MainScreen(navController: NavHostController? = null) {
                 navController = navController,
                 canShowAds = canShowAds,
 
-                    // --- NEW: Recording state and callbacks passed to Landscape ---
-                    isRecording = isRecording,
+                // --- NEW: Recording state and callbacks passed to Landscape ---
+                isRecording = isRecording,
                 isRecordingPaused = isRecordingPaused,
                 onRecordStart = {
                     currentSessionId = System.currentTimeMillis().toString()
@@ -748,7 +748,6 @@ fun MainScreen(navController: NavHostController? = null) {
                         IconButton(
                             onClick = {
                                 showDiscardDialog = true
-
                             }
                         ) {
                             androidx.compose.material3.Icon(
@@ -989,7 +988,6 @@ private fun TopAppBarLandscapeCompact(
                 horizontalAlignment = Alignment.End,
                 verticalArrangement = Arrangement.spacedBy(6.dp) // Spacing between the two rows
             ) {
-
                 // --- TOP ROW: Hold and Settings Side-by-Side ---
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1191,7 +1189,6 @@ private fun TopAppBarLandscapeCompact(
                             )
                         }
                     }
-
                 }
 
                 // --- BOTTOM ROW: Recording Controls ---

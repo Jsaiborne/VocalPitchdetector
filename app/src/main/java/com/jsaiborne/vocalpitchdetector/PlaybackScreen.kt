@@ -1,16 +1,46 @@
+@file:Suppress("MagicNumber")
+
 package com.jsaiborne.vocalpitchdetector
 
 import android.content.Context
 import android.content.res.Configuration
 import android.media.MediaPlayer
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
@@ -21,11 +51,11 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
-import kotlinx.coroutines.delay
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.delay
 
 // Data model for the recorded points.
 data class RecordedPitchPoint(
@@ -48,7 +78,11 @@ class PlaybackViewModel : ViewModel() {
     var stableMarkers by mutableStateOf<List<RecordedPitchPoint>>(emptyList())
         private set
 
-    fun loadSession(audioPath: String, loadedPitchData: List<RecordedPitchPoint>, loadedStableMarkers: List<RecordedPitchPoint>) {
+    fun loadSession(
+        audioPath: String,
+        loadedPitchData: List<RecordedPitchPoint>,
+        loadedStableMarkers: List<RecordedPitchPoint>
+    ) {
         pitchData = loadedPitchData
         stableMarkers = loadedStableMarkers
 
@@ -108,6 +142,7 @@ class PlaybackViewModel : ViewModel() {
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
+@Suppress("LongMethod")
 @Composable
 fun PlaybackScreen(
     audioFile: File,
@@ -243,7 +278,12 @@ fun PlaybackScreen(
                         )
                         DropdownMenuItem(
                             text = { Text("Markers & Labels") },
-                            trailingIcon = { Checkbox(checked = showNoteLabels, onCheckedChange = { showNoteLabels = it }) },
+                            trailingIcon = {
+                                Checkbox(
+                                    checked = showNoteLabels,
+                                    onCheckedChange = { showNoteLabels = it }
+                                )
+                            },
                             onClick = { showNoteLabels = !showNoteLabels }
                         )
                     }
@@ -292,7 +332,7 @@ fun PlaybackScreen(
             // --- Compact Controls Section ---
             val formatTime = { ms: Long ->
                 val totalSeconds = ms / 1000
-                String.format("%d:%02d", totalSeconds / 60, totalSeconds % 60)
+                String.format(java.util.Locale.US, "%d:%02d", totalSeconds / 60, totalSeconds % 60)
             }
 
             Row(

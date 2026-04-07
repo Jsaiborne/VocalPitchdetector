@@ -1,3 +1,5 @@
+@file:Suppress("TooGenericExceptionCaught")
+
 package com.jsaiborne.vocalpitchdetector
 
 import android.os.Bundle
@@ -17,10 +19,10 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.google.android.gms.ads.MobileAds
 import com.jsaiborne.vocalpitchdetector.ui.theme.vocalPitchDetectorTheme
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
+import org.json.JSONArray
+import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
 
@@ -63,7 +65,6 @@ class MainActivity : ComponentActivity() {
                     Box(modifier = Modifier.safeDrawingPadding()) {
                         val navController = rememberNavController()
                         NavHost(navController = navController, startDestination = "main") {
-
                             composable("main") {
                                 // Passing consentManager here so you can show the "Privacy Settings" button
                                 MainScreen(navController = navController)
