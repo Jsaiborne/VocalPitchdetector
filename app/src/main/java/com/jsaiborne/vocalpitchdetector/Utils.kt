@@ -1,3 +1,5 @@
+@file:Suppress("MagicNumber")
+
 package com.jsaiborne.vocalpitchdetector
 
 import androidx.compose.ui.geometry.Offset
