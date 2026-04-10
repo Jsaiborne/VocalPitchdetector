@@ -78,7 +78,7 @@ class PitchTracker(
             if (diff > maxJumpSemitonesPerFrame) {
                 // Only correct octave if confidence isn't practically perfect (e.g. > 0.95)
                 // If confidence is super high, we assume the singer actually jumped that far.
-                if (confidence < 0.95) {
+                if (confidence < 0.75) {
                     val octaveShift = ((lastStablePitchSemi!! - chosenSemi) / 12.0).roundToInt()
                     val shifted = chosenSemi + 12.0 * octaveShift
                     if (abs(shifted - lastStablePitchSemi!!) < diff) {

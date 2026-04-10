@@ -113,7 +113,7 @@ fun MainScreen(navController: NavHostController? = null) {
     var useSamplePlayer by rememberSaveable { mutableStateOf(false) }
 
     // NEW: show rectangular bars instead of dots
-    var showBars by rememberSaveable { mutableStateOf(false) }
+//    var showBars by rememberSaveable { mutableStateOf(false) }
 
     // transient state that doesn't need to persist across rotation
     var graphPaused by remember { mutableStateOf(false) }
@@ -302,9 +302,9 @@ fun MainScreen(navController: NavHostController? = null) {
                 },
                 bpm = bpm,
                 onBpmChange = { bpm = it },
-                // bars
-                showBars = showBars,
-                onToggleShowBars = { showBars = it },
+// //                 bars commented out for now
+// //                showBars = showBars,
+//                onToggleShowBars = { showBars = it },
                 // sample player
                 useSamplePlayer = useSamplePlayer,
                 onToggleUseSamplePlayer = { useSamplePlayer = it },
@@ -327,7 +327,7 @@ fun MainScreen(navController: NavHostController? = null) {
                     showWhiteTrace = true
                     showWhiteDots = true
                     useSamplePlayer = false
-                    showBars = false
+//                    showBars = false
                 },
                 // pass optional nav controller for About navigation
                 navController = navController,
@@ -431,9 +431,9 @@ fun MainScreen(navController: NavHostController? = null) {
                         smoothing = smoothing,
                         showWhiteTrace = showWhiteTrace,
                         showWhiteDots = showWhiteDots,
-                        bpm = bpm,
+                        bpm = bpm
                         // pass through the bars toggle
-                        showBars = showBars
+//                        showBars = showBars
                     )
                 }
             }
@@ -577,17 +577,17 @@ fun MainScreen(navController: NavHostController? = null) {
                                                 }
                                             )
                                         }
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Text(
-                                                "Show rectangular bars",
-                                                modifier = Modifier.weight(1f),
-                                                style = MaterialTheme.typography.bodyMedium
-                                            )
-                                            Switch(checked = showBars, onCheckedChange = { showBars = it })
-                                        }
+//                                        Row(
+//                                            verticalAlignment = Alignment.CenterVertically,
+//                                            modifier = Modifier.fillMaxWidth()
+//                                        ) {
+//                                            Text(
+//                                                "Show rectangular bars",
+//                                                modifier = Modifier.weight(1f),
+//                                                style = MaterialTheme.typography.bodyMedium
+//                                            )
+//                                            Switch(checked = showBars, onCheckedChange = { showBars = it })
+//                                        }
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
                                             modifier = Modifier.fillMaxWidth()
@@ -688,7 +688,7 @@ fun MainScreen(navController: NavHostController? = null) {
                                         showWhiteTrace = true
                                         showWhiteDots = true
                                         useSamplePlayer = false
-                                        showBars = false
+//                                        showBars = false
                                         // Note: We don't close the menu here so the user
                                         // can actually see the sliders visually snap back.
                                     }
@@ -805,24 +805,28 @@ fun MainScreen(navController: NavHostController? = null) {
                 rotated = false, blackKeyShiftFraction = 0.5f, useSamplePlayer = useSamplePlayer
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
+// A subtle 1dp line separating the two
+            HorizontalDivider(
+                thickness = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant
+            )
 
-            // Graph (horizontal)
+// Graph (horizontal)
             PitchGraphCard(
                 engine = engine,
-                modifier = Modifier.fillMaxWidth().weight(1f).padding(6.dp),
+                // Removed .padding(6.dp) so it flushes exactly to the divider
+                modifier = Modifier.fillMaxWidth().weight(1f),
                 paused = graphPaused, onTogglePause = { graphPaused = !graphPaused },
                 startMidi = 24, endMidi = 84, whiteKeyWidthDp = whiteKeyWidthDpFloat.dp,
                 scrollState = sharedScroll, alignmentOffsetDp = graphAlignmentDp.dp, timeWindowMs = 8000L,
                 showNoteLabels = showNoteLabels, showHorizontalGrid = showHorizontalGrid,
                 showCurve = showCurve, rotated = false, blackKeyShiftFraction = 0.5f,
                 smoothing = smoothing, showWhiteTrace = showWhiteTrace, showWhiteDots = showWhiteDots,
-                bpm = bpm, showBars = showBars
+                bpm = bpm
+//                showBars = showBars
             )
-
             Spacer(modifier = Modifier.height(8.dp))
 
-            // THE FIX: Only attempt to show the ad if consent is resolved and permission is granted
             // THE FIX: Only attempt to show the ad if consent is resolved and permission is granted
             if (canShowAds) {
                 AdaptiveBannerAd(
@@ -901,8 +905,8 @@ private fun TopAppBarLandscapeCompact(
     onThresholdChange: (Float) -> Unit,
     bpm: Float,
     onBpmChange: (Float) -> Unit,
-    showBars: Boolean,
-    onToggleShowBars: (Boolean) -> Unit,
+//    showBars: Boolean,
+//    onToggleShowBars: (Boolean) -> Unit,
     useSamplePlayer: Boolean,
     onToggleUseSamplePlayer: (Boolean) -> Unit,
     showWhiteDots: Boolean,
@@ -1082,17 +1086,17 @@ private fun TopAppBarLandscapeCompact(
                                             }
                                         )
                                     }
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text(
-                                            "Show rectangular bars",
-                                            modifier = Modifier.weight(1f),
-                                            style = MaterialTheme.typography.bodyMedium
-                                        )
-                                        Switch(checked = showBars, onCheckedChange = onToggleShowBars)
-                                    }
+//                                    Row(
+//                                        verticalAlignment = Alignment.CenterVertically,
+//                                        modifier = Modifier.fillMaxWidth()
+//                                    ) {
+//                                        Text(
+//                                            "Show rectangular bars",
+//                                            modifier = Modifier.weight(1f),
+//                                            style = MaterialTheme.typography.bodyMedium
+//                                        )
+//                                        Switch(checked = showBars, onCheckedChange = onToggleShowBars)
+//                                    }
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
                                         modifier = Modifier.fillMaxWidth()

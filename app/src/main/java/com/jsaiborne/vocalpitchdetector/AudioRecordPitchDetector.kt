@@ -44,7 +44,8 @@ class AudioRecordPitchDetector(
         sampleRate = sampleRate,
         bufferSize = bufferSize,
         minFreq = minFreq,
-        maxFreq = maxFreq
+        maxFreq = maxFreq,
+        threshold = 0.25f
     )
 
     private val tracker = PitchTracker(

@@ -217,7 +217,7 @@ fun PlaybackScreen(
     // ---------------------------------------------------
 
     var showCurve by remember { mutableStateOf(true) }
-    var showBars by remember { mutableStateOf(false) }
+//    var showBars by remember { mutableStateOf(false) }
     var showDots by remember { mutableStateOf(false) }
     var showNoteLabels by remember { mutableStateOf(true) }
     var autoCenter by remember { mutableStateOf(true) }
@@ -266,11 +266,11 @@ fun PlaybackScreen(
                             trailingIcon = { Checkbox(checked = showCurve, onCheckedChange = { showCurve = it }) },
                             onClick = { showCurve = !showCurve }
                         )
-                        DropdownMenuItem(
-                            text = { Text("Show Bars") },
-                            trailingIcon = { Checkbox(checked = showBars, onCheckedChange = { showBars = it }) },
-                            onClick = { showBars = !showBars }
-                        )
+//                        DropdownMenuItem(
+//                            text = { Text("Show Bars") },
+//                            trailingIcon = { Checkbox(checked = showBars, onCheckedChange = { showBars = it }) },
+//                            onClick = { showBars = !showBars }
+//                        )
                         DropdownMenuItem(
                             text = { Text("Show Dots") },
                             trailingIcon = { Checkbox(checked = showDots, onCheckedChange = { showDots = it }) },
@@ -310,7 +310,7 @@ fun PlaybackScreen(
                         currentPositionMs = viewModel.currentPositionMs,
                         stableMarkers = viewModel.stableMarkers,
                         showCurve = showCurve,
-                        showBars = showBars,
+//                        showBars = showBars,
                         showWhiteDots = showDots,
                         showNoteLabels = showNoteLabels,
                         autoCenter = autoCenter
@@ -321,7 +321,7 @@ fun PlaybackScreen(
                         currentPositionMs = viewModel.currentPositionMs,
                         stableMarkers = viewModel.stableMarkers,
                         showCurve = showCurve,
-                        showBars = showBars,
+//                        showBars = showBars,
                         showWhiteDots = showDots,
                         showNoteLabels = showNoteLabels,
                         autoCenter = autoCenter

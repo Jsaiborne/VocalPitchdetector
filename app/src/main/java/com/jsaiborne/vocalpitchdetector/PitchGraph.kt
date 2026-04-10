@@ -31,7 +31,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
@@ -549,13 +548,17 @@ fun PitchGraphHorizontal(
                         strokeWidth = 2f
                     )
                     if (showNoteLabels) {
-                        drawIntoCanvas { canvas ->
-                            canvas.nativeCanvas.drawText(
-                                midiToNoteNameLocal(m.midi),
-                                x + 6f,
-                                y - 10f,
-                                yellowPaint
-                            )
+                        val labelY = y - 10f
+                        // FIX: Check boundary so labels disappear at the top edge, just like the curve
+                        if (labelY > padTop) {
+                            drawIntoCanvas { canvas ->
+                                canvas.nativeCanvas.drawText(
+                                    midiToNoteNameLocal(m.midi),
+                                    x + 6f,
+                                    labelY,
+                                    yellowPaint
+                                )
+                            }
                         }
                     }
                 }
@@ -586,18 +589,18 @@ fun PitchGraphHorizontal(
                     }
                 }
 
-                // --- FIX 3: Fading Exit Effect ---
-                val fadeHeight = innerH * 0.15f // Top 15% fades out
-                drawRect(
-                    brush = Brush.verticalGradient(
-                        colors = listOf(bgTopColor, Color.Transparent),
-                        startY = padTop,
-                        endY = padTop + fadeHeight,
-                        tileMode = TileMode.Clamp
-                    ),
-                    topLeft = Offset(0f, padTop),
-                    size = Size(w, fadeHeight)
-                )
+//                // --- FIX 3: Fading Exit Effect ---
+//                val fadeHeight = innerH * 0.15f // Top 15% fades out
+//                drawRect(
+//                    brush = Brush.verticalGradient(
+//                        colors = listOf(bgTopColor, Color.Transparent),
+//                        startY = padTop,
+//                        endY = padTop + fadeHeight,
+//                        tileMode = TileMode.Clamp
+//                    ),
+//                    topLeft = Offset(0f, padTop),
+//                    size = Size(w, fadeHeight)
+//                )
             }
         }
     }
@@ -1046,17 +1049,17 @@ fun PitchGraphVertical(
                 }
 
                 // Fade exit
-                val fadeWidth = innerW * 0.15f
-                drawRect(
-                    brush = Brush.horizontalGradient(
-                        colors = listOf(bgLeftColor, Color.Transparent),
-                        startX = padLeft,
-                        endX = padLeft + fadeWidth,
-                        tileMode = TileMode.Clamp
-                    ),
-                    topLeft = Offset(padLeft, 0f),
-                    size = Size(fadeWidth, h)
-                )
+//                val fadeWidth = innerW * 0.15f
+//                drawRect(
+//                    brush = Brush.horizontalGradient(
+//                        colors = listOf(bgLeftColor, Color.Transparent),
+//                        startX = padLeft,
+//                        endX = padLeft + fadeWidth,
+//                        tileMode = TileMode.Clamp
+//                    ),
+//                    topLeft = Offset(padLeft, 0f),
+//                    size = Size(fadeWidth, h)
+//                )
             }
         }
     }
