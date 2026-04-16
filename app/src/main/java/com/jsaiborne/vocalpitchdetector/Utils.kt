@@ -2,6 +2,10 @@
 
 package com.jsaiborne.vocalpitchdetector
 
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import kotlin.math.log2
@@ -71,4 +75,30 @@ fun buildSmoothedPath(points: List<Offset>, smoothing: Float): Path {
         path.cubicTo(cp1.x, cp1.y, cp2.x, cp2.y, p2.x, p2.y)
     }
     return path
+}
+
+fun openPlayStore(context: Context) {
+    val packageName = context.packageName
+    @Suppress("SwallowedException")
+    try {
+        // Try to open the native Play Store app
+        context.startActivity(
+            Intent(
+                Intent.ACTION_VIEW,
+                Uri.parse("market://details?id=$packageName")
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+            }
+        )
+    } catch (e: ActivityNotFoundException) {
+        // Fallback to web browser if the Play Store isn't installed
+        context.startActivity(
+            Intent(
+                Intent.ACTION_VIEW,
+                Uri.parse("https://play.google.com/store/apps/details?id=$packageName")
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        )
+    }
 }

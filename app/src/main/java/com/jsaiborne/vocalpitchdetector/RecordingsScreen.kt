@@ -92,7 +92,10 @@ class RecordingsViewModel : ViewModel() {
             }
 
             val namePrefs = context.getSharedPreferences("recording_names", Context.MODE_PRIVATE)
-            val starPrefs = context.getSharedPreferences("recording_stars", Context.MODE_PRIVATE) // NEW: Prefs for stars
+            val starPrefs = context.getSharedPreferences(
+                "recording_stars",
+                Context.MODE_PRIVATE
+            ) // NEW: Prefs for stars
             val sessionMap = mutableMapOf<String, Pair<File?, File?>>()
 
             recordingsDir.listFiles()?.forEach { file ->
@@ -237,7 +240,14 @@ fun RecordingsScreen(
                         RecordingItem(
                             session = session,
                             onClick = { onSessionSelected(session.sessionId) },
-                            onToggleStar = { viewModel.toggleStar(context, session.sessionId, session.isStarred, recordingsDir) }, // NEW
+                            onToggleStar = {
+                                viewModel.toggleStar(
+                                    context,
+                                    session.sessionId,
+                                    session.isStarred,
+                                    recordingsDir
+                                )
+                            }, // NEW
                             onRename = {
                                 renameText = session.customName ?: ""
                                 sessionToRename = session

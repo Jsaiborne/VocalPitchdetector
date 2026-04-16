@@ -1,8 +1,10 @@
 @file:OptIn(ExperimentalMaterial3Api::class)
 
 package com.jsaiborne.vocalpitchdetector
+
 import android.Manifest
 import android.app.Activity
+import android.content.Context
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -80,6 +82,10 @@ import com.google.android.gms.ads.MobileAds
 import java.io.File
 import java.util.Locale
 import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
+
+private const val PREFS_NAME = "AppPreferences"
+private const val PREF_NEVER_SHOW_RATE = "NeverShowRateApp"
 
 // Ensure your app's BuildConfig is imported if your IDE complains
 @Suppress("MagicNumber", "LongMethod")
@@ -233,8 +239,10 @@ fun MainScreen(navController: NavHostController? = null) {
             }
         }
     }
+// --- NEW: App Rating Dialog ---
+    RateAppDialogManager()
 
-    // --- NEW: Recording Saved Dialog ---
+    // ---: Recording Saved Dialog ---
     if (showSavedDialog) {
         AlertDialog(
             onDismissRequest = { showSavedDialog = false },
@@ -1351,6 +1359,82 @@ fun LiveVolumeSlider(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(32.dp)
+        )
+    }
+}
+
+@Suppress("MagicNumber")
+@Composable
+fun RateAppDialogManager() {
+    val context = LocalContext.current
+    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    // Reads from permanent storage to see if we should block the dialog forever
+    val neverShowAgain = prefs.getBoolean(PREF_NEVER_SHOW_RATE, false)
+
+    // Tracks if we've already shown it during this specific app session
+    var hasShownThisSession by rememberSaveable { mutableStateOf(false) }
+    var showDialog by remember { mutableStateOf(false) }
+
+    // Trigger the dialog logic (you could also tie this to a specific button click or event)
+    LaunchedEffect(Unit) {
+        if (!neverShowAgain && !hasShownThisSession) {
+            delay(30000)
+            showDialog = true
+            hasShownThisSession = true
+        }
+    }
+
+    if (showDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                // Treating tapping outside the dialog as "Ask Me Later"
+                showDialog = false
+            },
+            title = { Text("Enjoying the App?") },
+            text = {
+                Text(
+                    "If you like using this app, " +
+                        "would you mind taking a moment to rate it? It really helps out!"
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        // Mark as never show again and open Play Store
+                        prefs.edit().putBoolean(PREF_NEVER_SHOW_RATE, true).apply()
+                        showDialog = false
+                        openPlayStore(context)
+                    }
+                ) {
+                    Text("Rate Us")
+                }
+            },
+            dismissButton = {
+                // Using a Row to pack two buttons into the dismiss area
+                Row(
+                    modifier = Modifier.padding(end = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    TextButton(
+                        onClick = {
+                            showDialog = false // Will show again next session
+                        }
+                    ) {
+                        Text("Ask Me Later", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+
+                    TextButton(
+                        onClick = {
+                            // Mark as never show again and dismiss
+                            prefs.edit().putBoolean(PREF_NEVER_SHOW_RATE, true).apply()
+                            showDialog = false
+                        }
+                    ) {
+                        Text("No Thanks", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
         )
     }
 }
