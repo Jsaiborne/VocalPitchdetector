@@ -66,9 +66,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.navigation.NavHostController
 import com.google.android.gms.ads.AdRequest
 import com.google.android.gms.ads.AdSize
@@ -176,6 +179,26 @@ fun MainScreen(navController: NavHostController? = null) {
         onDispose {
             // ensure release when composable leaves
             SamplePlayer.release()
+        }
+    }
+
+    // --- NEW: Automatically pause recording on background ---
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            // Trigger when the app is no longer in the foreground
+            if (event == Lifecycle.Event.ON_PAUSE) {
+                if (isRecording && !isRecordingPaused) {
+                    engine.pauseRecording()
+                    isRecordingPaused = true
+                }
+            }
+        }
+
+        lifecycleOwner.lifecycle.addObserver(observer)
+
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
 

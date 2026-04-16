@@ -95,6 +95,19 @@ android {
                 "BANNER_AD_UNIT_LANDSCAPE_ID",
                 "\"ca-app-pub-3940256099942544/2014213617\""
             )
+
+            buildConfigField(
+                "String",
+                "BANNER_AD_UNIT_PLAYBACK_PORTRAIT_ID",
+                "\"ca-app-pub-3940256099942544/9214589741\""
+            )
+
+            // FIXED: Updated to use the landscape test ID
+            buildConfigField(
+                "String",
+                "BANNER_AD_UNIT_PLAYBACK_LANDSCAPE_ID",
+                "\"ca-app-pub-3940256099942544/2014213617\""
+            )
         }
 
         getByName("release") {
@@ -104,6 +117,12 @@ android {
             val realAppId = keystoreProperties.getProperty("ADMOB_APP_ID") ?: ""
             val realBannerId = keystoreProperties.getProperty("ADMOB_BANNER_ID") ?: ""
             val realLandscapeId = keystoreProperties.getProperty("ADMOB_BANNER_LANDSCAPE_ID") ?: ""
+            val realPlaybackBannerId = keystoreProperties.getProperty(
+                "ADMOB_PLAYBACK_BANNER_ID"
+            ) ?: ""
+            val realPlaybackLandscapeId = keystoreProperties.getProperty(
+                "ADMOB_PLAYBACK_BANNER_LANDSCAPE_ID"
+            ) ?: ""
 
             manifestPlaceholders["adMobAppId"] = realAppId
 
@@ -117,6 +136,18 @@ android {
                 "String",
                 "BANNER_AD_UNIT_LANDSCAPE_ID",
                 "\"$realLandscapeId\""
+            )
+
+            buildConfigField(
+                "String",
+                "BANNER_AD_UNIT_PLAYBACK_PORTRAIT_ID",
+                "\"$realPlaybackBannerId\""
+            )
+
+            buildConfigField(
+                "String",
+                "BANNER_AD_UNIT_PLAYBACK_LANDSCAPE_ID",
+                "\"$realPlaybackLandscapeId\""
             )
 
             proguardFiles(

@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.Star // NEW: Added Star icon import
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -66,7 +67,8 @@ data class RecordingSession(
     val audioFile: File,
     val pitchFile: File,
     val sessionNumber: Int = 0,
-    val customName: String? = null // NEW: Holds the user-defined name
+    val customName: String? = null,
+    val isStarred: Boolean = false // NEW: Holds the starred/bookmarked state
 ) {
     val formattedDate: String
         get() {
@@ -89,7 +91,8 @@ class RecordingsViewModel : ViewModel() {
                 return@launch
             }
 
-            val prefs = context.getSharedPreferences("recording_names", Context.MODE_PRIVATE)
+            val namePrefs = context.getSharedPreferences("recording_names", Context.MODE_PRIVATE)
+            val starPrefs = context.getSharedPreferences("recording_stars", Context.MODE_PRIVATE) // NEW: Prefs for stars
             val sessionMap = mutableMapOf<String, Pair<File?, File?>>()
 
             recordingsDir.listFiles()?.forEach { file ->
@@ -110,8 +113,9 @@ class RecordingsViewModel : ViewModel() {
                 val pitch = pair.second
                 if (audio != null && pitch != null) {
                     val timestamp = id.toLongOrNull() ?: audio.lastModified()
-                    val customName = prefs.getString(id, null)
-                    RecordingSession(id, timestamp, audio, pitch, customName = customName)
+                    val customName = namePrefs.getString(id, null)
+                    val isStarred = starPrefs.getBoolean(id, false) // NEW: Read star state
+                    RecordingSession(id, timestamp, audio, pitch, customName = customName, isStarred = isStarred)
                 } else {
                     null
                 }
@@ -140,6 +144,13 @@ class RecordingsViewModel : ViewModel() {
         loadSessions(context, recordingsDir)
     }
 
+    // NEW: Function to handle toggling the star state
+    fun toggleStar(context: Context, sessionId: String, currentlyStarred: Boolean, recordingsDir: File) {
+        val starPrefs = context.getSharedPreferences("recording_stars", Context.MODE_PRIVATE)
+        starPrefs.edit().putBoolean(sessionId, !currentlyStarred).apply()
+        loadSessions(context, recordingsDir)
+    }
+
     fun deleteSession(context: Context, session: RecordingSession, recordingsDir: File) {
         viewModelScope.launch(Dispatchers.IO) {
             session.audioFile.delete()
@@ -147,6 +158,10 @@ class RecordingsViewModel : ViewModel() {
 
             // Clean up SharedPreferences
             context.getSharedPreferences("recording_names", Context.MODE_PRIVATE)
+                .edit().remove(session.sessionId).apply()
+
+            // NEW: Clean up star SharedPreferences so deleted session IDs don't pile up
+            context.getSharedPreferences("recording_stars", Context.MODE_PRIVATE)
                 .edit().remove(session.sessionId).apply()
 
             loadSessions(context, recordingsDir)
@@ -222,6 +237,7 @@ fun RecordingsScreen(
                         RecordingItem(
                             session = session,
                             onClick = { onSessionSelected(session.sessionId) },
+                            onToggleStar = { viewModel.toggleStar(context, session.sessionId, session.isStarred, recordingsDir) }, // NEW
                             onRename = {
                                 renameText = session.customName ?: ""
                                 sessionToRename = session
@@ -239,6 +255,7 @@ fun RecordingsScreen(
 fun RecordingItem(
     session: RecordingSession,
     onClick: () -> Unit,
+    onToggleStar: () -> Unit, // NEW
     onRename: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -280,7 +297,21 @@ fun RecordingItem(
                 }
             }
 
-            Row {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // NEW: Star/Bookmark IconButton
+                IconButton(onClick = onToggleStar) {
+                    Icon(
+                        imageVector = Icons.Default.Star,
+                        contentDescription = if (session.isStarred) "Unstar Session" else "Star Session",
+                        // Uses primary color if starred, otherwise a faded gray/surface variant color
+                        tint = if (session.isStarred) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                        }
+                    )
+                }
+
                 IconButton(onClick = onRename) {
                     Icon(
                         imageVector = Icons.Default.Edit,

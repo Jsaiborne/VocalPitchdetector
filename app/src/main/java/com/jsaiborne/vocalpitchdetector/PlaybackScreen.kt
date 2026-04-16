@@ -2,10 +2,12 @@
 
 package com.jsaiborne.vocalpitchdetector
 
+import android.app.Activity
 import android.content.Context
 import android.content.res.Configuration
 import android.media.MediaPlayer
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Pause
@@ -45,12 +48,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.google.android.gms.ads.MobileAds
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -111,7 +117,6 @@ class PlaybackViewModel : ViewModel() {
         }
     }
 
-    // NEW: Dedicated pause function for when the app is backgrounded
     fun pause() {
         mediaPlayer?.let { player ->
             if (player.isPlaying) {
@@ -158,7 +163,6 @@ fun PlaybackScreen(
         }
     }
 
-    // NEW: Lifecycle observer to pause playback when app goes to background
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -203,7 +207,6 @@ fun PlaybackScreen(
             }
         }
 
-        // Fetch custom name from SharedPreferences
         val prefs = context.getSharedPreferences("recording_names", Context.MODE_PRIVATE)
         val customName = prefs.getString(idStr, null)
         val titleName = if (!customName.isNullOrBlank()) customName else "Vocal Session $sessionNum"
@@ -213,11 +216,27 @@ fun PlaybackScreen(
 
         Pair(titleName, dateStr)
     }
-    val (sessionTitle, formattedDate) = sessionInfo
+    val (sessionTitle, _) = sessionInfo
     // ---------------------------------------------------
 
+    // --- Ads Setup ---
+    val consentManager = remember { ConsentManager(context as Activity) }
+    var canShowAds by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        consentManager.gatherConsent { error ->
+            if (error == null) {
+                MobileAds.initialize(context) {
+                    canShowAds = consentManager.canRequestAds()
+                }
+            } else {
+                canShowAds = consentManager.canRequestAds()
+            }
+        }
+    }
+    // -----------------
+
     var showCurve by remember { mutableStateOf(true) }
-//    var showBars by remember { mutableStateOf(false) }
     var showDots by remember { mutableStateOf(false) }
     var showNoteLabels by remember { mutableStateOf(true) }
     var autoCenter by remember { mutableStateOf(true) }
@@ -228,67 +247,94 @@ fun PlaybackScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Column(verticalArrangement = Arrangement.Center) {
-                        Text(
-                            text = "Playback",
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        Text(
-                            text = "$sessionTitle • $formattedDate",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+            if (isPortrait) {
+                TopAppBar(
+                    title = {
+                        Column(verticalArrangement = Arrangement.Center) {
+                            Text(
+                                text = sessionTitle,
+                                style = MaterialTheme.typography.titleSmall,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                lineHeight = 16.sp
+                            )
+                        }
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onNavigateUp) {
+                            Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = { showSettingsMenu = true }) {
+                            Icon(Icons.Default.Settings, contentDescription = "Settings")
+                        }
+                        DropdownMenu(
+                            expanded = showSettingsMenu,
+                            onDismissRequest = { showSettingsMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Auto-Center") },
+                                trailingIcon = {
+                                    Checkbox(
+                                        checked = autoCenter,
+                                        onCheckedChange = { autoCenter = it }
+                                    )
+                                },
+                                onClick = { autoCenter = !autoCenter }
+                            )
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = { Text("Show Curve") },
+                                trailingIcon = {
+                                    Checkbox(
+                                        checked = showCurve,
+                                        onCheckedChange = { showCurve = it }
+                                    )
+                                },
+                                onClick = { showCurve = !showCurve }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Show Dots") },
+                                trailingIcon = {
+                                    Checkbox(
+                                        checked = showDots,
+                                        onCheckedChange = { showDots = it }
+                                    )
+                                },
+                                onClick = { showDots = !showDots }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Markers & Labels") },
+                                trailingIcon = {
+                                    Checkbox(
+                                        checked = showNoteLabels,
+                                        onCheckedChange = { showNoteLabels = it }
+                                    )
+                                },
+                                onClick = { showNoteLabels = !showNoteLabels }
+                            )
+                        }
                     }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateUp) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { showSettingsMenu = true }) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
-                    }
-                    DropdownMenu(
-                        expanded = showSettingsMenu,
-                        onDismissRequest = { showSettingsMenu = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Auto-Center") },
-                            trailingIcon = { Checkbox(checked = autoCenter, onCheckedChange = { autoCenter = it }) },
-                            onClick = { autoCenter = !autoCenter }
-                        )
-                        HorizontalDivider()
-                        DropdownMenuItem(
-                            text = { Text("Show Curve") },
-                            trailingIcon = { Checkbox(checked = showCurve, onCheckedChange = { showCurve = it }) },
-                            onClick = { showCurve = !showCurve }
-                        )
-//                        DropdownMenuItem(
-//                            text = { Text("Show Bars") },
-//                            trailingIcon = { Checkbox(checked = showBars, onCheckedChange = { showBars = it }) },
-//                            onClick = { showBars = !showBars }
-//                        )
-                        DropdownMenuItem(
-                            text = { Text("Show Dots") },
-                            trailingIcon = { Checkbox(checked = showDots, onCheckedChange = { showDots = it }) },
-                            onClick = { showDots = !showDots }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Markers & Labels") },
-                            trailingIcon = {
-                                Checkbox(
-                                    checked = showNoteLabels,
-                                    onCheckedChange = { showNoteLabels = it }
-                                )
-                            },
-                            onClick = { showNoteLabels = !showNoteLabels }
-                        )
-                    }
-                }
-            )
+                )
+            } else {
+                // Custom landscape TopAppBar to hold the ad
+                TopAppBarPlaybackLandscape(
+                    sessionTitle = sessionTitle,
+                    onNavigateUp = onNavigateUp,
+                    canShowAds = canShowAds,
+                    showSettingsMenu = showSettingsMenu,
+                    onToggleSettingsMenu = { showSettingsMenu = it },
+                    autoCenter = autoCenter,
+                    onToggleAutoCenter = { autoCenter = it },
+                    showCurve = showCurve,
+                    onToggleShowCurve = { showCurve = it },
+                    showDots = showDots,
+                    onToggleShowDots = { showDots = it },
+                    showNoteLabels = showNoteLabels,
+                    onToggleShowNoteLabels = { showNoteLabels = it }
+                )
+            }
         }
     ) { paddingValues ->
         Column(
@@ -310,7 +356,6 @@ fun PlaybackScreen(
                         currentPositionMs = viewModel.currentPositionMs,
                         stableMarkers = viewModel.stableMarkers,
                         showCurve = showCurve,
-//                        showBars = showBars,
                         showWhiteDots = showDots,
                         showNoteLabels = showNoteLabels,
                         autoCenter = autoCenter
@@ -321,7 +366,6 @@ fun PlaybackScreen(
                         currentPositionMs = viewModel.currentPositionMs,
                         stableMarkers = viewModel.stableMarkers,
                         showCurve = showCurve,
-//                        showBars = showBars,
                         showWhiteDots = showDots,
                         showNoteLabels = showNoteLabels,
                         autoCenter = autoCenter
@@ -369,8 +413,119 @@ fun PlaybackScreen(
                 )
             }
 
-            if (isPortrait) {
+            // --- Portrait Banner Ad ---
+            if (isPortrait && canShowAds) {
+                Spacer(modifier = Modifier.height(4.dp))
+                AdaptiveBannerAd(
+                    modifier = Modifier.fillMaxWidth(),
+                    adUnitId = BuildConfig.BANNER_AD_UNIT_PLAYBACK_PORTRAIT_ID
+                )
+            } else if (isPortrait) {
                 Spacer(modifier = Modifier.height(60.dp))
+            }
+        }
+    }
+}
+
+// --- UPDATED COMPOSABLE: Custom Landscape TopAppBar for Playback Screen ---
+@Suppress("LongParameterList")
+@Composable
+private fun TopAppBarPlaybackLandscape(
+    sessionTitle: String,
+    onNavigateUp: () -> Unit,
+    canShowAds: Boolean,
+    showSettingsMenu: Boolean,
+    onToggleSettingsMenu: (Boolean) -> Unit,
+    autoCenter: Boolean,
+    onToggleAutoCenter: (Boolean) -> Unit,
+    showCurve: Boolean,
+    onToggleShowCurve: (Boolean) -> Unit,
+    showDots: Boolean,
+    onToggleShowDots: (Boolean) -> Unit,
+    showNoteLabels: Boolean,
+    onToggleShowNoteLabels: (Boolean) -> Unit
+) {
+    // Replaced Box with Row so the title automatically respects the ad boundaries
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .padding(horizontal = 4.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // LEFT SIDE: Back Button
+        IconButton(onClick = onNavigateUp) {
+            Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+        }
+
+        Spacer(modifier = Modifier.width(4.dp))
+
+        // LEFT/CENTER: Dynamic Title Text that wraps and doesn't push into the ad
+        Text(
+            text = sessionTitle,
+            style = MaterialTheme.typography.titleSmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            lineHeight = 16.sp,
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 8.dp)
+        )
+
+        // RIGHT/CENTER: Floating Landscape Ad
+        if (canShowAds) {
+            val config = LocalConfiguration.current
+            val screenWidth = config.screenWidthDp
+
+            // Reserve more space for back button/title and settings to push the ad rightward
+            val reservedSpace = 280
+            val adWidth = screenWidth - reservedSpace
+
+            if (adWidth >= 320) {
+                Box(modifier = Modifier.padding(end = 8.dp)) {
+                    AdaptiveBannerAd(
+                        adUnitId = BuildConfig.BANNER_AD_UNIT_PLAYBACK_LANDSCAPE_ID,
+                        customWidth = adWidth
+                    )
+                }
+            }
+        }
+
+        // RIGHT SIDE: Settings Menu
+        Box {
+            IconButton(onClick = { onToggleSettingsMenu(true) }) {
+                Icon(Icons.Default.Settings, contentDescription = "Settings")
+            }
+            DropdownMenu(
+                expanded = showSettingsMenu,
+                onDismissRequest = { onToggleSettingsMenu(false) }
+            ) {
+                DropdownMenuItem(
+                    text = { Text("Auto-Center") },
+                    trailingIcon = { Checkbox(checked = autoCenter, onCheckedChange = { onToggleAutoCenter(it) }) },
+                    onClick = { onToggleAutoCenter(!autoCenter) }
+                )
+                HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text("Show Curve") },
+                    trailingIcon = { Checkbox(checked = showCurve, onCheckedChange = { onToggleShowCurve(it) }) },
+                    onClick = { onToggleShowCurve(!showCurve) }
+                )
+                DropdownMenuItem(
+                    text = { Text("Show Dots") },
+                    trailingIcon = { Checkbox(checked = showDots, onCheckedChange = { onToggleShowDots(it) }) },
+                    onClick = { onToggleShowDots(!showDots) }
+                )
+                DropdownMenuItem(
+                    text = { Text("Markers & Labels") },
+                    trailingIcon = {
+                        Checkbox(
+                            checked = showNoteLabels,
+                            onCheckedChange = { onToggleShowNoteLabels(it) }
+                        )
+                    },
+                    onClick = { onToggleShowNoteLabels(!showNoteLabels) }
+                )
             }
         }
     }
