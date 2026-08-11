@@ -87,25 +87,20 @@ import kotlinx.coroutines.delay
 private const val PREFS_NAME = "AppPreferences"
 private const val PREF_NEVER_SHOW_RATE = "NeverShowRateApp"
 
-// Ensure your app's BuildConfig is imported if your IDE complains
 @Suppress("MagicNumber", "LongMethod")
 @Composable
 fun MainScreen(navController: NavHostController? = null) {
     val scope = rememberCoroutineScope()
     val engine = remember { PitchEngine(scope) }
     val state by engine.state.collectAsState()
-// Collect raw volume and convert to dB
     val volumeRms by engine.volumeRms.collectAsState()
     val currentVolumeDb = rmsToDb(volumeRms)
     val context = LocalContext.current
 
-    // small UI constants (purely visual)
     val outerPadding = 8.dp
     val smallGap = 8.dp
     val menuWidth = 320.dp
-//    val compactAppBarHeight = 40.dp
 
-    // Persist across rotations using rememberSaveable
     var autoCenter by rememberSaveable { mutableStateOf(true) }
     var whiteKeyWidthDpFloat by rememberSaveable { mutableFloatStateOf(56f) }
     var smoothing by rememberSaveable { mutableFloatStateOf(0.5f) }
@@ -113,23 +108,16 @@ fun MainScreen(navController: NavHostController? = null) {
     var showHorizontalGrid by rememberSaveable { mutableStateOf(true) }
     var showCurve by rememberSaveable { mutableStateOf(true) }
     var showWhiteTrace by rememberSaveable { mutableStateOf(true) }
-//    var volumeThreshold by rememberSaveable { mutableFloatStateOf(0.02f) } // normalized 0..1
     var thresholdDb by rememberSaveable { mutableFloatStateOf(-34f) }
     var bpm by rememberSaveable { mutableFloatStateOf(60f) }
-    var showWhiteDots by rememberSaveable { mutableStateOf(true) } // <-- NEW
+    var showWhiteDots by rememberSaveable { mutableStateOf(true) }
 
-    // NEW: use sample player toggle
     var useSamplePlayer by rememberSaveable { mutableStateOf(false) }
 
-    // NEW: show rectangular bars instead of dots
-//    var showBars by rememberSaveable { mutableStateOf(false) }
-
-    // transient state that doesn't need to persist across rotation
     var graphPaused by remember { mutableStateOf(false) }
     var stableMidi by remember { mutableStateOf<Int?>(null) }
-    var graphAlignmentDp by remember { mutableFloatStateOf(0f) }
+    val graphAlignmentDp by remember { mutableFloatStateOf(0f) }
 
-    // shared scroll state (will be used horizontally in portrait, vertically in landscape)
     val sharedScroll = rememberScrollState()
 
     var isRecording by rememberSaveable { mutableStateOf(false) }
@@ -138,8 +126,6 @@ fun MainScreen(navController: NavHostController? = null) {
     var showDiscardDialog by rememberSaveable { mutableStateOf(false) }
     var currentSessionId by remember { mutableStateOf("") }
 
-    // Start / stop engine as before
-    // 1. Track whether we have permission in a Compose state
     var hasMicPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(
@@ -149,21 +135,18 @@ fun MainScreen(navController: NavHostController? = null) {
         )
     }
 
-    // 2. Create a launcher to request permission if we don't have it
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         hasMicPermission = isGranted
     }
 
-    // 3. Request permission on first launch if needed
     LaunchedEffect(Unit) {
         if (!hasMicPermission) {
             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 
-    // 4. ONLY start the engine when hasMicPermission is true
     DisposableEffect(hasMicPermission) {
         if (hasMicPermission) {
             engine.start()
@@ -174,46 +157,39 @@ fun MainScreen(navController: NavHostController? = null) {
         }
     }
 
-    // Initialize / release SamplePlayer when toggled
     DisposableEffect(useSamplePlayer) {
         if (useSamplePlayer) {
             SamplePlayer.init(context.applicationContext)
         } else {
-            // if toggled off, release resources
             SamplePlayer.release()
         }
         onDispose {
-            // ensure release when composable leaves
             SamplePlayer.release()
         }
     }
 
-    // --- NEW: Automatically pause recording on background ---
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            // Trigger when the app is no longer in the foreground
             if (event == Lifecycle.Event.ON_PAUSE) {
                 if (isRecording && !isRecordingPaused) {
                     engine.pauseRecording()
                     isRecordingPaused = true
                 }
+                ToneGenerator.stop()
             }
         }
-
         lifecycleOwner.lifecycle.addObserver(observer)
-
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+            ToneGenerator.stop()
         }
     }
 
-    // collect stable notes from engine and update stableMidi
     LaunchedEffect(engine) {
         engine.stableNotes.collect { note -> stableMidi = note.midi }
     }
 
-    // compute nearest MIDI note (nullable) for live highlighting
     val activeMidi: Int? by remember(state.frequency) {
         mutableStateOf(if (state.frequency > 0f) freqToMidi(state.frequency.toDouble()).roundToInt() else null)
     }
@@ -221,28 +197,23 @@ fun MainScreen(navController: NavHostController? = null) {
     val config = LocalConfiguration.current
     val isLandscape = config.orientation == Configuration.ORIENTATION_LANDSCAPE
 
-    // Initialize ConsentManager and a state to track ad readiness
     val consentManager = remember { ConsentManager(context as Activity) }
     var canShowAds by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         consentManager.gatherConsent { error ->
             if (error == null) {
-                // Consent logic finished successfully, now initialize Mobile Ads SDK
                 MobileAds.initialize(context) {
-                    // Once initialized, check if we actually have permission to show ads
                     canShowAds = consentManager.canRequestAds()
                 }
             } else {
-                // Handle error (optional: e.g., proceed with non-personalized ads or log error)
                 canShowAds = consentManager.canRequestAds()
             }
         }
     }
-// --- NEW: App Rating Dialog ---
+
     RateAppDialogManager()
 
-    // ---: Recording Saved Dialog ---
     if (showSavedDialog) {
         AlertDialog(
             onDismissRequest = { showSavedDialog = false },
@@ -260,20 +231,14 @@ fun MainScreen(navController: NavHostController? = null) {
         )
     }
 
-    // --- NEW: Discard Confirmation Dialog ---
     if (showDiscardDialog) {
-        androidx.compose.material3.AlertDialog(
+        AlertDialog(
             onDismissRequest = { showDiscardDialog = false },
-            title = {
-                Text("Discard Recording")
-            },
-            text = {
-                Text("Are you sure you want to delete this recording? This action cannot be undone.")
-            },
+            title = { Text("Discard Recording") },
+            text = { Text("Are you sure you want to delete this recording? This action cannot be undone.") },
             confirmButton = {
-                androidx.compose.material3.TextButton(
+                TextButton(
                     onClick = {
-                        // User confirmed: Cancel and delete
                         engine.cancelRecording()
                         isRecording = false
                         isRecordingPaused = false
@@ -284,14 +249,7 @@ fun MainScreen(navController: NavHostController? = null) {
                 }
             },
             dismissButton = {
-                androidx.compose.material3.TextButton(
-                    onClick = {
-                        // User canceled: Just hide the dialog, recording state remains unchanged
-                        showDiscardDialog = false
-                    }
-                ) {
-                    Text("Cancel")
-                }
+                TextButton(onClick = { showDiscardDialog = false }) { Text("Cancel") }
             }
         )
     }
@@ -303,12 +261,10 @@ fun MainScreen(navController: NavHostController? = null) {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         if (isLandscape) {
-            // Top bar spanning full width: detected note, confidence, compact controls (Hold & Gear only)
             TopAppBarLandscapeCompact(
                 detectedFreq = state.frequency,
                 detectedConfidence = state.confidence,
                 activeMidi = activeMidi,
-                // pass current settings
                 whiteKeyWidthDpFloat = whiteKeyWidthDpFloat,
                 onWhiteKeyWidthChange = { whiteKeyWidthDpFloat = it },
                 autoCenter = autoCenter,
@@ -333,24 +289,16 @@ fun MainScreen(navController: NavHostController? = null) {
                 },
                 bpm = bpm,
                 onBpmChange = { bpm = it },
-// //                 bars commented out for now
-// //                showBars = showBars,
-//                onToggleShowBars = { showBars = it },
-                // sample player
                 useSamplePlayer = useSamplePlayer,
                 onToggleUseSamplePlayer = { useSamplePlayer = it },
-                // white dots toggle
                 showWhiteDots = showWhiteDots,
                 onShowWhiteDotsChange = { showWhiteDots = it },
                 onResetDefaults = {
-                    // Reset Sliders
                     smoothing = 0.5f
                     bpm = 60f
                     thresholdDb = -34f
                     engine.setVolumeThreshold(dbToRms(-34f))
                     whiteKeyWidthDpFloat = 56f
-
-                    // Reset Toggles
                     autoCenter = true
                     showNoteLabels = true
                     showHorizontalGrid = true
@@ -358,24 +306,17 @@ fun MainScreen(navController: NavHostController? = null) {
                     showWhiteTrace = true
                     showWhiteDots = true
                     useSamplePlayer = false
-//                    showBars = false
                 },
-                // pass optional nav controller for About navigation
                 navController = navController,
                 canShowAds = canShowAds,
-
-                // --- NEW: Recording state and callbacks passed to Landscape ---
                 isRecording = isRecording,
                 isRecordingPaused = isRecordingPaused,
                 onRecordStart = {
                     currentSessionId = System.currentTimeMillis().toString()
-
                     val recordingsDir = File(context.filesDir, "recordings")
                     recordingsDir.mkdirs()
-
                     val audioFile = File(recordingsDir, "session_${currentSessionId}_audio.wav")
                     val pitchFile = File(recordingsDir, "session_${currentSessionId}_pitch.json")
-
                     engine.startRecording(audioFile, pitchFile)
                     isRecording = true
                     isRecordingPaused = false
@@ -395,29 +336,23 @@ fun MainScreen(navController: NavHostController? = null) {
                     isRecordingPaused = false
                     showSavedDialog = true
                 },
-                onRecordDiscard = {
-                    showDiscardDialog = true
-                },
-                onLibraryClick = {
-                    navController?.navigate("recordings")
-                }
+                onRecordDiscard = { showDiscardDialog = true },
+                onLibraryClick = { navController?.navigate("recordings") }
             )
 
             Spacer(modifier = Modifier.height(smallGap))
 
-            // Main content: left piano, right graph — do NOT rotate outer boxes; use rotated=true in components
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
             ) {
-                // Left piano column — Reduced width from 360.dp to 250.dp to remove empty gap
                 Box(
                     modifier = Modifier
                         .fillMaxHeight()
-                        .width(250.dp) // <--- CHANGED: Reduced width significantly
+                        .width(250.dp)
                         .padding(vertical = 6.dp, horizontal = 2.dp)
-                ) { // <--- CHANGED: Tighter padding
+                ) {
                     Piano(
                         startMidi = 24,
                         endMidi = 84,
@@ -433,16 +368,14 @@ fun MainScreen(navController: NavHostController? = null) {
                     )
                 }
 
-                // <-- reduced spacer from 8.dp to 2.dp for tighter fit -->
                 Spacer(modifier = Modifier.width(2.dp))
 
-                // Right graph area — ask PitchGraphCard to render rotated layout and share scroll vertically
                 Box(
                     modifier = Modifier
                         .fillMaxHeight()
                         .weight(1f)
                         .padding(vertical = 6.dp, horizontal = 2.dp)
-                ) { // <--- CHANGED: Tighter padding
+                ) {
                     PitchGraphCard(
                         engine = engine,
                         modifier = Modifier.fillMaxSize(),
@@ -463,19 +396,12 @@ fun MainScreen(navController: NavHostController? = null) {
                         showWhiteTrace = showWhiteTrace,
                         showWhiteDots = showWhiteDots,
                         bpm = bpm
-                        // pass through the bars toggle
-//                        showBars = showBars
                     )
                 }
             }
-
             Spacer(modifier = Modifier.height(smallGap))
         } else {
-            // PORTRAIT MODE
-
             Spacer(modifier = Modifier.height(6.dp))
-
-            // Consolidated Info & Control Card
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -485,350 +411,216 @@ fun MainScreen(navController: NavHostController? = null) {
                 ),
                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween // Pushes text to left, buttons to right
-                ) {
-                    val freqText = if (state.frequency > 0f) "%.1f Hz".format(Locale.US, state.frequency) else "--"
-                    val noteText = if (activeMidi != null) midiToNoteName(activeMidi!!) else "-"
+                var menuExpandedPortrait by remember { mutableStateOf(false) }
 
-                    // LEFT SIDE: Note, Frequency, Confidence
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = noteText, // Removed "Note: "
-                            style = MaterialTheme.typography.titleLarge // Slightly larger font
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(
-                            text = freqText,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(
-                            text = "Conf: %.2f".format(Locale.US, state.confidence), // Shortened to save space
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
+                InfoOverlay(
+                    frequency = state.frequency,
+                    confidence = state.confidence,
+                    activeMidi = activeMidi,
+                    graphPaused = graphPaused,
+                    onTogglePause = { graphPaused = !graphPaused },
+                    onOpenSettings = { menuExpandedPortrait = true }
+                )
 
-                    // RIGHT SIDE: Hold Button & Gear Menu
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        // Smaller Hold Button
-                        Button(
-                            onClick = { graphPaused = !graphPaused },
-                            modifier = Modifier.height(32.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                        ) {
-                            Text(
-                                text = if (graphPaused) "Resume" else "Hold",
-                                style = MaterialTheme.typography.labelSmall
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.width(8.dp))
-
-                        // Box to anchor the Dropdown Menu to the Gear Icon
-                        var menuExpandedPortrait by remember { mutableStateOf(false) }
-                        Box {
-                            // Smaller Gear Icon
-                            IconButton(
-                                onClick = { menuExpandedPortrait = true },
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Settings,
-                                    contentDescription = "Open settings",
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-
-                            // Dropdown Menu (Remains unchanged)
-                            DropdownMenu(
-                                expanded = menuExpandedPortrait,
-                                onDismissRequest = { menuExpandedPortrait = false },
-                                modifier = Modifier.width(menuWidth)
-                            ) {
-                                val portraitMenuScroll = rememberScrollState()
-                                Column(
-                                    modifier = Modifier
-                                        .padding(12.dp)
-                                        .heightIn(max = 360.dp)
-                                        .verticalScroll(portraitMenuScroll),
-                                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    // --- TOGGLES ---
-                                    Column(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Text(
-                                                "Show note labels",
-                                                modifier = Modifier.weight(1f),
-                                                style = MaterialTheme.typography.bodyMedium
-                                            )
-                                            Switch(
-                                                checked = showNoteLabels,
-                                                onCheckedChange = { showNoteLabels = it }
-                                            )
-                                        }
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Text(
-                                                "Show grid lines",
-                                                modifier = Modifier.weight(1f),
-                                                style = MaterialTheme.typography.bodyMedium
-                                            )
-                                            Switch(
-                                                checked = showHorizontalGrid,
-                                                onCheckedChange = { showHorizontalGrid = it }
-                                            )
-                                        }
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Text(
-                                                "Show curve & trace",
-                                                modifier = Modifier.weight(1f),
-                                                style = MaterialTheme.typography.bodyMedium
-                                            )
-                                            Switch(
-                                                checked = showCurve && showWhiteTrace,
-                                                onCheckedChange = { checked ->
-                                                    showCurve = checked
-                                                    showWhiteTrace = checked
-                                                }
-                                            )
-                                        }
-//                                        Row(
-//                                            verticalAlignment = Alignment.CenterVertically,
-//                                            modifier = Modifier.fillMaxWidth()
-//                                        ) {
-//                                            Text(
-//                                                "Show rectangular bars",
-//                                                modifier = Modifier.weight(1f),
-//                                                style = MaterialTheme.typography.bodyMedium
-//                                            )
-//                                            Switch(checked = showBars, onCheckedChange = { showBars = it })
-//                                        }
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Text(
-                                                "Show white dots",
-                                                modifier = Modifier.weight(1f),
-                                                style = MaterialTheme.typography.bodyMedium
-                                            )
-                                            Switch(
-                                                checked = showWhiteDots,
-                                                onCheckedChange = { showWhiteDots = it }
-                                            )
-                                        }
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Text(
-                                                "Auto-center",
-                                                modifier = Modifier.weight(1f),
-                                                style = MaterialTheme.typography.bodyMedium
-                                            )
-                                            Switch(checked = autoCenter, onCheckedChange = { autoCenter = it })
-                                        }
-
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Text(
-                                                "Use piano samples",
-                                                modifier = Modifier.weight(1f),
-                                                style = MaterialTheme.typography.bodyMedium
-                                            )
-                                            Switch(
-                                                checked = useSamplePlayer,
-                                                onCheckedChange = { useSamplePlayer = it }
-                                            )
-                                        }
-                                    }
-
-                                    HorizontalDivider()
-
-                                    // --- SLIDERS ---
-                                    Text(
-                                        "Smoothing: ${(smoothing * 100).roundToInt()}%",
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-                                    Slider(
-                                        value = smoothing,
-                                        onValueChange = { smoothing = it },
-                                        valueRange = 0f..1f,
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
-
-                                    Text(
-                                        "Tempo: ${bpm.roundToInt()} BPM",
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-                                    Slider(
-                                        value = bpm,
-                                        onValueChange = { bpm = it },
-                                        valueRange = 60f..240f,
-                                        steps = 180,
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
-
-                                    // NEW: Active live volume slider component
-                                    LiveVolumeSlider(
-                                        thresholdDb = thresholdDb,
-                                        currentVolumeDb = currentVolumeDb,
-                                        onThresholdChange = { newDb ->
-                                            thresholdDb = newDb
-                                            engine.setVolumeThreshold(dbToRms(newDb))
-                                        }
-                                    )
-                                }
-
-                                Spacer(modifier = Modifier.height(12.dp))
-                                HorizontalDivider()
-                                Spacer(modifier = Modifier.height(8.dp))
-
-                                DropdownMenuItem(
-                                    text = { Text("Reset to Defaults") },
-                                    onClick = {
-                                        smoothing = 0.5f
-                                        bpm = 60f
-                                        thresholdDb = -34f
-                                        engine.setVolumeThreshold(dbToRms(-34f))
-                                        whiteKeyWidthDpFloat = 56f
-
-                                        // Reset Toggles
-                                        autoCenter = true
-                                        showNoteLabels = true
-                                        showHorizontalGrid = true
-                                        showCurve = true
-                                        showWhiteTrace = true
-                                        showWhiteDots = true
-                                        useSamplePlayer = false
-//                                        showBars = false
-                                        // Note: We don't close the menu here so the user
-                                        // can actually see the sliders visually snap back.
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("About") },
-                                    onClick = {
-                                        menuExpandedPortrait = false
-                                        navController?.navigate("about")
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-                // --- NEW: Recording Controls ---
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    // Library Button
-                    IconButton(
-                        onClick = { navController?.navigate("recordings") }
+                Box(modifier = Modifier.align(Alignment.End).padding(end = 12.dp)) {
+                    DropdownMenu(
+                        expanded = menuExpandedPortrait,
+                        onDismissRequest = { menuExpandedPortrait = false },
+                        modifier = Modifier.width(menuWidth)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.LibraryMusic,
-                            contentDescription = "View Saved Recordings",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    }
-
-                    // Record Button
-                    if (!isRecording) {
-                        // Start Record Button
-                        Button(
-                            onClick = {
-                                currentSessionId = System.currentTimeMillis().toString()
-
-                                val recordingsDir = File(context.filesDir, "recordings")
-                                recordingsDir.mkdirs()
-
-                                val audioFile = File(recordingsDir, "session_${currentSessionId}_audio.wav")
-                                val pitchFile = File(recordingsDir, "session_${currentSessionId}_pitch.json")
-
-                                engine.startRecording(audioFile, pitchFile)
-                                isRecording = true
-                                isRecordingPaused = false // Reset pause state on new record
-                            },
-                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary
-                            )
+                        val portraitMenuScroll = rememberScrollState()
+                        Column(
+                            modifier = Modifier
+                                .padding(12.dp)
+                                .heightIn(max = 360.dp)
+                                .verticalScroll(portraitMenuScroll),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Text("Record")
-                        }
-                    } else {
-                        // --- NEW: Discard Button ---
-                        IconButton(
-                            onClick = {
-                                showDiscardDialog = true
-                            }
-                        ) {
-                            androidx.compose.material3.Icon(
-                                imageVector = Icons.Default.Delete,
-                                contentDescription = "Discard Recording",
-                                tint = MaterialTheme.colorScheme.error
-                            )
-                        }
-                        // Pause / Resume Button
-                        IconButton(
-                            onClick = {
-                                if (isRecordingPaused) {
-                                    engine.resumeRecording()
-                                    isRecordingPaused = false
-                                } else {
-                                    engine.pauseRecording()
-                                    isRecordingPaused = true
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        "Show note labels",
+                                        modifier = Modifier.weight(1f),
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Switch(
+                                        checked = showNoteLabels,
+                                        onCheckedChange = { showNoteLabels = it }
+                                    )
+                                }
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        "Show grid lines",
+                                        modifier = Modifier.weight(1f),
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Switch(
+                                        checked = showHorizontalGrid,
+                                        onCheckedChange = { showHorizontalGrid = it }
+                                    )
+                                }
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        "Show curve & trace",
+                                        modifier = Modifier.weight(1f),
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Switch(
+                                        checked = showCurve && showWhiteTrace,
+                                        onCheckedChange = { checked ->
+                                            showCurve = checked
+                                            showWhiteTrace = checked
+                                        }
+                                    )
+                                }
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        "Show white dots",
+                                        modifier = Modifier.weight(1f),
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Switch(
+                                        checked = showWhiteDots,
+                                        onCheckedChange = { showWhiteDots = it }
+                                    )
+                                }
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        "Auto-center",
+                                        modifier = Modifier.weight(1f),
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Switch(checked = autoCenter, onCheckedChange = { autoCenter = it })
+                                }
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        "Use piano samples",
+                                        modifier = Modifier.weight(1f),
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Switch(
+                                        checked = useSamplePlayer,
+                                        onCheckedChange = { useSamplePlayer = it }
+                                    )
                                 }
                             }
-                        ) {
-                            androidx.compose.material3.Icon(
-                                // Swaps between Play and Pause icons based on state
-                                imageVector = if (isRecordingPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                                contentDescription = if (isRecordingPaused) "Resume" else "Pause",
-                                tint = MaterialTheme.colorScheme.secondary
+                            HorizontalDivider()
+                            Text(
+                                "Smoothing: ${(smoothing * 100).roundToInt()}%",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Slider(
+                                value = smoothing,
+                                onValueChange = { smoothing = it },
+                                valueRange = 0f..1f,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Text(
+                                "Tempo: ${bpm.roundToInt()} BPM",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Slider(
+                                value = bpm,
+                                onValueChange = { bpm = it },
+                                valueRange = 60f..240f,
+                                steps = 180,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            LiveVolumeSlider(
+                                thresholdDb = thresholdDb,
+                                currentVolumeDb = currentVolumeDb,
+                                onThresholdChange = { newDb ->
+                                    thresholdDb = newDb
+                                    engine.setVolumeThreshold(dbToRms(newDb))
+                                }
                             )
                         }
-
-                        // Stop / Save Button
-                        IconButton(
+                        Spacer(modifier = Modifier.height(12.dp))
+                        HorizontalDivider()
+                        Spacer(modifier = Modifier.height(8.dp))
+                        DropdownMenuItem(
+                            text = { Text("Reset to Defaults") },
                             onClick = {
-                                engine.stopRecording()
-                                isRecording = false
-                                isRecordingPaused = false
-                                showSavedDialog = true
+                                smoothing = 0.5f
+                                bpm = 60f
+                                thresholdDb = -34f
+                                engine.setVolumeThreshold(dbToRms(-34f))
+                                whiteKeyWidthDpFloat = 56f
+                                autoCenter = true
+                                showNoteLabels = true
+                                showHorizontalGrid = true
+                                showCurve = true
+                                showWhiteTrace = true
+                                showWhiteDots = true
+                                useSamplePlayer = false
                             }
-                        ) {
-                            androidx.compose.material3.Icon(
-                                imageVector = Icons.Default.Stop,
-                                contentDescription = "Stop and Save",
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("About") },
+                            onClick = {
+                                menuExpandedPortrait = false
+                                navController?.navigate("about")
+                            }
+                        )
                     }
                 }
+
+                PortraitRecordingControls(
+                    isRecording = isRecording,
+                    isRecordingPaused = isRecordingPaused,
+                    onRecordStart = {
+                        currentSessionId = System.currentTimeMillis().toString()
+                        val recordingsDir = File(context.filesDir, "recordings")
+                        recordingsDir.mkdirs()
+                        val audioFile = File(recordingsDir, "session_${currentSessionId}_audio.wav")
+                        val pitchFile = File(recordingsDir, "session_${currentSessionId}_pitch.json")
+                        engine.startRecording(audioFile, pitchFile)
+                        isRecording = true
+                        isRecordingPaused = false
+                    },
+                    onRecordPauseResume = {
+                        if (isRecordingPaused) {
+                            engine.resumeRecording()
+                            isRecordingPaused = false
+                        } else {
+                            engine.pauseRecording()
+                            isRecordingPaused = true
+                        }
+                    },
+                    onRecordStop = {
+                        engine.stopRecording()
+                        isRecording = false
+                        isRecordingPaused = false
+                        showSavedDialog = true
+                    },
+                    onRecordDiscard = { showDiscardDialog = true },
+                    onLibraryClick = { navController?.navigate("recordings") }
+                )
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Piano (horizontal)
             Piano(
                 startMidi = 24, endMidi = 84, onKeyPressed = { _, _ -> },
                 activeMidi = activeMidi, autoCenter = autoCenter, stableMidi = stableMidi,
@@ -836,16 +628,13 @@ fun MainScreen(navController: NavHostController? = null) {
                 rotated = false, blackKeyShiftFraction = 0.5f, useSamplePlayer = useSamplePlayer
             )
 
-// A subtle 1dp line separating the two
             HorizontalDivider(
                 thickness = 1.dp,
                 color = MaterialTheme.colorScheme.outlineVariant
             )
 
-// Graph (horizontal)
             PitchGraphCard(
                 engine = engine,
-                // Removed .padding(6.dp) so it flushes exactly to the divider
                 modifier = Modifier.fillMaxWidth().weight(1f),
                 paused = graphPaused, onTogglePause = { graphPaused = !graphPaused },
                 startMidi = 24, endMidi = 84, whiteKeyWidthDp = whiteKeyWidthDpFloat.dp,
@@ -854,11 +643,9 @@ fun MainScreen(navController: NavHostController? = null) {
                 showCurve = showCurve, rotated = false, blackKeyShiftFraction = 0.5f,
                 smoothing = smoothing, showWhiteTrace = showWhiteTrace, showWhiteDots = showWhiteDots,
                 bpm = bpm
-//                showBars = showBars
             )
             Spacer(modifier = Modifier.height(8.dp))
 
-            // THE FIX: Only attempt to show the ad if consent is resolved and permission is granted
             if (canShowAds) {
                 AdaptiveBannerAd(
                     modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
@@ -869,7 +656,120 @@ fun MainScreen(navController: NavHostController? = null) {
     }
 }
 
-// UPDATED COMPOSABLE: Adaptive Banner Ad Handler
+@Composable
+private fun InfoOverlay(
+    frequency: Float,
+    confidence: Float,
+    activeMidi: Int?,
+    graphPaused: Boolean,
+    onTogglePause: () -> Unit,
+    onOpenSettings: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        val freqText = if (frequency > 0f) "%.1f Hz".format(Locale.US, frequency) else "--"
+        val noteText = if (activeMidi != null) midiToNoteName(activeMidi) else "-"
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(text = noteText, style = MaterialTheme.typography.titleLarge)
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(text = freqText, style = MaterialTheme.typography.bodyMedium)
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = "Conf: %.2f".format(Locale.US, confidence),
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Button(
+                onClick = onTogglePause,
+                modifier = Modifier.height(32.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+            ) {
+                Text(
+                    text = if (graphPaused) "Resume" else "Hold",
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            IconButton(
+                onClick = onOpenSettings,
+                modifier = Modifier.size(32.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Settings,
+                    contentDescription = "Open settings",
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PortraitRecordingControls(
+    isRecording: Boolean,
+    isRecordingPaused: Boolean,
+    onRecordStart: () -> Unit,
+    onRecordPauseResume: () -> Unit,
+    onRecordStop: () -> Unit,
+    onRecordDiscard: () -> Unit,
+    onLibraryClick: () -> Unit
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.padding(horizontal = 8.dp).padding(bottom = 8.dp)
+    ) {
+        IconButton(onClick = onLibraryClick) {
+            Icon(
+                imageVector = Icons.Default.LibraryMusic,
+                contentDescription = "View Saved Recordings",
+                tint = MaterialTheme.colorScheme.primary
+            )
+        }
+
+        if (!isRecording) {
+            Button(
+                onClick = onRecordStart,
+                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary
+                )
+            ) {
+                Text("Record")
+            }
+        } else {
+            IconButton(onClick = onRecordDiscard) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Discard Recording",
+                    tint = MaterialTheme.colorScheme.error
+                )
+            }
+            IconButton(onClick = onRecordPauseResume) {
+                Icon(
+                    imageVector = if (isRecordingPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                    contentDescription = if (isRecordingPaused) "Resume" else "Pause",
+                    tint = MaterialTheme.colorScheme.secondary
+                )
+            }
+            IconButton(onClick = onRecordStop) {
+                Icon(
+                    imageVector = Icons.Default.Stop,
+                    contentDescription = "Stop and Save",
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
+}
+
 @Composable
 fun AdaptiveBannerAd(
     modifier: Modifier = Modifier,
@@ -878,9 +778,6 @@ fun AdaptiveBannerAd(
 ) {
     val config = LocalConfiguration.current
     val adWidth = customWidth ?: config.screenWidthDp
-
-    // The key block ensures that if the adWidth changes (e.g., orientation swap),
-    // Compose will scrap the old AndroidView and trigger the 'factory' block again.
     key(adWidth) {
         AndroidView(
             modifier = modifier,
@@ -892,24 +789,13 @@ fun AdaptiveBannerAd(
                     this.loadAd(AdRequest.Builder().build())
                 }
             },
-            update = {
-                // LEAVE THIS EMPTY.
-                // Do not attempt to call setAdSize() here.
-            },
-            onRelease = { adView ->
-                // Properly clean up resources to prevent memory leaks
-                adView.destroy()
-            }
+            update = {},
+            onRelease = { adView -> adView.destroy() }
         )
     }
 }
 
-/**
- * Compact landscape TopAppBar:
- * - holds only Hold/Resume + Gear. Gear contains grouped toggles first, then sliders (no key width)
- * - app bar height reduced to reclaim vertical space in landscape
- */
-@Suppress("LongParameterList", "LongMethod", "MagicNumber") // refactor later to reduce params/length
+@Suppress("LongParameterList", "LongMethod", "MagicNumber")
 @Composable
 private fun TopAppBarLandscapeCompact(
     detectedFreq: Float,
@@ -936,16 +822,13 @@ private fun TopAppBarLandscapeCompact(
     onThresholdChange: (Float) -> Unit,
     bpm: Float,
     onBpmChange: (Float) -> Unit,
-//    showBars: Boolean,
-//    onToggleShowBars: (Boolean) -> Unit,
     useSamplePlayer: Boolean,
     onToggleUseSamplePlayer: (Boolean) -> Unit,
     showWhiteDots: Boolean,
     onShowWhiteDotsChange: (Boolean) -> Unit,
     onResetDefaults: () -> Unit,
-    canShowAds: Boolean, // NEW PARAMETER
+    canShowAds: Boolean,
     navController: NavHostController? = null,
-    // --- NEW: Recording parameters ---
     isRecording: Boolean,
     isRecordingPaused: Boolean,
     onRecordStart: () -> Unit,
@@ -955,41 +838,25 @@ private fun TopAppBarLandscapeCompact(
     onLibraryClick: () -> Unit
 ) {
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .wrapContentHeight(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
-        ),
+        modifier = Modifier.fillMaxWidth().wrapContentHeight(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
-        // A Box allows the Ad to float in the center while elements pin to the sides
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 6.dp)
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            // LEFT SIDE: Note, Freq, Conf (Multi-line)
-            Column(
-                modifier = Modifier.align(Alignment.CenterStart),
-                verticalArrangement = Arrangement.Center
-            ) {
+            // LEFT SIDE: Note, Freq, Conf
+            Column(verticalArrangement = Arrangement.Center) {
                 val noteText = if (activeMidi != null) midiToNoteName(activeMidi) else "-"
                 val freqText = if (detectedFreq > 0f) "%.1f Hz".format(Locale.US, detectedFreq) else "--"
-
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Reduced from titleMedium to titleSmall
                     Text(text = noteText, style = MaterialTheme.typography.titleSmall)
-
-                    // Reduced gap from 10.dp to 4.dp
                     Spacer(modifier = Modifier.width(4.dp))
-
-                    // Reduced from bodyMedium to bodySmall
                     Text(text = freqText, style = MaterialTheme.typography.bodySmall)
                 }
                 Spacer(modifier = Modifier.height(2.dp))
-
-                // Reduced from bodySmall to labelSmall
                 Text(
                     text = "Conf: %.2f".format(Locale.US, detectedConfidence),
                     style = MaterialTheme.typography.labelSmall
@@ -1000,60 +867,40 @@ private fun TopAppBarLandscapeCompact(
             if (canShowAds) {
                 val config = LocalConfiguration.current
                 val screenWidth = config.screenWidthDp
-
-                // Reserve 130dp for left text, 80dp for right buttons, and 40dp for safety gaps
-                val reservedSpace = 250
+                // Reserve space for left and right columns
+                val reservedSpace = 320
                 val adWidth = screenWidth - reservedSpace
-
-                // Only render if there is enough space (AdMob requires at least 320dp width)
                 if (adWidth >= 320) {
                     AdaptiveBannerAd(
                         adUnitId = BuildConfig.BANNER_AD_UNIT_LANDSCAPE_ID,
-                        customWidth = adWidth, // Passes calculated safe width
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .offset(x = (-20).dp) // <-- NEW: Shifts the ad 20dp left away from the buttons
+                        customWidth = adWidth,
+                        modifier = Modifier.padding(horizontal = 8.dp)
                     )
                 }
             }
 
-            // RIGHT SIDE: Hold button and Settings (Multi-line)
+            // RIGHT SIDE: Controls
             Column(
-                modifier = Modifier.align(Alignment.CenterEnd),
                 horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(6.dp) // Spacing between the two rows
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                // --- TOP ROW: Hold and Settings Side-by-Side ---
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Hold Button
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Button(
                         onClick = onTogglePause,
                         modifier = Modifier.height(32.dp),
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
                     ) {
-                        Text(
-                            if (paused) "Resume" else "Hold",
-                            style = MaterialTheme.typography.labelSmall
-                        )
+                        Text(if (paused) "Resume" else "Hold", style = MaterialTheme.typography.labelSmall)
                     }
-                    // Gear menu placed next to the hold button
                     var menuExpanded by remember { mutableStateOf(false) }
                     Box {
-                        IconButton(
-                            onClick = { menuExpanded = true },
-                            modifier = Modifier.size(28.dp) // Smaller footprint
-                        ) {
+                        IconButton(onClick = { menuExpanded = true }, modifier = Modifier.size(28.dp)) {
                             Icon(
                                 imageVector = Icons.Filled.Settings,
                                 contentDescription = "Graph options",
                                 modifier = Modifier.size(20.dp)
                             )
                         }
-
-                        // DropdownMenu (Unchanged from your previous code)
                         DropdownMenu(
                             expanded = menuExpanded,
                             onDismissRequest = { menuExpanded = false },
@@ -1061,240 +908,71 @@ private fun TopAppBarLandscapeCompact(
                         ) {
                             val landscapeMenuScroll = rememberScrollState()
                             Column(
-                                modifier = Modifier
-                                    .padding(12.dp)
-                                    .heightIn(max = 360.dp)
-                                    .verticalScroll(landscapeMenuScroll),
+                                modifier = Modifier.padding(12.dp).heightIn(max = 360.dp).verticalScroll(landscapeMenuScroll),
                                 verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                // --- TOGGLES ---
-                                Column(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text(
-                                            "Show note labels",
-                                            modifier = Modifier.weight(1f),
-                                            style = MaterialTheme.typography.bodyMedium
-                                        )
-                                        Switch(
-                                            checked = showNoteLabels,
-                                            onCheckedChange = onToggleShowNoteLabels
-                                        )
+                                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                        Text("Show note labels", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                                        Switch(checked = showNoteLabels, onCheckedChange = onToggleShowNoteLabels)
                                     }
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text(
-                                            "Show grid lines",
-                                            modifier = Modifier.weight(1f),
-                                            style = MaterialTheme.typography.bodyMedium
-                                        )
-                                        Switch(
-                                            checked = showHorizontalGrid,
-                                            onCheckedChange = onToggleShowHorizontalGrid
-                                        )
+                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                        Text("Show grid lines", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                                        Switch(checked = showHorizontalGrid, onCheckedChange = onToggleShowHorizontalGrid)
                                     }
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text(
-                                            "Show curve & trace",
-                                            modifier = Modifier.weight(1f),
-                                            style = MaterialTheme.typography.bodyMedium
-                                        )
-                                        Switch(
-                                            checked = showCurve && showWhiteTrace,
-                                            onCheckedChange = { checked ->
-                                                onToggleShowCurve(checked)
-                                                onShowWhiteTraceChange(checked)
-                                            }
-                                        )
+                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                        Text("Show curve & trace", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                                        Switch(checked = showCurve && showWhiteTrace, onCheckedChange = { checked -> onToggleShowCurve(checked); onShowWhiteTraceChange(checked) })
                                     }
-//                                    Row(
-//                                        verticalAlignment = Alignment.CenterVertically,
-//                                        modifier = Modifier.fillMaxWidth()
-//                                    ) {
-//                                        Text(
-//                                            "Show rectangular bars",
-//                                            modifier = Modifier.weight(1f),
-//                                            style = MaterialTheme.typography.bodyMedium
-//                                        )
-//                                        Switch(checked = showBars, onCheckedChange = onToggleShowBars)
-//                                    }
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text(
-                                            "Show white dots",
-                                            modifier = Modifier.weight(1f),
-                                            style = MaterialTheme.typography.bodyMedium
-                                        )
+                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                        Text("Show white dots", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
                                         Switch(checked = showWhiteDots, onCheckedChange = onShowWhiteDotsChange)
                                     }
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text(
-                                            "Auto-center",
-                                            modifier = Modifier.weight(1f),
-                                            style = MaterialTheme.typography.bodyMedium
-                                        )
-                                        Switch(
-                                            checked = autoCenter,
-                                            onCheckedChange = onAutoCenterToggle
-                                        )
+                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                        Text("Auto-center", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                                        Switch(checked = autoCenter, onCheckedChange = onAutoCenterToggle)
                                     }
-
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text(
-                                            "Use piano samples",
-                                            modifier = Modifier.weight(1f),
-                                            style = MaterialTheme.typography.bodyMedium
-                                        )
+                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                        Text("Use piano samples", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
                                         Switch(
                                             checked = useSamplePlayer,
                                             onCheckedChange = onToggleUseSamplePlayer
                                         )
                                     }
                                 }
-
                                 HorizontalDivider()
-
-                                // --- SLIDERS ---
-                                Text(
-                                    "Smoothing: ${(smoothing * 100).roundToInt()}%",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                                Slider(
-                                    value = smoothing,
-                                    onValueChange = onSmoothingChange,
-                                    valueRange = 0f..1f,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-
-                                Text(
-                                    "Tempo: ${bpm.roundToInt()} BPM",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                                Slider(
-                                    value = bpm,
-                                    onValueChange = onBpmChange,
-                                    valueRange = 60f..240f,
-                                    steps = 180,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-
-                                LiveVolumeSlider(
-                                    thresholdDb = thresholdDb,
-                                    currentVolumeDb = currentVolumeDb,
-                                    onThresholdChange = onThresholdChange
-                                )
+                                Text("Smoothing: ${(smoothing * 100).roundToInt()}%", style = MaterialTheme.typography.bodySmall)
+                                Slider(value = smoothing, onValueChange = onSmoothingChange, valueRange = 0f..1f, modifier = Modifier.fillMaxWidth())
+                                Text("Tempo: ${bpm.roundToInt()} BPM", style = MaterialTheme.typography.bodySmall)
+                                Slider(value = bpm, onValueChange = onBpmChange, valueRange = 60f..240f, steps = 180, modifier = Modifier.fillMaxWidth())
+                                LiveVolumeSlider(thresholdDb = thresholdDb, currentVolumeDb = currentVolumeDb, onThresholdChange = onThresholdChange)
                             }
-
                             Spacer(modifier = Modifier.height(12.dp))
                             HorizontalDivider()
                             Spacer(modifier = Modifier.height(8.dp))
-
-                            // DEFAULT BUTTON
-                            DropdownMenuItem(
-                                text = { Text("Reset to Defaults") },
-                                onClick = {
-                                    onResetDefaults()
-                                }
-                            )
-
-                            DropdownMenuItem(
-                                text = { Text("About") },
-                                onClick = {
-                                    menuExpanded = false
-                                    navController?.navigate("about")
-                                }
-                            )
+                            DropdownMenuItem(text = { Text("Reset to Defaults") }, onClick = { onResetDefaults() })
+                            DropdownMenuItem(text = { Text("About") }, onClick = { menuExpanded = false; navController?.navigate("about") })
                         }
                     }
                 }
 
-                // --- BOTTOM ROW: Recording Controls ---
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp) // Reduced spacing here
-                ) {
-                    // Library Button
-                    IconButton(
-                        onClick = onLibraryClick,
-                        modifier = Modifier.size(28.dp) // Reduced button footprint
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.LibraryMusic,
-                            contentDescription = "View Saved Recordings",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp) // Reduced icon size
-                        )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    IconButton(onClick = onLibraryClick, modifier = Modifier.size(28.dp)) {
+                        Icon(imageVector = Icons.Default.LibraryMusic, contentDescription = "View Saved Recordings", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
                     }
-
                     if (!isRecording) {
-                        // Start Record Button
-                        Button(
-                            onClick = onRecordStart,
-                            modifier = Modifier.height(28.dp), // Matched to new icon button size
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary
-                            )
-                        ) {
+                        Button(onClick = onRecordStart, modifier = Modifier.height(28.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)) {
                             Text("Record", style = MaterialTheme.typography.labelSmall)
                         }
                     } else {
-                        // Discard Button
-                        IconButton(
-                            onClick = onRecordDiscard,
-                            modifier = Modifier.size(28.dp) // Reduced button footprint
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Delete,
-                                contentDescription = "Discard Recording",
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(20.dp) // Reduced icon size
-                            )
+                        IconButton(onClick = onRecordDiscard, modifier = Modifier.size(28.dp)) {
+                            Icon(imageVector = Icons.Default.Delete, contentDescription = "Discard Recording", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(20.dp))
                         }
-
-                        // Pause / Resume Button
-                        IconButton(
-                            onClick = onRecordPauseResume,
-                            modifier = Modifier.size(28.dp) // Reduced button footprint
-                        ) {
-                            Icon(
-                                // Swaps between Play and Pause icons based on state
-                                imageVector = if (isRecordingPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                                contentDescription = if (isRecordingPaused) "Resume" else "Pause",
-                                tint = MaterialTheme.colorScheme.secondary,
-                                modifier = Modifier.size(20.dp) // Reduced icon size
-                            )
+                        IconButton(onClick = onRecordPauseResume, modifier = Modifier.size(28.dp)) {
+                            Icon(imageVector = if (isRecordingPaused) Icons.Default.PlayArrow else Icons.Default.Pause, contentDescription = if (isRecordingPaused) "Resume" else "Pause", tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(20.dp))
                         }
-
-                        // Stop / Save Button
-                        IconButton(
-                            onClick = onRecordStop,
-                            modifier = Modifier.size(28.dp) // Reduced button footprint
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Stop,
-                                contentDescription = "Stop and Save",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(20.dp) // Reduced icon size
-                            )
+                        IconButton(onClick = onRecordStop, modifier = Modifier.size(28.dp)) {
+                            Icon(imageVector = Icons.Default.Stop, contentDescription = "Stop and Save", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
                         }
                     }
                 }
@@ -1303,80 +981,27 @@ private fun TopAppBarLandscapeCompact(
     }
 }
 
-// NEW COMPOSABLE: Extracts the visual logic for the actively reacting volume slider
-@Suppress("MagicNumber")
 @Composable
-fun LiveVolumeSlider(
-    thresholdDb: Float,
-    currentVolumeDb: Float,
-    onThresholdChange: (Float) -> Unit
-) {
+fun LiveVolumeSlider(thresholdDb: Float, currentVolumeDb: Float, onThresholdChange: (Float) -> Unit) {
     Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                "Volume threshold: ${thresholdDb.roundToInt()} dB",
-                style = MaterialTheme.typography.bodySmall
-            )
-            // Turns primary color if the live volume is higher than the threshold line
-            Text(
-                "Live: ${currentVolumeDb.roundToInt()} dB",
-                style = MaterialTheme.typography.bodySmall,
-                color = if (currentVolumeDb >= thresholdDb) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                }
-            )
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Volume threshold: ${thresholdDb.roundToInt()} dB", style = MaterialTheme.typography.bodySmall)
+            Text("Live: ${currentVolumeDb.roundToInt()} dB", style = MaterialTheme.typography.bodySmall, color = if (currentVolumeDb >= thresholdDb) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
         }
-
         Spacer(modifier = Modifier.height(6.dp))
-
-        // Ensure bounds mathematically fit the slider bounds
         val fraction = ((currentVolumeDb - (-80f)) / (-6f - (-80f))).coerceIn(0f, 1f)
-
-        LinearProgressIndicator(
-            progress = fraction,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(6.dp)
-                .clip(CircleShape),
-            color = if (currentVolumeDb >= thresholdDb) {
-                MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-            } else {
-                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
-            },
-            trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
-        )
-
-        Slider(
-            value = thresholdDb,
-            onValueChange = onThresholdChange,
-            valueRange = -80f..-6f,
-            steps = 74,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(32.dp)
-        )
+        LinearProgressIndicator(progress = fraction, modifier = Modifier.fillMaxWidth().height(6.dp).clip(CircleShape), color = if (currentVolumeDb >= thresholdDb) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f), trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
+        Slider(value = thresholdDb, onValueChange = onThresholdChange, valueRange = -80f..-6f, steps = 74, modifier = Modifier.fillMaxWidth().height(32.dp))
     }
 }
 
-@Suppress("MagicNumber")
 @Composable
 fun RateAppDialogManager() {
     val context = LocalContext.current
     val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-
-    // Reads from permanent storage to see if we should block the dialog forever
     val neverShowAgain = prefs.getBoolean(PREF_NEVER_SHOW_RATE, false)
-
-    // Tracks if we've already shown it during this specific app session
     var hasShownThisSession by rememberSaveable { mutableStateOf(false) }
     var showDialog by remember { mutableStateOf(false) }
-
-    // Trigger the dialog logic (you could also tie this to a specific button click or event)
     LaunchedEffect(Unit) {
         if (!neverShowAgain && !hasShownThisSession) {
             delay(30000)
@@ -1384,55 +1009,16 @@ fun RateAppDialogManager() {
             hasShownThisSession = true
         }
     }
-
     if (showDialog) {
         AlertDialog(
-            onDismissRequest = {
-                // Treating tapping outside the dialog as "Ask Me Later"
-                showDialog = false
-            },
+            onDismissRequest = { showDialog = false },
             title = { Text("Enjoying the App?") },
-            text = {
-                Text(
-                    "If you like using this app, " +
-                        "would you mind taking a moment to rate it? It really helps out!"
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        // Mark as never show again and open Play Store
-                        prefs.edit().putBoolean(PREF_NEVER_SHOW_RATE, true).apply()
-                        showDialog = false
-                        openPlayStore(context)
-                    }
-                ) {
-                    Text("Rate Us")
-                }
-            },
+            text = { Text("If you like using this app, would you mind taking a moment to rate it? It really helps out!") },
+            confirmButton = { TextButton(onClick = { prefs.edit().putBoolean(PREF_NEVER_SHOW_RATE, true).apply(); showDialog = false; openPlayStore(context) }) { Text("Rate Us") } },
             dismissButton = {
-                // Using a Row to pack two buttons into the dismiss area
-                Row(
-                    modifier = Modifier.padding(end = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    TextButton(
-                        onClick = {
-                            showDialog = false // Will show again next session
-                        }
-                    ) {
-                        Text("Ask Me Later", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-
-                    TextButton(
-                        onClick = {
-                            // Mark as never show again and dismiss
-                            prefs.edit().putBoolean(PREF_NEVER_SHOW_RATE, true).apply()
-                            showDialog = false
-                        }
-                    ) {
-                        Text("No Thanks", color = MaterialTheme.colorScheme.error)
-                    }
+                Row(modifier = Modifier.padding(end = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = { showDialog = false }) { Text("Ask Me Later", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    TextButton(onClick = { prefs.edit().putBoolean(PREF_NEVER_SHOW_RATE, true).apply(); showDialog = false }) { Text("No Thanks", color = MaterialTheme.colorScheme.error) }
                 }
             }
         )

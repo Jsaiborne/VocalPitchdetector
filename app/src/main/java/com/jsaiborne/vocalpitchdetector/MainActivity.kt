@@ -94,69 +94,9 @@ class MainActivity : ComponentActivity() {
                                 val audioFile = File(recordingsDir, "session_${sessionId}_audio.wav")
                                 val pitchFile = File(recordingsDir, "session_${sessionId}_pitch.json")
 
-                                val pitchDataList = mutableListOf<RecordedPitchPoint>()
-                                val stableMarkersList = mutableListOf<RecordedPitchPoint>()
-
-                                if (pitchFile.exists()) {
-                                    try {
-                                        val jsonString = pitchFile.readText().trimStart()
-
-                                        if (jsonString.startsWith("[")) {
-                                            // --- OLD FORMAT (Legacy support for previous recordings) ---
-                                            val jsonArray = JSONArray(jsonString)
-                                            for (i in 0 until jsonArray.length()) {
-                                                val obj = jsonArray.getJSONObject(i)
-                                                pitchDataList.add(
-                                                    RecordedPitchPoint(
-                                                        timestampMs = obj.getLong("timestampMs"),
-                                                        frequencyHz = obj.getDouble("frequencyHz").toFloat(),
-                                                        midiNote = obj.getInt("midiNote")
-                                                    )
-                                                )
-                                            }
-                                        } else if (jsonString.startsWith("{")) {
-                                            // --- NEW FORMAT (Includes stable markers) ---
-                                            val rootObj = JSONObject(jsonString)
-
-                                            // Extract Pitch Data
-                                            if (rootObj.has("pitchData")) {
-                                                val pitchArray = rootObj.getJSONArray("pitchData")
-                                                for (i in 0 until pitchArray.length()) {
-                                                    val obj = pitchArray.getJSONObject(i)
-                                                    pitchDataList.add(
-                                                        RecordedPitchPoint(
-                                                            timestampMs = obj.getLong("timestampMs"),
-                                                            frequencyHz = obj.getDouble("frequencyHz").toFloat(),
-                                                            midiNote = obj.getInt("midiNote")
-                                                        )
-                                                    )
-                                                }
-                                            }
-
-                                            // Extract Stable Markers
-                                            if (rootObj.has("stableNotes")) {
-                                                val stableArray = rootObj.getJSONArray("stableNotes")
-                                                for (i in 0 until stableArray.length()) {
-                                                    val obj = stableArray.getJSONObject(i)
-                                                    stableMarkersList.add(
-                                                        RecordedPitchPoint(
-                                                            timestampMs = obj.getLong("timestampMs"),
-                                                            frequencyHz = obj.getDouble("frequencyHz").toFloat(),
-                                                            midiNote = obj.getInt("midiNote")
-                                                        )
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    } catch (e: Exception) {
-                                        Log.e("Playback", "Failed to parse pitch data JSON", e)
-                                    }
-                                }
-
                                 PlaybackScreen(
                                     audioFile = audioFile,
-                                    pitchDataList = pitchDataList,
-                                    stableMarkersList = stableMarkersList,
+                                    pitchFile = pitchFile,
                                     onNavigateUp = { navController.navigateUp() }
                                 )
                             }

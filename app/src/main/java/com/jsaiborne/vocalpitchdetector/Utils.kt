@@ -39,40 +39,36 @@ fun rmsToDb(rms: Float, minDb: Float = -80f): Float {
 
 fun buildSmoothedPath(points: List<Offset>, smoothing: Float): Path {
     val path = Path()
-    if (points.isEmpty()) return path
-    if (points.size == 1) {
-        path.moveTo(points[0].x, points[0].y); return path
+    val size = points.size
+    if (size == 0) return path
+    if (size == 1) {
+        path.moveTo(points[0].x, points[0].y)
+        return path
     }
     if (smoothing <= 0.001f) {
         path.moveTo(points[0].x, points[0].y)
-        for (i in 1 until points.size) path.lineTo(points[i].x, points[i].y)
+        for (i in 1 until size) path.lineTo(points[i].x, points[i].y)
         return path
     }
 
-    val t = smoothing
-    val factor = t / 6f
-
-    val pts = mutableListOf<Offset>()
-    pts.add(points.first())
-    pts.addAll(points)
-    pts.add(points.last())
+    val factor = smoothing / 6f
 
     path.moveTo(points[0].x, points[0].y)
-    for (i in 1 until pts.size - 2) {
-        val p0 = pts[i - 1]
-        val p1 = pts[i]
-        val p2 = pts[i + 1]
-        val p3 = pts[i + 2]
+    for (i in 0 until size - 1) {
+        val p1 = points[i]
+        val p2 = points[i + 1]
 
-        val cp1 = Offset(
-            x = p1.x + (p2.x - p0.x) * factor,
-            y = p1.y + (p2.y - p0.y) * factor
-        )
-        val cp2 = Offset(
-            x = p2.x - (p3.x - p1.x) * factor,
-            y = p2.y - (p3.y - p1.y) * factor
-        )
-        path.cubicTo(cp1.x, cp1.y, cp2.x, cp2.y, p2.x, p2.y)
+        // p0 is points[i-1] or points[i] if at start
+        val p0 = if (i > 0) points[i - 1] else p1
+        // p3 is points[i+2] or points[i+1] if at end
+        val p3 = if (i < size - 2) points[i + 2] else p2
+
+        val cp1x = p1.x + (p2.x - p0.x) * factor
+        val cp1y = p1.y + (p2.y - p0.y) * factor
+        val cp2x = p2.x - (p3.x - p1.x) * factor
+        val cp2y = p2.y - (p3.y - p1.y) * factor
+
+        path.cubicTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y)
     }
     return path
 }

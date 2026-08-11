@@ -212,6 +212,45 @@ fun PitchGraphHorizontal(
     val contentWidthPx = whiteCount * whiteKeyWidthPx
     val contentWidthDp = with(density) { contentWidthPx.toDp() }
 
+    val padLeft = 6f
+    val alignPx = with(density) { alignmentOffsetDp.toPx() }
+
+    val midiX = remember(startMidi, endMidi, whiteKeyWidthPx, alignPx, blackKeyShiftFraction) {
+        val count = endMidi - startMidi + 1
+        val array = FloatArray(count)
+
+        val whiteList = mutableListOf<Int>()
+        for (m in startMidi..endMidi) if (!midiToNoteNameLocal(m).contains("#")) whiteList.add(m)
+        val whiteIndexMap = mutableMapOf<Int, Int>()
+        whiteList.forEachIndexed { idx, midi -> whiteIndexMap[midi] = idx }
+
+        val blackLeftIndexMap = mutableMapOf<Int, Int>()
+        var whiteIdxCounter = 0
+        for (m in startMidi..endMidi) {
+            val name = midiToNoteNameLocal(m)
+            if (name.contains("#")) {
+                blackLeftIndexMap[m] = maxOf(0, whiteIdxCounter - 1)
+            } else {
+                whiteIdxCounter++
+            }
+        }
+
+        for (m in startMidi..endMidi) {
+            val idx = m - startMidi
+            val x = if (whiteIndexMap.containsKey(m)) {
+                val widx = whiteIndexMap[m]!!
+                padLeft + (widx + 0.5f) * whiteKeyWidthPx + alignPx
+            } else {
+                val left = blackLeftIndexMap[m] ?: 0
+                val center = (left + 0.5f) * whiteKeyWidthPx
+                val shiftPx = whiteKeyWidthPx * blackKeyShiftFraction
+                padLeft + center + shiftPx + alignPx
+            }
+            array[idx] = x
+        }
+        array
+    }
+
     val sState = scrollState ?: rememberScrollState()
 
     // Define colors for the graph background
@@ -243,47 +282,12 @@ fun PitchGraphHorizontal(
 
                 val padTop = 12f
                 val padBottom = 20f
-                val padLeft = 6f
                 val padRight = 6f
                 val innerH = h - padTop - padBottom
                 val innerW = w - padLeft - padRight
 
                 val minMidi = startMidi
                 val maxMidi = endMidi
-
-                val whiteList = mutableListOf<Int>()
-                for (m in minMidi..maxMidi) if (!midiToNoteNameLocal(m).contains("#")) whiteList.add(m)
-                val whiteIndexMap = mutableMapOf<Int, Int>()
-                whiteList.forEachIndexed { idx, midi -> whiteIndexMap[midi] = idx }
-
-                val blackLeftIndexMap = mutableMapOf<Int, Int>()
-                var whiteIdxCounter = 0
-                for (m in minMidi..maxMidi) {
-                    val name = midiToNoteNameLocal(m)
-                    if (name.contains("#")) {
-                        blackLeftIndexMap[m] = maxOf(0, whiteIdxCounter - 1)
-                    } else {
-                        whiteIdxCounter++
-                    }
-                }
-
-                val alignPx = with(density) { alignmentOffsetDp.toPx() }
-
-                val midiCount = maxMidi - minMidi + 1
-                val midiX = FloatArray(midiCount)
-                for (m in minMidi..maxMidi) {
-                    val idx = m - minMidi
-                    val x = if (whiteIndexMap.containsKey(m)) {
-                        val widx = whiteIndexMap[m]!!
-                        padLeft + (widx + 0.5f) * whiteKeyWidthPx + alignPx
-                    } else {
-                        val left = blackLeftIndexMap[m] ?: 0
-                        val center = (left + 0.5f) * whiteKeyWidthPx
-                        val shiftPx = whiteKeyWidthPx * blackKeyShiftFraction
-                        padLeft + center + shiftPx + alignPx
-                    }
-                    midiX[idx] = x
-                }
 
                 fun xForMidiFloat(midiFloat: Float): Float {
                     if (midiFloat.isNaN()) return -10000f
@@ -692,6 +696,46 @@ fun PitchGraphVertical(
     val contentPitchPx = whiteCount * keyThicknessPx
     val contentPitchDp = with(density) { contentPitchPx.toDp() }
 
+    val padTop = 12f
+    val alignPx = with(density) { alignmentOffsetDp.toPx() }
+
+    val midiY = remember(startMidi, endMidi, keyThicknessPx, alignPx, blackKeyShiftFraction) {
+        val count = endMidi - startMidi + 1
+        val array = FloatArray(count)
+
+        val whiteList = mutableListOf<Int>()
+        for (m in startMidi..endMidi) if (!midiToNoteNameLocal(m).contains("#")) whiteList.add(m)
+        val whiteIndexMap = mutableMapOf<Int, Int>()
+        whiteList.forEachIndexed { idx, midi -> whiteIndexMap[midi] = (whiteCount - 1 - idx) }
+
+        val blackLeftIndexMap = mutableMapOf<Int, Int>()
+        var whiteIdxCounter = 0
+        for (m in startMidi..endMidi) {
+            val name = midiToNoteNameLocal(m)
+            if (name.contains("#")) {
+                blackLeftIndexMap[m] = maxOf(0, whiteIdxCounter - 1)
+            } else {
+                whiteIdxCounter++
+            }
+        }
+
+        for (m in startMidi..endMidi) {
+            val idx = m - startMidi
+            val y = if (whiteIndexMap.containsKey(m)) {
+                val widx = whiteIndexMap[m]!!
+                padTop + (widx + 0.5f) * keyThicknessPx + alignPx
+            } else {
+                val left = blackLeftIndexMap[m] ?: 0
+                val reversedLeft = whiteCount - 1 - left
+                val center = (reversedLeft + 0.5f) * keyThicknessPx
+                val shiftPx = keyThicknessPx * blackKeyShiftFraction
+                padTop + center - shiftPx + alignPx
+            }
+            array[idx] = y
+        }
+        array
+    }
+
     val sState = scrollState ?: rememberScrollState()
 
     val bgLeftColor = Color(0xFF081226)
@@ -717,7 +761,6 @@ fun PitchGraphVertical(
                 val w = size.width
                 val h = size.height
 
-                val padTop = 12f
                 val padBottom = 20f
                 val padLeft = 12f
                 val padRight = 12f
@@ -726,41 +769,6 @@ fun PitchGraphVertical(
 
                 val minMidi = startMidi
                 val maxMidi = endMidi
-
-                val whiteList = mutableListOf<Int>()
-                for (m in minMidi..maxMidi) if (!midiToNoteNameLocal(m).contains("#")) whiteList.add(m)
-                val whiteIndexMap = mutableMapOf<Int, Int>()
-                whiteList.forEachIndexed { idx, midi -> whiteIndexMap[midi] = (whiteCount - 1 - idx) }
-
-                val blackLeftIndexMap = mutableMapOf<Int, Int>()
-                var whiteIdxCounter = 0
-                for (m in minMidi..maxMidi) {
-                    val name = midiToNoteNameLocal(m)
-                    if (name.contains("#")) {
-                        blackLeftIndexMap[m] = maxOf(0, whiteIdxCounter - 1)
-                    } else {
-                        whiteIdxCounter++
-                    }
-                }
-
-                val alignPx = with(density) { alignmentOffsetDp.toPx() }
-
-                val midiCount = maxMidi - minMidi + 1
-                val midiY = FloatArray(midiCount)
-                for (m in minMidi..maxMidi) {
-                    val idx = m - minMidi
-                    val y = if (whiteIndexMap.containsKey(m)) {
-                        val widx = whiteIndexMap[m]!!
-                        padTop + (widx + 0.5f) * keyThicknessPx + alignPx
-                    } else {
-                        val left = blackLeftIndexMap[m] ?: 0
-                        val reversedLeft = whiteCount - 1 - left
-                        val center = (reversedLeft + 0.5f) * keyThicknessPx
-                        val shiftPx = keyThicknessPx * blackKeyShiftFraction
-                        padTop + center - shiftPx + alignPx
-                    }
-                    midiY[idx] = y
-                }
 
                 fun yForMidiFloat(midiFloat: Float): Float {
                     if (midiFloat.isNaN()) return -10000f

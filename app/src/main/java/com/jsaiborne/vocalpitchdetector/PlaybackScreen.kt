@@ -56,12 +56,18 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewModelScope
 import com.google.android.gms.ads.MobileAds
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlinx.coroutines.delay
 
 // Data model for the recorded points.
 data class RecordedPitchPoint(
@@ -83,18 +89,19 @@ class PlaybackViewModel : ViewModel() {
         private set
     var stableMarkers by mutableStateOf<List<RecordedPitchPoint>>(emptyList())
         private set
+    var sessionTitle by mutableStateOf("")
+        private set
+    var sessionDate by mutableStateOf("")
+        private set
 
     fun loadSession(
-        audioPath: String,
-        loadedPitchData: List<RecordedPitchPoint>,
-        loadedStableMarkers: List<RecordedPitchPoint>
+        context: Context,
+        audioFile: File,
+        pitchFile: File
     ) {
-        pitchData = loadedPitchData
-        stableMarkers = loadedStableMarkers
-
         mediaPlayer?.release()
         mediaPlayer = MediaPlayer().apply {
-            setDataSource(audioPath)
+            setDataSource(audioFile.absolutePath)
             prepare()
             totalDurationMs = duration.toLong()
             setOnCompletionListener {
@@ -103,6 +110,110 @@ class PlaybackViewModel : ViewModel() {
                 seekTo(0)
             }
         }
+
+        viewModelScope.launch {
+            val (data, markers) = parsePitchData(pitchFile)
+            pitchData = data
+            stableMarkers = markers
+
+            val (title, date) = calculateMetadata(context, audioFile)
+            sessionTitle = title
+            sessionDate = date
+        }
+    }
+
+    private suspend fun calculateMetadata(context: Context, audioFile: File): Pair<String, String> = withContext(Dispatchers.IO) {
+        val dir = audioFile.parentFile
+        val idStr = audioFile.name.substringAfter("session_").substringBefore("_audio.wav")
+        val currentTimestamp = idStr.toLongOrNull() ?: audioFile.lastModified()
+
+        var sessionNum = 1
+        if (dir != null && dir.exists()) {
+            val allAudioFiles = dir.listFiles()?.filter {
+                it.name.startsWith("session_") && it.name.endsWith("_audio.wav")
+            } ?: emptyList()
+
+            val sortedTimestamps = allAudioFiles.map { f ->
+                val id = f.name.substringAfter("session_").substringBefore("_audio.wav")
+                id.toLongOrNull() ?: f.lastModified()
+            }.sorted()
+
+            val index = sortedTimestamps.indexOf(currentTimestamp)
+            if (index != -1) {
+                sessionNum = index + 1
+            }
+        }
+
+        val prefs = context.getSharedPreferences("recording_names", Context.MODE_PRIVATE)
+        val customName = prefs.getString(idStr, null)
+        val titleName = if (!customName.isNullOrBlank()) customName else "Vocal Session $sessionNum"
+
+        val formatter = SimpleDateFormat("MMM dd, yyyy • HH:mm", Locale.getDefault())
+        val dateStr = formatter.format(Date(currentTimestamp))
+
+        Pair(titleName, dateStr)
+    }
+
+    private suspend fun parsePitchData(pitchFile: File): Pair<List<RecordedPitchPoint>, List<RecordedPitchPoint>> = withContext(Dispatchers.IO) {
+        val pitchDataList = mutableListOf<RecordedPitchPoint>()
+        val stableMarkersList = mutableListOf<RecordedPitchPoint>()
+
+        if (pitchFile.exists()) {
+            try {
+                val jsonString = pitchFile.readText().trimStart()
+
+                if (jsonString.startsWith("[")) {
+                    // --- OLD FORMAT (Legacy support for previous recordings) ---
+                    val jsonArray = JSONArray(jsonString)
+                    for (i in 0 until jsonArray.length()) {
+                        val obj = jsonArray.getJSONObject(i)
+                        pitchDataList.add(
+                            RecordedPitchPoint(
+                                timestampMs = obj.getLong("timestampMs"),
+                                frequencyHz = obj.getDouble("frequencyHz").toFloat(),
+                                midiNote = obj.getInt("midiNote")
+                            )
+                        )
+                    }
+                } else if (jsonString.startsWith("{")) {
+                    // --- NEW FORMAT (Includes stable markers) ---
+                    val rootObj = JSONObject(jsonString)
+
+                    // Extract Pitch Data
+                    if (rootObj.has("pitchData")) {
+                        val pitchArray = rootObj.getJSONArray("pitchData")
+                        for (i in 0 until pitchArray.length()) {
+                            val obj = pitchArray.getJSONObject(i)
+                            pitchDataList.add(
+                                RecordedPitchPoint(
+                                    timestampMs = obj.getLong("timestampMs"),
+                                    frequencyHz = obj.getDouble("frequencyHz").toFloat(),
+                                    midiNote = obj.getInt("midiNote")
+                                )
+                            )
+                        }
+                    }
+
+                    // Extract Stable Markers
+                    if (rootObj.has("stableNotes")) {
+                        val stableArray = rootObj.getJSONArray("stableNotes")
+                        for (i in 0 until stableArray.length()) {
+                            val obj = stableArray.getJSONObject(i)
+                            stableMarkersList.add(
+                                RecordedPitchPoint(
+                                    timestampMs = obj.getLong("timestampMs"),
+                                    frequencyHz = obj.getDouble("frequencyHz").toFloat(),
+                                    midiNote = obj.getInt("midiNote")
+                                )
+                            )
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("PlaybackViewModel", "Failed to parse pitch data JSON", e)
+            }
+        }
+        Pair(pitchDataList, stableMarkersList)
     }
 
     fun togglePlayPause() {
@@ -151,13 +262,13 @@ class PlaybackViewModel : ViewModel() {
 @Composable
 fun PlaybackScreen(
     audioFile: File,
-    pitchDataList: List<RecordedPitchPoint>,
-    stableMarkersList: List<RecordedPitchPoint>,
+    pitchFile: File,
     onNavigateUp: () -> Unit,
     viewModel: PlaybackViewModel = viewModel()
 ) {
+    val context = LocalContext.current
     DisposableEffect(audioFile.absolutePath) {
-        viewModel.loadSession(audioFile.absolutePath, pitchDataList, stableMarkersList)
+        viewModel.loadSession(context, audioFile, pitchFile)
         onDispose {
             if (viewModel.isPlaying) viewModel.pause()
         }
@@ -182,42 +293,6 @@ fun PlaybackScreen(
             delay(16L)
         }
     }
-
-    // --- Dynamically calculate Session Title & Date ---
-    val context = LocalContext.current
-    val sessionInfo = remember(audioFile.absolutePath) {
-        val dir = audioFile.parentFile
-        val idStr = audioFile.name.substringAfter("session_").substringBefore("_audio.wav")
-        val currentTimestamp = idStr.toLongOrNull() ?: audioFile.lastModified()
-
-        var sessionNum = 1
-        if (dir != null && dir.exists()) {
-            val allAudioFiles = dir.listFiles()?.filter {
-                it.name.startsWith("session_") && it.name.endsWith("_audio.wav")
-            } ?: emptyList()
-
-            val sortedTimestamps = allAudioFiles.map { f ->
-                val id = f.name.substringAfter("session_").substringBefore("_audio.wav")
-                id.toLongOrNull() ?: f.lastModified()
-            }.sorted()
-
-            val index = sortedTimestamps.indexOf(currentTimestamp)
-            if (index != -1) {
-                sessionNum = index + 1
-            }
-        }
-
-        val prefs = context.getSharedPreferences("recording_names", Context.MODE_PRIVATE)
-        val customName = prefs.getString(idStr, null)
-        val titleName = if (!customName.isNullOrBlank()) customName else "Vocal Session $sessionNum"
-
-        val formatter = SimpleDateFormat("MMM dd, yyyy • HH:mm", Locale.getDefault())
-        val dateStr = formatter.format(Date(currentTimestamp))
-
-        Pair(titleName, dateStr)
-    }
-    val (sessionTitle, _) = sessionInfo
-    // ---------------------------------------------------
 
     // --- Ads Setup ---
     val consentManager = remember { ConsentManager(context as Activity) }
@@ -252,7 +327,7 @@ fun PlaybackScreen(
                     title = {
                         Column(verticalArrangement = Arrangement.Center) {
                             Text(
-                                text = sessionTitle,
+                                text = viewModel.sessionTitle,
                                 style = MaterialTheme.typography.titleSmall,
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
@@ -320,7 +395,7 @@ fun PlaybackScreen(
             } else {
                 // Custom landscape TopAppBar to hold the ad
                 TopAppBarPlaybackLandscape(
-                    sessionTitle = sessionTitle,
+                    sessionTitle = viewModel.sessionTitle,
                     onNavigateUp = onNavigateUp,
                     canShowAds = canShowAds,
                     showSettingsMenu = showSettingsMenu,

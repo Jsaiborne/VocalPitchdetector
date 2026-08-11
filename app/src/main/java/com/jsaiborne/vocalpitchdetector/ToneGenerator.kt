@@ -234,22 +234,28 @@ object ToneGenerator {
         stopStatic()
         // signal streaming thread to begin fade-out
         streaming = false
-        try {
-            streamThread?.join(THREAD_JOIN_TIMEOUT_MS) // wait briefly for fade-out to finish
-        } catch (_: Exception) {
-        }
+        val threadToJoin = streamThread
         streamThread = null
-        // In case thread didn't finish for some reason, try to stop/release the track
-        streamTrack?.let {
-            try {
-                it.stop()
-            } catch (_: Exception) {
-            }
-            try {
-                it.release()
-            } catch (_: Exception) {
+
+        if (threadToJoin != null) {
+            thread(start = true) {
+                try {
+                    threadToJoin.join(THREAD_JOIN_TIMEOUT_MS) // wait briefly for fade-out to finish
+                } catch (_: Exception) {
+                }
+                // In case thread didn't finish for some reason, try to stop/release the track
+                streamTrack?.let {
+                    try {
+                        it.stop()
+                    } catch (_: Exception) {
+                    }
+                    try {
+                        it.release()
+                    } catch (_: Exception) {
+                    }
+                }
+                streamTrack = null
             }
         }
-        streamTrack = null
     }
 }

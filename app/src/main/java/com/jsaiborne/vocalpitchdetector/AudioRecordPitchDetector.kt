@@ -7,10 +7,13 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.util.Log
+import java.io.BufferedOutputStream
 import java.io.DataOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -39,6 +42,9 @@ class AudioRecordPitchDetector(
     private val isDiskRecordingPaused = AtomicBoolean(false)
     private var recordedBytes = 0
     private var currentOutputFile: File? = null
+
+    // Reuse a byte buffer for writing PCM to disk
+    private val byteBuffer = ByteBuffer.allocate(bufferSize * 2).order(ByteOrder.LITTLE_ENDIAN)
 
     private val yin = YinPitchDetector(
         sampleRate = sampleRate,
@@ -103,10 +109,11 @@ class AudioRecordPitchDetector(
                     // --- NEW: Write raw PCM to disk if recording is active ---
                     if (isRecordingToDisk.get() && !isDiskRecordingPaused.get()) {
                         try {
+                            byteBuffer.clear()
                             for (i in 0 until read) {
-                                // WAV expects Little Endian, AudioBuffer gives Big Endian natively
-                                recordingStream?.writeShort(java.lang.Short.reverseBytes(audioBuffer[i]).toInt())
+                                byteBuffer.putShort(audioBuffer[i])
                             }
+                            recordingStream?.write(byteBuffer.array(), 0, read * 2)
                             recordedBytes += read * 2 // 2 bytes per Short
                         } catch (e: Exception) {
                             Log.e("AudioRecordPitch", "Failed to write audio stream", e)
@@ -162,7 +169,7 @@ class AudioRecordPitchDetector(
         try {
             currentOutputFile = outputFile
             recordedBytes = 0
-            recordingStream = DataOutputStream(FileOutputStream(outputFile))
+            recordingStream = DataOutputStream(BufferedOutputStream(FileOutputStream(outputFile)))
             // Write 44 bytes of empty space to hold the WAV header later
             recordingStream?.write(ByteArray(44))
             isRecordingToDisk.set(true)
@@ -222,14 +229,21 @@ class AudioRecordPitchDetector(
     }
     // --------------------------------------
 
-    fun stop() {
+    fun stop(onStopped: (() -> Unit)? = null) {
         running.set(false)
-        workerThread?.join()
-        workerThread = null
-
-        audioRecord?.stop()
-        audioRecord?.release()
-        audioRecord = null
+        Thread {
+            try {
+                workerThread?.join()
+            } catch (e: Exception) {
+                Log.e("AudioRecordPitch", "Error joining worker thread", e)
+            } finally {
+                workerThread = null
+                audioRecord?.stop()
+                audioRecord?.release()
+                audioRecord = null
+                onStopped?.invoke()
+            }
+        }.start()
     }
 
     private fun resetPitchState(onPitchDetected: (Float, Float) -> Unit) {

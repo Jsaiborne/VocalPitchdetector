@@ -93,15 +93,12 @@ class PitchEngine(
 
             start(
                 onPitchDetected = { freqHz, confidence ->
-                    scope.launch {
-                        _state.emit(
-                            PitchState(
-                                frequency = freqHz,
-                                confidence = confidence,
-                                timestampMs = System.currentTimeMillis()
-                            )
-                        )
-                    }
+                    _state.value = PitchState(
+                        frequency = freqHz,
+                        confidence = confidence,
+                        timestampMs = System.currentTimeMillis()
+                    )
+
                     @Suppress("ComplexCondition")
                     if (isRecordingSession && !isRecordingPaused && freqHz > 0 &&
                         confidence >= pitchConfidenceThreshold
@@ -123,15 +120,13 @@ class PitchEngine(
                 },
                 onStableNote = { midiNote, frequencyHz ->
                     val now = System.currentTimeMillis()
-                    scope.launch {
-                        _stableNotes.emit(
-                            StableNote(
-                                midi = midiNote,
-                                frequency = frequencyHz,
-                                timestampMs = now
-                            )
+                    _stableNotes.tryEmit(
+                        StableNote(
+                            midi = midiNote,
+                            frequency = frequencyHz,
+                            timestampMs = now
                         )
-                    }
+                    )
 
                     if (isRecordingSession && !isRecordingPaused) {
                         val relativeTimeMs = now - recordingStartTimeMs - accumulatedPauseTimeMs
