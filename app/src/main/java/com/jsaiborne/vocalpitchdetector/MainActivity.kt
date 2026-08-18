@@ -21,8 +21,6 @@ import com.google.android.gms.ads.MobileAds
 import com.jsaiborne.vocalpitchdetector.ui.theme.vocalPitchDetectorTheme
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
-import org.json.JSONArray
-import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
 

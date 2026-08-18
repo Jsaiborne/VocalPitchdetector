@@ -195,7 +195,7 @@ class PitchEngine(
                 rootObj.put("stableNotes", stableArray)
 
                 pitchFile.writeText(rootObj.toString())
-            } catch (e: Exception) {
+            } catch (e: java.io.IOException) {
                 e.printStackTrace()
             } finally {
                 currentPitchFile = null
@@ -218,7 +218,7 @@ class PitchEngine(
         try {
             currentAudioFile?.let { if (it.exists()) it.delete() }
             currentPitchFile?.let { if (it.exists()) it.delete() }
-        } catch (e: Exception) {
+        } catch (e: java.io.IOException) {
             e.printStackTrace()
         } finally {
             // Reset state

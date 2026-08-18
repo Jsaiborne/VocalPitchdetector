@@ -55,19 +55,19 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.android.gms.ads.MobileAds
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 // Data model for the recorded points.
 data class RecordedPitchPoint(
@@ -122,9 +122,13 @@ class PlaybackViewModel : ViewModel() {
         }
     }
 
-    private suspend fun calculateMetadata(context: Context, audioFile: File): Pair<String, String> = withContext(Dispatchers.IO) {
+    private suspend fun calculateMetadata(
+        context: Context,
+        audioFile: File
+    ): Pair<String, String> = withContext(Dispatchers.IO) {
         val dir = audioFile.parentFile
-        val idStr = audioFile.name.substringAfter("session_").substringBefore("_audio.wav")
+        val name = audioFile.name
+        val idStr = name.substringAfter("session_").substringBefore("_audio.wav")
         val currentTimestamp = idStr.toLongOrNull() ?: audioFile.lastModified()
 
         var sessionNum = 1
@@ -134,7 +138,8 @@ class PlaybackViewModel : ViewModel() {
             } ?: emptyList()
 
             val sortedTimestamps = allAudioFiles.map { f ->
-                val id = f.name.substringAfter("session_").substringBefore("_audio.wav")
+                val id = f.name.substringAfter("session_")
+                    .substringBefore("_audio.wav")
                 id.toLongOrNull() ?: f.lastModified()
             }.sorted()
 
@@ -146,7 +151,11 @@ class PlaybackViewModel : ViewModel() {
 
         val prefs = context.getSharedPreferences("recording_names", Context.MODE_PRIVATE)
         val customName = prefs.getString(idStr, null)
-        val titleName = if (!customName.isNullOrBlank()) customName else "Vocal Session $sessionNum"
+        val titleName = if (!customName.isNullOrBlank()) {
+            customName
+        } else {
+            "Vocal Session $sessionNum"
+        }
 
         val formatter = SimpleDateFormat("MMM dd, yyyy • HH:mm", Locale.getDefault())
         val dateStr = formatter.format(Date(currentTimestamp))
@@ -154,7 +163,9 @@ class PlaybackViewModel : ViewModel() {
         Pair(titleName, dateStr)
     }
 
-    private suspend fun parsePitchData(pitchFile: File): Pair<List<RecordedPitchPoint>, List<RecordedPitchPoint>> = withContext(Dispatchers.IO) {
+    private suspend fun parsePitchData(
+        pitchFile: File
+    ): Pair<List<RecordedPitchPoint>, List<RecordedPitchPoint>> = withContext(Dispatchers.IO) {
         val pitchDataList = mutableListOf<RecordedPitchPoint>()
         val stableMarkersList = mutableListOf<RecordedPitchPoint>()
 
@@ -209,8 +220,10 @@ class PlaybackViewModel : ViewModel() {
                         }
                     }
                 }
-            } catch (e: Exception) {
-                android.util.Log.e("PlaybackViewModel", "Failed to parse pitch data JSON", e)
+            } catch (e: org.json.JSONException) {
+                android.util.Log.e("PlaybackViewModel", "Failed to parse pitch JSON", e)
+            } catch (e: java.io.IOException) {
+                android.util.Log.e("PlaybackViewModel", "Failed to read pitch file", e)
             }
         }
         Pair(pitchDataList, stableMarkersList)
@@ -423,7 +436,9 @@ fun PlaybackScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                )
             ) {
                 if (isPortrait) {
                     PortraitPlaybackPitchGraph(
@@ -451,7 +466,12 @@ fun PlaybackScreen(
             // --- Compact Controls Section ---
             val formatTime = { ms: Long ->
                 val totalSeconds = ms / 1000
-                String.format(java.util.Locale.US, "%d:%02d", totalSeconds / 60, totalSeconds % 60)
+                String.format(
+                    java.util.Locale.US,
+                    "%d:%02d",
+                    totalSeconds / 60,
+                    totalSeconds % 60
+                )
             }
 
             Row(
@@ -463,7 +483,11 @@ fun PlaybackScreen(
             ) {
                 IconButton(onClick = { viewModel.togglePlayPause() }) {
                     Icon(
-                        imageVector = if (viewModel.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        imageVector = if (viewModel.isPlaying) {
+                            Icons.Default.Pause
+                        } else {
+                            Icons.Default.PlayArrow
+                        },
                         contentDescription = if (viewModel.isPlaying) "Pause" else "Play",
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(32.dp)
@@ -577,18 +601,33 @@ private fun TopAppBarPlaybackLandscape(
             ) {
                 DropdownMenuItem(
                     text = { Text("Auto-Center") },
-                    trailingIcon = { Checkbox(checked = autoCenter, onCheckedChange = { onToggleAutoCenter(it) }) },
+                    trailingIcon = {
+                        Checkbox(
+                            checked = autoCenter,
+                            onCheckedChange = { onToggleAutoCenter(it) }
+                        )
+                    },
                     onClick = { onToggleAutoCenter(!autoCenter) }
                 )
                 HorizontalDivider()
                 DropdownMenuItem(
                     text = { Text("Show Curve") },
-                    trailingIcon = { Checkbox(checked = showCurve, onCheckedChange = { onToggleShowCurve(it) }) },
+                    trailingIcon = {
+                        Checkbox(
+                            checked = showCurve,
+                            onCheckedChange = { onToggleShowCurve(it) }
+                        )
+                    },
                     onClick = { onToggleShowCurve(!showCurve) }
                 )
                 DropdownMenuItem(
                     text = { Text("Show Dots") },
-                    trailingIcon = { Checkbox(checked = showDots, onCheckedChange = { onToggleShowDots(it) }) },
+                    trailingIcon = {
+                        Checkbox(
+                            checked = showDots,
+                            onCheckedChange = { onToggleShowDots(it) }
+                        )
+                    },
                     onClick = { onToggleShowDots(!showDots) }
                 )
                 DropdownMenuItem(

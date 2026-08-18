@@ -28,6 +28,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -39,7 +40,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
@@ -51,55 +51,60 @@ import androidx.navigation.NavHostController
  */
 @Composable
 fun AboutScreen(navController: NavHostController, consentManager: ConsentManager) {
-    val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
 
     // TODO: replace these with your real contact details
-    val EMAIL = "bahehdowski@gmail.com"
-    val WEBSITE = "https://jsaiborne-portfolio.netlify.app/"
-    val GITHUB = "https://github.com/Jsaiborne"
+    val email = "bahehdowski@gmail.com"
+    val website = "https://jsaiborne.github.io/"
+    val github = "https://github.com/Jsaiborne"
     // added X (if you prefer a different handle change this string)
     val xUrl = "https://x.com/Jsaiborne"
 
     var selectedTab by remember { mutableStateOf(0) }
     val tabs = listOf("App", "Dev")
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        TopAppBar(
-            title = { Text("About") },
-            navigationIcon = {
-                IconButton(onClick = { navController.navigateUp() }) {
-                    Icon(imageVector = Icons.Filled.ArrowBack, contentDescription = "Back")
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("About") },
+                navigationIcon = {
+                    IconButton(onClick = { navController.navigateUp() }) {
+                        Icon(imageVector = Icons.Filled.ArrowBack, contentDescription = "Back")
+                    }
                 }
-            }
-        )
-
-        TabRow(
-            selectedTabIndex = selectedTab,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            tabs.forEachIndexed { i, title ->
-                Tab(selected = selectedTab == i, onClick = { selectedTab = i }) {
-                    Text(title, modifier = Modifier.padding(16.dp))
-                }
-            }
+            )
         }
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+        ) {
+            TabRow(
+                selectedTabIndex = selectedTab,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                tabs.forEachIndexed { i, title ->
+                    Tab(selected = selectedTab == i, onClick = { selectedTab = i }) {
+                        Text(title, modifier = Modifier.padding(16.dp))
+                    }
+                }
+            }
 
-        when (selectedTab) {
-            0 -> AppTabContent(
-                consentManager = consentManager,
-                navController = navController,
-                contextPackageName = context.packageName,
-                context = context
-            )
+            when (selectedTab) {
+                0 -> AppTabContent(
+                    consentManager = consentManager,
+                    navController = navController
+                )
 
-            1 -> DevTabContent(
-                uriHandler = uriHandler,
-                EMAIL = EMAIL,
-                WEBSITE = WEBSITE,
-                GITHUB = GITHUB,
-                xUrl = xUrl
-            )
+                1 -> DevTabContent(
+                    uriHandler = uriHandler,
+                    email = email,
+                    website = website,
+                    github = github,
+                    xUrl = xUrl
+                )
+            }
         }
     }
 }
@@ -108,9 +113,7 @@ fun AboutScreen(navController: NavHostController, consentManager: ConsentManager
 @Composable
 private fun AppTabContent(
     consentManager: ConsentManager,
-    navController: NavHostController,
-    contextPackageName: String,
-    context: android.content.Context
+    navController: NavHostController
 ) {
     val version = BuildConfig.VERSION_NAME
     Column(
@@ -126,9 +129,11 @@ private fun AppTabContent(
         Spacer(modifier = Modifier.height(12.dp))
         Text(
             text = """
-This app shows your singing voice in real time — the musical pitch, a confidence score, and a scrolling pitch trace so you can see how steady you are. Tap the piano to play notes or compare your pitch.
+                This app shows your singing voice in real time — the musical pitch,
+                a confidence score, and a scrolling pitch trace so you can see how steady you are.
+                Tap the piano to play notes or compare your pitch.
 
-Piano sound samples by jobro -- https://freesound.org/ -- License: Attribution 3.0
+                Piano sound samples by jobro -- https://freesound.org/ -- License: Attribution 3.0
             """.trimIndent()
         )
         Spacer(modifier = Modifier.height(24.dp))
@@ -170,9 +175,9 @@ Piano sound samples by jobro -- https://freesound.org/ -- License: Attribution 3
 @Composable
 private fun DevTabContent(
     uriHandler: androidx.compose.ui.platform.UriHandler,
-    EMAIL: String,
-    WEBSITE: String,
-    GITHUB: String,
+    email: String,
+    website: String,
+    github: String,
     xUrl: String
 ) {
     Column(
@@ -186,9 +191,16 @@ private fun DevTabContent(
         Spacer(modifier = Modifier.height(8.dp))
         Text(
             text = """
-Hey! I’m Jotham Saiborne — a Master’s student in Computer Science, web and Android developer, and hobbyist musician. I love building clean, easy-to-use apps, whether that’s full-stack web projects with React and Node or native Android apps with Kotlin and Jetpack Compose. I enjoy taking ideas from a rough sketch to a polished, working product — and I’m always experimenting with new tech and creative projects along the way.
+                Hey! I’m Jotham Saiborne — a Master’s student in Computer Science,
+                web and Android developer, and hobbyist musician. I love building
+                clean, easy-to-use apps, whether that’s full-stack web projects with
+                React and Node or native Android apps with Kotlin and Jetpack Compose.
+                I enjoy taking ideas from a rough sketch to a polished, working product —
+                and I’m always experimenting with new tech and creative projects along the way.
 
-Outside code, I have a deep interest in music — which keeps my creativity sharp and helps me think about rhythm and structure in software. Finally, I am a devoted Christian and my faith in the Lord Jesus Christ is most important to me.
+                Outside code, I have a deep interest in music — which keeps my creativity sharp
+                and helps me think about rhythm and structure in software. Finally, I am a devoted
+                Christian and my faith in the Lord Jesus Christ is most important to me.
             """.trimIndent(),
             style = MaterialTheme.typography.bodyMedium
         )
@@ -206,8 +218,8 @@ Outside code, I have a deep interest in music — which keeps my creativity shar
                     modifier = Modifier.width(28.dp)
                 )
             },
-            label = "Email: $EMAIL",
-            uri = "mailto:$EMAIL",
+            label = "Email",
+            uri = "mailto:$email",
             uriHandler = uriHandler
         )
 
@@ -222,8 +234,8 @@ Outside code, I have a deep interest in music — which keeps my creativity shar
                     modifier = Modifier.width(28.dp)
                 )
             },
-            label = "Website: $WEBSITE",
-            uri = WEBSITE,
+            label = "Website",
+            uri = website,
             uriHandler = uriHandler
         )
 
@@ -238,8 +250,8 @@ Outside code, I have a deep interest in music — which keeps my creativity shar
                     modifier = Modifier.size(24.dp)
                 )
             },
-            label = "GitHub: $GITHUB",
-            uri = GITHUB,
+            label = "GitHub",
+            uri = github,
             uriHandler = uriHandler
         )
 
@@ -254,7 +266,7 @@ Outside code, I have a deep interest in music — which keeps my creativity shar
                     modifier = Modifier.size(16.dp)
                 )
             },
-            label = "X: $xUrl",
+            label = "X (formerly Twitter)",
             uri = xUrl,
             uriHandler = uriHandler
         )
@@ -285,7 +297,6 @@ private fun ContactRow(
             contentDescription = "Open",
             modifier = Modifier
                 .padding(start = 8.dp)
-                .clickable { uriHandler.openUri(uri) }
         )
     }
 }

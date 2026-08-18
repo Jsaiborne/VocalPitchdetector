@@ -115,7 +115,7 @@ class AudioRecordPitchDetector(
                             }
                             recordingStream?.write(byteBuffer.array(), 0, read * 2)
                             recordedBytes += read * 2 // 2 bytes per Short
-                        } catch (e: Exception) {
+                        } catch (e: java.io.IOException) {
                             Log.e("AudioRecordPitch", "Failed to write audio stream", e)
                         }
                     }
@@ -173,7 +173,7 @@ class AudioRecordPitchDetector(
             // Write 44 bytes of empty space to hold the WAV header later
             recordingStream?.write(ByteArray(44))
             isRecordingToDisk.set(true)
-        } catch (e: Exception) {
+        } catch (e: java.io.IOException) {
             Log.e("AudioRecordPitch", "Failed to start disk recording", e)
         }
     }
@@ -190,7 +190,7 @@ class AudioRecordPitchDetector(
                     writeWavHeader(raf, recordedBytes, sampleRate, 1, 16)
                 }
             }
-        } catch (e: Exception) {
+        } catch (e: java.io.IOException) {
             Log.e("AudioRecordPitch", "Error stopping disk recording", e)
         } finally {
             currentOutputFile = null
@@ -207,11 +207,17 @@ class AudioRecordPitchDetector(
     }
 
     // -----------------------------
-    private fun writeWavHeader(raf: RandomAccessFile, audioLen: Int, sampleRate: Int, channels: Int, bitDepth: Int) {
+    private fun writeWavHeader(
+        raf: RandomAccessFile,
+        audioLen: Int,
+        sampleRate: Int,
+        channels: Int,
+        bitDepth: Int
+    ) {
         val byteRate = sampleRate * channels * bitDepth / 8
         val totalDataLen = audioLen + 36
 
-        // RandomAccessFile writes in Big Endian, so we use Integer.reverseBytes for Little Endian WAV spec
+        // RandomAccessFile writes in Big Endian, so we use reverseBytes for Little Endian WAV spec
         raf.seek(0)
         raf.write("RIFF".toByteArray(Charsets.US_ASCII))
         raf.writeInt(Integer.reverseBytes(totalDataLen))
@@ -222,7 +228,9 @@ class AudioRecordPitchDetector(
         raf.writeShort(java.lang.Short.reverseBytes(channels.toShort()).toInt())
         raf.writeInt(Integer.reverseBytes(sampleRate))
         raf.writeInt(Integer.reverseBytes(byteRate))
-        raf.writeShort(java.lang.Short.reverseBytes((channels * bitDepth / 8).toShort()).toInt()) // BlockAlign
+        raf.writeShort(
+            java.lang.Short.reverseBytes((channels * bitDepth / 8).toShort()).toInt()
+        ) // BlockAlign
         raf.writeShort(java.lang.Short.reverseBytes(bitDepth.toShort()).toInt()) // BitsPerSample
         raf.write("data".toByteArray(Charsets.US_ASCII))
         raf.writeInt(Integer.reverseBytes(audioLen))
@@ -234,7 +242,7 @@ class AudioRecordPitchDetector(
         Thread {
             try {
                 workerThread?.join()
-            } catch (e: Exception) {
+            } catch (e: InterruptedException) {
                 Log.e("AudioRecordPitch", "Error joining worker thread", e)
             } finally {
                 workerThread = null

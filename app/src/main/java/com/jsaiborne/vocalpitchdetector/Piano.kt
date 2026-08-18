@@ -67,6 +67,8 @@ fun Piano(
     val density = LocalDensity.current
 
     // Helper: safe-play wrapper that falls back to ToneGenerator on exception
+    // Helper: safe-play wrapper that falls back to ToneGenerator on exception
+    @Suppress("TooGenericExceptionCaught")
     val playNoteSafely: (Int, Double, Boolean) -> Unit = { midi, freq, sustain ->
         try {
             if (useSamplePlayer) {
@@ -74,14 +76,30 @@ fun Piano(
                 val didPlay = SamplePlayer.play(midi)
                 if (!didPlay) {
                     // Fallback while samples are loading
-                    if (sustain) ToneGenerator.playToneContinuous(freq) else ToneGenerator.playTone(freq, 300)
+                    if (sustain) {
+                        ToneGenerator.playToneContinuous(freq)
+                    } else {
+                        ToneGenerator.playTone(freq, 300)
+                    }
                 }
             } else {
-                if (sustain) ToneGenerator.playToneContinuous(freq) else ToneGenerator.playTone(freq, 300)
+                if (sustain) {
+                    ToneGenerator.playToneContinuous(freq)
+                } else {
+                    ToneGenerator.playTone(freq, 300)
+                }
             }
-        } catch (e: Exception) {
-            Log.w("Piano", "SamplePlayer.play failed for midi=$midi, falling back to ToneGenerator: ${e.message}")
-            if (sustain) ToneGenerator.playToneContinuous(freq) else ToneGenerator.playTone(freq, 300)
+        } catch (e: RuntimeException) {
+            Log.w(
+                "Piano",
+                "SamplePlayer.play failed for midi=$midi, " +
+                    "falling back to ToneGenerator: ${e.message}"
+            )
+            if (sustain) {
+                ToneGenerator.playToneContinuous(freq)
+            } else {
+                ToneGenerator.playTone(freq, 300)
+            }
         }
     }
 
@@ -187,14 +205,14 @@ fun Piano(
                                         onKeyPressed?.invoke(midi, freq)
                                         try {
                                             tryAwaitRelease()
-                                        } catch (_: Exception) {
+                                        } finally {
+                                            // on release stop continuous tone (if oscillator)
+                                            if (!useSamplePlayer) {
+                                                ToneGenerator.stop()
+                                            }
+                                            pressedMidi = null
+                                            playedByPress = false
                                         }
-                                        // on release stop continuous tone (if oscillator)
-                                        if (!useSamplePlayer) {
-                                            ToneGenerator.stop()
-                                        }
-                                        pressedMidi = null
-                                        playedByPress = false
                                     }, onTap = {
                                             // only handle tap-sound if onPress didn't already play
                                             if (playedByPress) return@detectTapGestures
@@ -255,13 +273,13 @@ fun Piano(
                                     onKeyPressed?.invoke(midi, freq)
                                     try {
                                         tryAwaitRelease()
-                                    } catch (_: Exception) {
+                                    } finally {
+                                        if (!useSamplePlayer) {
+                                            ToneGenerator.stop()
+                                        }
+                                        pressedMidi = null
+                                        playedByPress = false
                                     }
-                                    if (!useSamplePlayer) {
-                                        ToneGenerator.stop()
-                                    }
-                                    pressedMidi = null
-                                    playedByPress = false
                                 }, onTap = {
                                         if (playedByPress) return@detectTapGestures
                                         val freq = 440.0 * 2.0.pow((midi - 69) / 12.0)
@@ -455,16 +473,15 @@ fun Piano(
 
                                         try {
                                             tryAwaitRelease()
-                                        } catch (_: Exception) {
+                                        } finally {
+                                            if (!useSamplePlayer) {
+                                                ToneGenerator.stop()
+                                            }
+                                            pressedMidi = null
+                                            pressedIndex = null
+                                            pressedBlackMidi = null
+                                            playedByPress = false
                                         }
-
-                                        if (!useSamplePlayer) {
-                                            ToneGenerator.stop()
-                                        }
-                                        pressedMidi = null
-                                        pressedIndex = null
-                                        pressedBlackMidi = null
-                                        playedByPress = false
                                     },
                                     onTap = { offset ->
                                         // skip if onPress already played for this tap

@@ -115,11 +115,13 @@ object ToneGenerator {
         staticTrack?.let {
             try {
                 it.stop()
-            } catch (_: Exception) {
+            } catch (e: IllegalStateException) {
+                android.util.Log.w("ToneGenerator", "Static track stop failed", e)
             }
             try {
                 it.release()
-            } catch (_: Exception) {
+            } catch (e: IllegalStateException) {
+                android.util.Log.w("ToneGenerator", "Static track release failed", e)
             }
         }
         staticTrack = null
@@ -205,8 +207,8 @@ object ToneGenerator {
                 // Write buffer
                 try {
                     streamTrack?.write(buffer, 0, buffer.size)
-                } catch (_: Exception) {
-                    // swallow write exceptions
+                } catch (e: IllegalStateException) {
+                    android.util.Log.e("ToneGenerator", "Track write failed", e)
                 }
             }
 
@@ -214,16 +216,19 @@ object ToneGenerator {
             try {
                 val silence = ShortArray(SILENCE_BUFFER_SIZE)
                 streamTrack?.write(silence, 0, silence.size)
-            } catch (_: Exception) {
+            } catch (e: IllegalStateException) {
+                android.util.Log.w("ToneGenerator", "Silence flush failed", e)
             }
 
             try {
                 streamTrack?.stop()
-            } catch (_: Exception) {
+            } catch (e: IllegalStateException) {
+                android.util.Log.w("ToneGenerator", "Stream track stop failed", e)
             }
             try {
                 streamTrack?.release()
-            } catch (_: Exception) {
+            } catch (e: IllegalStateException) {
+                android.util.Log.w("ToneGenerator", "Stream track release failed", e)
             }
             streamTrack = null
         }
@@ -240,18 +245,21 @@ object ToneGenerator {
         if (threadToJoin != null) {
             thread(start = true) {
                 try {
-                    threadToJoin.join(THREAD_JOIN_TIMEOUT_MS) // wait briefly for fade-out to finish
-                } catch (_: Exception) {
+                    threadToJoin.join(THREAD_JOIN_TIMEOUT_MS)
+                } catch (e: InterruptedException) {
+                    android.util.Log.e("ToneGenerator", "Thread join interrupted", e)
                 }
                 // In case thread didn't finish for some reason, try to stop/release the track
                 streamTrack?.let {
                     try {
                         it.stop()
-                    } catch (_: Exception) {
+                    } catch (e: IllegalStateException) {
+                        android.util.Log.e("ToneGenerator", "Error stopping track", e)
                     }
                     try {
                         it.release()
-                    } catch (_: Exception) {
+                    } catch (e: IllegalStateException) {
+                        android.util.Log.e("ToneGenerator", "Error releasing track", e)
                     }
                 }
                 streamTrack = null
