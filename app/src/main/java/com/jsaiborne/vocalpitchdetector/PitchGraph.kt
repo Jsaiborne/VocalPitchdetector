@@ -970,8 +970,20 @@ fun PitchGraphVertical(
                             val labelY = y - 10f
                             val rightEdge = padLeft + innerW
                             if (labelX + textWidth > rightEdge - 6f) labelX = x - textWidth - 8f
-                            if (labelX < padLeft + 6f) labelX = padLeft + 6f
-                            canvas.nativeCanvas.drawText(noteName, labelX, labelY, paints.yellow)
+                            // Let the label travel with its marker and fade out near the left edge
+                            // instead of pinning it there until the marker is trimmed.
+                            val fadeWidthPx = 48f
+                            val fade = ((labelX - padLeft) / fadeWidthPx).coerceIn(0f, 1f)
+                            if (fade > 0f) {
+                                val nativeCanvas = canvas.nativeCanvas
+                                val originalAlpha = paints.yellow.alpha
+                                paints.yellow.alpha = (originalAlpha * fade).toInt()
+                                nativeCanvas.save()
+                                nativeCanvas.clipRect(padLeft, padTop, padLeft + innerW, padTop + innerH)
+                                nativeCanvas.drawText(noteName, labelX, labelY, paints.yellow)
+                                nativeCanvas.restore()
+                                paints.yellow.alpha = originalAlpha
+                            }
                         }
                     }
                 }
