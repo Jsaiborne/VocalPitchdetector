@@ -34,9 +34,11 @@ jobs:
       - name: Create empty local.properties
         run: touch local.properties
 
-      - name: Run tests and build
+      - name: Lint, test and build
         run: |
           ./gradlew \
+            ktlintCheck \
+            detekt \
             test \
             assembleDebug \
             --stacktrace \

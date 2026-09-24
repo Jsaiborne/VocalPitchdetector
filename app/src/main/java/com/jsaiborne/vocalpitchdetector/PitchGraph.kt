@@ -1,7 +1,5 @@
 package com.jsaiborne.vocalpitchdetector
 
-import android.graphics.Paint
-import android.graphics.Typeface
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
@@ -20,8 +18,11 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -37,26 +38,68 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import kotlin.math.log2
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.collectLatest
 
 private data class PitchSample(val tMs: Long, val freq: Float, val midi: Float)
 private data class StableMarker(val tMs: Long, val midi: Int)
 
-private fun freqToMidiLocal(f: Double): Double = 69.0 + 12.0 * log2(f / 440.0)
-private fun midiToNoteNameLocal(midi: Int): String {
-    val names = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
-    val octave = midi / 12 - 1
-    return "${names[midi % 12]}$octave"
+/**
+ * Rolling window of recent pitch samples and stable-note markers. Backed by ArrayDeques so
+ * trimming the oldest entries is O(1). [version] changes whenever the contents do; a Canvas that
+ * calls [observeChanges] therefore redraws when new data arrives.
+ */
+@Stable
+private class TraceBuffer {
+    val samples = ArrayDeque<PitchSample>()
+    val markers = ArrayDeque<StableMarker>()
+    private var version by mutableLongStateOf(0L)
+
+    fun observeChanges(): Long = version
+
+    fun addSample(sample: PitchSample, cutoffMs: Long) {
+        samples.addLast(sample)
+        while (samples.isNotEmpty() && samples.first().tMs < cutoffMs) samples.removeFirst()
+        version++
+    }
+
+    fun addMarker(marker: StableMarker, cutoffMs: Long) {
+        markers.addLast(marker)
+        while (markers.isNotEmpty() && markers.first().tMs < cutoffMs) markers.removeFirst()
+        version++
+    }
 }
 
+@Composable
+private fun rememberTraceBuffer(engine: PitchEngine, paused: Boolean, windowMs: Long): TraceBuffer {
+    val buffer = remember { TraceBuffer() }
+
+    LaunchedEffect(engine, paused, windowMs) {
+        engine.state.collectLatest { s ->
+            if (!paused) {
+                val t = System.currentTimeMillis()
+                val midi = if (s.frequency > 0f) freqToMidi(s.frequency.toDouble()).toFloat() else Float.NaN
+                buffer.addSample(PitchSample(tMs = t, freq = s.frequency, midi = midi), cutoffMs = t - windowMs)
+            }
+        }
+    }
+
+    LaunchedEffect(engine, windowMs) {
+        engine.stableNotes.collectLatest { sn ->
+            val now = System.currentTimeMillis()
+            buffer.addMarker(StableMarker(now, sn.midi), cutoffMs = now - windowMs)
+        }
+    }
+
+    return buffer
+}
+
+@Suppress("LongParameterList")
 @Composable
 fun PitchGraphCard(
     engine: PitchEngine,
     modifier: Modifier = Modifier,
     paused: Boolean = false,
-    onTogglePause: () -> Unit,
     startMidi: Int = 24,
     endMidi: Int = 84,
     whiteKeyWidthDp: Dp = 56.dp,
@@ -154,60 +197,18 @@ fun PitchGraphHorizontal(
     showWhiteDots: Boolean = true
 
 ) {
-    val samples = remember { mutableStateListOf<PitchSample>() }
-    val stableMarkers = remember { mutableStateListOf<StableMarker>() }
     val density = LocalDensity.current
 
     val windowMsEffective = remember(windowMs, bpm) {
         (windowMs.toFloat() * (60f / bpm)).toLong()
     }
 
-    LaunchedEffect(engine, paused, windowMsEffective) {
-        engine.state.collectLatest { s ->
-            if (!paused) {
-                val t = System.currentTimeMillis()
-                val midiF = if (s.frequency > 0f) freqToMidiLocal(s.frequency.toDouble()).toFloat() else Float.NaN
-                samples.add(PitchSample(tMs = t, freq = s.frequency, midi = midiF))
-                val cutoff = t - windowMsEffective
-                while (samples.isNotEmpty() && samples.first().tMs < cutoff) samples.removeAt(0)
-            }
-        }
-    }
+    val buffer = rememberTraceBuffer(engine, paused, windowMsEffective)
+    val samples = buffer.samples
+    val stableMarkers = buffer.markers
+    val paints = rememberGraphPaints()
 
-    LaunchedEffect(engine, windowMsEffective) {
-        engine.stableNotes.collectLatest { sn ->
-            val now = System.currentTimeMillis()
-            stableMarkers.add(StableMarker(now, sn.midi))
-            val cutoff = now - windowMsEffective
-            while (stableMarkers.isNotEmpty() && stableMarkers.first().tMs < cutoff) stableMarkers.removeAt(0)
-        }
-    }
-
-    val labelPaint = remember {
-        Paint().apply {
-            color = android.graphics.Color.WHITE
-            textSize = 28f
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-            isAntiAlias = true
-        }
-    }
-    val smallPaint = remember {
-        Paint().apply {
-            color = android.graphics.Color.argb(200, 255, 255, 255)
-            textSize = 18f
-            isAntiAlias = true
-        }
-    }
-    val yellowPaint = remember {
-        Paint().apply {
-            color = android.graphics.Color.YELLOW
-            textSize = 18f
-            isAntiAlias = true
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        }
-    }
-
-    val whiteCount = (startMidi..endMidi).count { !midiToNoteNameLocal(it).contains("#") }
+    val whiteCount = (startMidi..endMidi).count { !midiToNoteName(it).contains("#") }
     val whiteKeyWidthPx = with(density) { whiteKeyWidthDp.toPx() }
     val contentWidthPx = whiteCount * whiteKeyWidthPx
     val contentWidthDp = with(density) { contentWidthPx.toDp() }
@@ -220,14 +221,14 @@ fun PitchGraphHorizontal(
         val array = FloatArray(count)
 
         val whiteList = mutableListOf<Int>()
-        for (m in startMidi..endMidi) if (!midiToNoteNameLocal(m).contains("#")) whiteList.add(m)
+        for (m in startMidi..endMidi) if (!midiToNoteName(m).contains("#")) whiteList.add(m)
         val whiteIndexMap = mutableMapOf<Int, Int>()
         whiteList.forEachIndexed { idx, midi -> whiteIndexMap[midi] = idx }
 
         val blackLeftIndexMap = mutableMapOf<Int, Int>()
         var whiteIdxCounter = 0
         for (m in startMidi..endMidi) {
-            val name = midiToNoteNameLocal(m)
+            val name = midiToNoteName(m)
             if (name.contains("#")) {
                 blackLeftIndexMap[m] = maxOf(0, whiteIdxCounter - 1)
             } else {
@@ -254,14 +255,14 @@ fun PitchGraphHorizontal(
     val sState = scrollState ?: rememberScrollState()
 
     // Define colors for the graph background
-    val bgTopColor = Color(0xFF081226)
-    val bgBottomColor = Color(0xFF0F2A3F)
+    val bgTopColor = GraphStyle.backgroundTop
+    val bgBottomColor = GraphStyle.backgroundBottom
 
     // Halo color for dots (semi-transparent dark)
-    val haloColor = Color(0x88000000)
-    val dotWhite = Color.White
+    val haloColor = GraphStyle.dotHalo
+    val dotWhite = GraphStyle.dot
     // Horizontal bar color: soft translucent blue (matches curve)
-    val horizontalBarColor = Color(0xCCEF9A9A)
+    val horizontalBarColor = GraphStyle.bar
 
     Box(modifier = modifier) {
         Box(
@@ -274,6 +275,7 @@ fun PitchGraphHorizontal(
                     .width(contentWidthDp)
                     .fillMaxHeight()
             ) {
+                buffer.observeChanges()
                 val w = size.width
                 val h = size.height
 
@@ -311,7 +313,7 @@ fun PitchGraphHorizontal(
                     // FIX: Clamp the index for X grid lines
                     val targetIndex = (m - minMidi).coerceIn(0, midiX.lastIndex)
                     val x = midiX[targetIndex]
-                    val isNatural = !midiToNoteNameLocal(m).contains("#")
+                    val isNatural = !midiToNoteName(m).contains("#")
                     if (isNatural) {
                         drawLine(
                             color = Color(0x33FFFFFF),
@@ -321,10 +323,10 @@ fun PitchGraphHorizontal(
                         )
                         drawIntoCanvas { canvas ->
                             canvas.nativeCanvas.drawText(
-                                midiToNoteNameLocal(m),
+                                midiToNoteName(m),
                                 x + 6f,
                                 padTop + 18f,
-                                smallPaint
+                                paints.small
                             )
                         }
                     } else {
@@ -342,7 +344,7 @@ fun PitchGraphHorizontal(
                     for (i in 0..6) {
                         val yy = padTop + i * step
                         drawLine(
-                            color = Color(0x2233AAFF),
+                            color = GraphStyle.pitchGrid,
                             start = Offset(padLeft, yy),
                             end = Offset(padLeft + innerW, yy),
                             strokeWidth = 1f
@@ -364,7 +366,6 @@ fun PitchGraphHorizontal(
 
                 // build path (time -> y, midi -> x)
                 val bluePath = Path()
-                var started = false
                 // We'll collect segments of continuous points so smoothing doesn't bridge silences/gaps
                 val pointsSegments = mutableListOf<MutableList<Offset>>()
                 var currentSeg: MutableList<Offset>? = null
@@ -381,7 +382,6 @@ fun PitchGraphHorizontal(
                     if (s.midi.isNaN()) {
                         prevPoint = null
                         currentSeg = null
-                        started = false
                         prevTime = Long.MIN_VALUE
                         continue
                     }
@@ -390,7 +390,6 @@ fun PitchGraphHorizontal(
                     if (y < padTop - 50) {
                         prevPoint = null
                         currentSeg = null
-                        started = false
                         prevTime = Long.MIN_VALUE
                         continue
                     }
@@ -400,7 +399,6 @@ fun PitchGraphHorizontal(
 
                     if (prevPoint == null) {
                         bluePath.moveTo(p.x, p.y)
-                        started = true
                         currentSeg = mutableListOf()
                         pointsSegments.add(currentSeg)
                         currentSeg.add(p)
@@ -438,7 +436,7 @@ fun PitchGraphHorizontal(
                         for (segPath in smoothedPaths) {
                             drawPath(
                                 path = segPath,
-                                color = Color(0xFF7AD3FF),
+                                color = GraphStyle.curve,
                                 style = Stroke(width = 3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
                             )
                         }
@@ -446,7 +444,7 @@ fun PitchGraphHorizontal(
                         // fallback: draw the raw polyline stroke only
                         drawPath(
                             path = bluePath,
-                            color = Color(0xFF7AD3FF),
+                            color = GraphStyle.curve,
                             style = Stroke(width = 3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
                         )
                     }
@@ -457,7 +455,7 @@ fun PitchGraphHorizontal(
                     for (segPath in smoothedPaths) {
                         drawPath(
                             path = segPath,
-                            color = Color(0xCCFFFFFF),
+                            color = GraphStyle.whiteTrace,
                             style = Stroke(width = 2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
                         )
                     }
@@ -546,7 +544,7 @@ fun PitchGraphHorizontal(
                     val x = midiX[targetIndex]
                     val y = padTop + innerH * ((m.tMs - windowStart).toFloat() / windowMsEffective.toFloat())
                     drawLine(
-                        color = Color(0xFFFFD54F),
+                        color = GraphStyle.stableMarker,
                         start = Offset(x, padTop),
                         end = Offset(x, padTop + innerH),
                         strokeWidth = 2f
@@ -557,10 +555,10 @@ fun PitchGraphHorizontal(
                         if (labelY > padTop) {
                             drawIntoCanvas { canvas ->
                                 canvas.nativeCanvas.drawText(
-                                    midiToNoteNameLocal(m.midi),
+                                    midiToNoteName(m.midi),
                                     x + 6f,
                                     labelY,
-                                    yellowPaint
+                                    paints.yellow
                                 )
                             }
                         }
@@ -584,27 +582,14 @@ fun PitchGraphHorizontal(
                     if (showNoteLabels) {
                         drawIntoCanvas { canvas ->
                             canvas.nativeCanvas.drawText(
-                                midiToNoteNameLocal(nearest),
+                                midiToNoteName(nearest),
                                 x + 6f,
                                 y - 10f, // Changed to - 10f so the text draws just above the bottom cut-off
-                                labelPaint
+                                paints.label
                             )
                         }
                     }
                 }
-
-//                // --- FIX 3: Fading Exit Effect ---
-//                val fadeHeight = innerH * 0.15f // Top 15% fades out
-//                drawRect(
-//                    brush = Brush.verticalGradient(
-//                        colors = listOf(bgTopColor, Color.Transparent),
-//                        startY = padTop,
-//                        endY = padTop + fadeHeight,
-//                        tileMode = TileMode.Clamp
-//                    ),
-//                    topLeft = Offset(0f, padTop),
-//                    size = Size(w, fadeHeight)
-//                )
             }
         }
     }
@@ -637,61 +622,18 @@ fun PitchGraphVertical(
     showBars: Boolean = false,
     showWhiteDots: Boolean = true // <-- NEW
 ) {
-    val samples = remember { mutableStateListOf<PitchSample>() }
-    val stableMarkers = remember { mutableStateListOf<StableMarker>() }
     val density = LocalDensity.current
 
     val windowMsEffective = remember(windowMs, bpm) {
         (windowMs.toFloat() * (60f / bpm)).toLong()
     }
 
-    LaunchedEffect(engine, paused, windowMsEffective) {
-        engine.state.collectLatest { s ->
-            if (!paused) {
-                val t = System.currentTimeMillis()
-                val midiF = if (s.frequency > 0f) freqToMidiLocal(s.frequency.toDouble()).toFloat() else Float.NaN
-                samples.add(PitchSample(tMs = t, freq = s.frequency, midi = midiF))
-                val cutoff = t - windowMsEffective
-                while (samples.isNotEmpty() && samples.first().tMs < cutoff) samples.removeAt(0)
-            }
-        }
-    }
+    val buffer = rememberTraceBuffer(engine, paused, windowMsEffective)
+    val samples = buffer.samples
+    val stableMarkers = buffer.markers
+    val paints = rememberGraphPaints()
 
-    LaunchedEffect(engine, windowMsEffective) {
-        engine.stableNotes.collectLatest { sn ->
-            val now = System.currentTimeMillis()
-            stableMarkers.add(StableMarker(now, sn.midi))
-            val cutoff = now - windowMsEffective
-            while (stableMarkers.isNotEmpty() && stableMarkers.first().tMs < cutoff) stableMarkers.removeAt(0)
-        }
-    }
-
-    // paints for labels
-    val labelPaint = remember {
-        Paint().apply {
-            color = android.graphics.Color.WHITE
-            textSize = 28f
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-            isAntiAlias = true
-        }
-    }
-    val smallPaint = remember {
-        Paint().apply {
-            color = android.graphics.Color.argb(200, 255, 255, 255)
-            textSize = 18f
-            isAntiAlias = true
-        }
-    }
-    val yellowPaint = remember {
-        Paint().apply {
-            color = android.graphics.Color.YELLOW
-            textSize = 18f
-            isAntiAlias = true
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        }
-    }
-
-    val whiteCount = (startMidi..endMidi).count { !midiToNoteNameLocal(it).contains("#") }
+    val whiteCount = (startMidi..endMidi).count { !midiToNoteName(it).contains("#") }
     val keyThicknessPx = with(density) { whiteKeyWidthDp.toPx() }
     val contentPitchPx = whiteCount * keyThicknessPx
     val contentPitchDp = with(density) { contentPitchPx.toDp() }
@@ -704,14 +646,14 @@ fun PitchGraphVertical(
         val array = FloatArray(count)
 
         val whiteList = mutableListOf<Int>()
-        for (m in startMidi..endMidi) if (!midiToNoteNameLocal(m).contains("#")) whiteList.add(m)
+        for (m in startMidi..endMidi) if (!midiToNoteName(m).contains("#")) whiteList.add(m)
         val whiteIndexMap = mutableMapOf<Int, Int>()
         whiteList.forEachIndexed { idx, midi -> whiteIndexMap[midi] = (whiteCount - 1 - idx) }
 
         val blackLeftIndexMap = mutableMapOf<Int, Int>()
         var whiteIdxCounter = 0
         for (m in startMidi..endMidi) {
-            val name = midiToNoteNameLocal(m)
+            val name = midiToNoteName(m)
             if (name.contains("#")) {
                 blackLeftIndexMap[m] = maxOf(0, whiteIdxCounter - 1)
             } else {
@@ -738,14 +680,14 @@ fun PitchGraphVertical(
 
     val sState = scrollState ?: rememberScrollState()
 
-    val bgLeftColor = Color(0xFF081226)
-    val bgRightColor = Color(0xFF0F2A3F)
+    val bgLeftColor = GraphStyle.backgroundTop
+    val bgRightColor = GraphStyle.backgroundBottom
 
     // Halo color and white dot color
-    val haloColor = Color(0x88000000)
-    val dotWhite = Color.White
+    val haloColor = GraphStyle.dotHalo
+    val dotWhite = GraphStyle.dot
     // Vertical bar color
-    val verticalBarColor = Color(0xCCEF9A9A)
+    val verticalBarColor = GraphStyle.bar
 
     Box(modifier = modifier) {
         Box(
@@ -758,6 +700,7 @@ fun PitchGraphVertical(
                     .fillMaxWidth()
                     .height(contentPitchDp)
             ) {
+                buffer.observeChanges()
                 val w = size.width
                 val h = size.height
 
@@ -795,7 +738,7 @@ fun PitchGraphVertical(
                     // FIX: Clamp the index for Y grid lines
                     val targetIndex = (m - minMidi).coerceIn(0, midiY.lastIndex)
                     val y = midiY[targetIndex]
-                    val isNatural = !midiToNoteNameLocal(m).contains("#")
+                    val isNatural = !midiToNoteName(m).contains("#")
                     val col = if (isNatural) Color(0x33FFFFFF) else Color(0x22FFFFFF)
                     drawLine(
                         color = col,
@@ -806,10 +749,10 @@ fun PitchGraphVertical(
                     if (isNatural) {
                         drawIntoCanvas { canvas ->
                             canvas.nativeCanvas.drawText(
-                                midiToNoteNameLocal(m),
+                                midiToNoteName(m),
                                 padLeft + 6f,
                                 y - 6f,
-                                smallPaint
+                                paints.small
                             )
                         }
                     }
@@ -820,7 +763,7 @@ fun PitchGraphVertical(
                     for (i in 0..6) {
                         val xx = padLeft + i * step
                         drawLine(
-                            color = Color(0x2233AAFF),
+                            color = GraphStyle.pitchGrid,
                             start = Offset(xx, padTop),
                             end = Offset(xx, padTop + innerH),
                             strokeWidth = 1f
@@ -841,7 +784,6 @@ fun PitchGraphVertical(
 
                 // build path
                 val bluePath = Path()
-                var started = false
                 // We'll collect segments of continuous points so smoothing doesn't bridge silences/gaps
                 val pointsSegments = mutableListOf<MutableList<Offset>>()
                 var currentSeg: MutableList<Offset>? = null
@@ -858,7 +800,6 @@ fun PitchGraphVertical(
                     if (s.midi.isNaN()) {
                         prevPoint = null
                         currentSeg = null
-                        started = false
                         prevTime = Long.MIN_VALUE
                         continue
                     }
@@ -866,7 +807,6 @@ fun PitchGraphVertical(
                     if (x < padLeft - 50) {
                         prevPoint = null
                         currentSeg = null
-                        started = false
                         prevTime = Long.MIN_VALUE
                         continue
                     }
@@ -876,7 +816,6 @@ fun PitchGraphVertical(
 
                     if (prevPoint == null) {
                         bluePath.moveTo(p.x, p.y)
-                        started = true
                         currentSeg = mutableListOf()
                         pointsSegments.add(currentSeg)
                         currentSeg.add(p)
@@ -913,7 +852,7 @@ fun PitchGraphVertical(
                         for (segPath in smoothedPaths) {
                             drawPath(
                                 path = segPath,
-                                color = Color(0xFF7AD3FF),
+                                color = GraphStyle.curve,
                                 style = Stroke(width = 3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
                             )
                         }
@@ -921,7 +860,7 @@ fun PitchGraphVertical(
                         // fallback: draw the raw polyline stroke only
                         drawPath(
                             path = bluePath,
-                            color = Color(0xFF7AD3FF),
+                            color = GraphStyle.curve,
                             style = Stroke(width = 3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
                         )
                     }
@@ -932,7 +871,7 @@ fun PitchGraphVertical(
                     for (segPath in smoothedPaths) {
                         drawPath(
                             path = segPath,
-                            color = Color(0xCCFFFFFF),
+                            color = GraphStyle.whiteTrace,
                             style = Stroke(width = 2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
                         )
                     }
@@ -1018,21 +957,21 @@ fun PitchGraphVertical(
                     val y = midiY[targetIndex]
                     val x = xForTime(m.tMs)
                     drawLine(
-                        color = Color(0xFFFFD54F),
+                        color = GraphStyle.stableMarker,
                         start = Offset(padLeft, y),
                         end = Offset(padLeft + innerW, y),
                         strokeWidth = 2f
                     )
                     if (showNoteLabels) {
                         drawIntoCanvas { canvas ->
-                            val noteName = midiToNoteNameLocal(m.midi)
-                            val textWidth = yellowPaint.measureText(noteName)
+                            val noteName = midiToNoteName(m.midi)
+                            val textWidth = paints.yellow.measureText(noteName)
                             var labelX = x + 8f
                             val labelY = y - 10f
                             val rightEdge = padLeft + innerW
                             if (labelX + textWidth > rightEdge - 6f) labelX = x - textWidth - 8f
                             if (labelX < padLeft + 6f) labelX = padLeft + 6f
-                            canvas.nativeCanvas.drawText(noteName, labelX, labelY, yellowPaint)
+                            canvas.nativeCanvas.drawText(noteName, labelX, labelY, paints.yellow)
                         }
                     }
                 }
@@ -1044,30 +983,17 @@ fun PitchGraphVertical(
                         val nearest = lastSample.midi.roundToInt().coerceIn(minMidi, maxMidi)
                         val targetIndex = (nearest - minMidi).coerceIn(0, midiY.lastIndex)
                         val y = midiY[targetIndex]
-                        val noteName = midiToNoteNameLocal(nearest)
-                        val textWidth = labelPaint.measureText(noteName)
+                        val noteName = midiToNoteName(nearest)
+                        val textWidth = paints.label.measureText(noteName)
                         val rightEdge = padLeft + innerW
                         var labelX = rightEdge - textWidth - 8f
                         labelX = labelX.coerceAtLeast(padLeft + 6f)
                         val labelY = y - 8f // Positioned slightly above the snapped horizontal line
                         drawIntoCanvas { canvas ->
-                            canvas.nativeCanvas.drawText(noteName, labelX, labelY, labelPaint)
+                            canvas.nativeCanvas.drawText(noteName, labelX, labelY, paints.label)
                         }
                     }
                 }
-
-                // Fade exit
-//                val fadeWidth = innerW * 0.15f
-//                drawRect(
-//                    brush = Brush.horizontalGradient(
-//                        colors = listOf(bgLeftColor, Color.Transparent),
-//                        startX = padLeft,
-//                        endX = padLeft + fadeWidth,
-//                        tileMode = TileMode.Clamp
-//                    ),
-//                    topLeft = Offset(padLeft, 0f),
-//                    size = Size(fadeWidth, h)
-//                )
             }
         }
     }

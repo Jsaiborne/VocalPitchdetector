@@ -32,6 +32,22 @@ class UtilsTest {
     }
 
     @Test
+    fun midiToNoteName_handlesOctaveBoundariesAndNegatives() {
+        assertEquals("C4", midiToNoteName(60))
+        assertEquals("B3", midiToNoteName(59))
+        assertEquals("C-1", midiToNoteName(0))
+        assertEquals("B-2", midiToNoteName(-1)) // used to throw ArrayIndexOutOfBounds
+    }
+
+    @Test
+    fun midiToFreq_roundTripsThroughFreqToMidi() {
+        assertEquals(440.0, midiToFreq(69), 1e-9)
+        for (midi in 24..84) {
+            assertEquals(midi.toDouble(), freqToMidi(midiToFreq(midi)), 1e-9)
+        }
+    }
+
+    @Test
     fun rmsToDb_floor_for_zero() {
         val db = rmsToDb(0f)
         assertTrue(db <= -80f) // our function floors to minDb

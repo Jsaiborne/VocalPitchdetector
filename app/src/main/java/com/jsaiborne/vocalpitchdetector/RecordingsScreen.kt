@@ -21,7 +21,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.LibraryMusic
-import androidx.compose.material.icons.filled.Star // NEW: Added Star icon import
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -68,7 +68,8 @@ data class RecordingSession(
     val pitchFile: File,
     val sessionNumber: Int = 0,
     val customName: String? = null,
-    val isStarred: Boolean = false // NEW: Holds the starred/bookmarked state
+    val isStarred: Boolean = false,
+    val durationMs: Long = 0L
 ) {
     val formattedDate: String
         get() {
@@ -76,64 +77,135 @@ data class RecordingSession(
             return formatter.format(Date(timestampMs))
         }
 
+    val formattedDuration: String
+        get() = formatDuration(durationMs)
+
     val displayTitle: String
         get() = if (!customName.isNullOrBlank()) customName else "Vocal Session $sessionNumber"
 }
+
+// --- Session files, numbering and duration (shared with the playback screen) ---
+
+private const val RECORDING_SAMPLE_RATE = 44100
+private const val BYTES_PER_SAMPLE = 2 // mono, 16-bit
+private const val WAV_HEADER_SIZE = 44L
+private const val MS_PER_SECOND = 1000L
+private const val SECONDS_PER_MINUTE = 60L
+
+private const val NUMBERS_PREFS = "recording_numbers"
+private const val NEXT_NUMBER_KEY = "__next"
+private val numberingLock = Any()
+
+/** Length of a recording made by [AudioRecordPitchDetector] (44.1 kHz mono 16-bit PCM WAV). */
+internal fun wavDurationMs(fileLengthBytes: Long): Long {
+    val dataBytes = (fileLengthBytes - WAV_HEADER_SIZE).coerceAtLeast(0L)
+    return dataBytes * MS_PER_SECOND / (RECORDING_SAMPLE_RATE * BYTES_PER_SAMPLE)
+}
+
+/** "m:ss" for a duration in milliseconds. */
+internal fun formatDuration(durationMs: Long): String {
+    val totalSeconds = durationMs / MS_PER_SECOND
+    return String.format(Locale.US, "%d:%02d", totalSeconds / SECONDS_PER_MINUTE, totalSeconds % SECONDS_PER_MINUTE)
+}
+
+/**
+ * Lists complete recordings (both the audio and the pitch file exist) as sessionId -> files.
+ * Ids are the millisecond timestamp the recording was started at.
+ */
+internal fun listSessionFiles(recordingsDir: File): Map<String, Pair<File, File>> {
+    val audio = mutableMapOf<String, File>()
+    val pitch = mutableMapOf<String, File>()
+    recordingsDir.listFiles()?.forEach { file ->
+        val name = file.name
+        when {
+            name.startsWith("session_") && name.endsWith("_audio.wav") ->
+                audio[name.substringAfter("session_").substringBefore("_audio.wav")] = file
+            name.startsWith("session_") && name.endsWith("_pitch.json") ->
+                pitch[name.substringAfter("session_").substringBefore("_pitch.json")] = file
+        }
+    }
+    return audio.filterKeys { it in pitch }.mapValues { (id, audioFile) -> audioFile to pitch.getValue(id) }
+}
+
+internal fun sessionTimestamp(sessionId: String, audioFile: File): Long =
+    sessionId.toLongOrNull() ?: audioFile.lastModified()
+
+/**
+ * Keeps the numbers already handed out and gives new sessions (oldest first) the next free ones,
+ * so deleting an old recording never renumbers the rest. Returns the numbers for [timestamps] and
+ * the next unused number.
+ */
+internal fun assignSessionNumbers(
+    existing: Map<String, Int>,
+    nextNumber: Int,
+    timestamps: Map<String, Long>
+): Pair<Map<String, Int>, Int> {
+    val result = existing.filterKeys { it in timestamps }.toMutableMap()
+    var next = maxOf(nextNumber, (result.values.maxOrNull() ?: 0) + 1)
+    timestamps.entries
+        .filter { it.key !in result }
+        .sortedBy { it.value }
+        .forEach { result[it.key] = next++ }
+    return result to next
+}
+
+/** Stable "Vocal Session N" numbers, persisted so they survive deletions. */
+internal fun sessionNumbersFor(context: Context, timestamps: Map<String, Long>): Map<String, Int> =
+    synchronized(numberingLock) {
+        val prefs = context.getSharedPreferences(NUMBERS_PREFS, Context.MODE_PRIVATE)
+        val existing = timestamps.keys
+            .filter { prefs.contains(it) }
+            .associateWith { prefs.getInt(it, 0) }
+        val (numbers, next) = assignSessionNumbers(existing, prefs.getInt(NEXT_NUMBER_KEY, 1), timestamps)
+
+        if (numbers.size != existing.size) {
+            prefs.edit().apply {
+                numbers.forEach { (id, number) -> putInt(id, number) }
+                putInt(NEXT_NUMBER_KEY, next)
+            }.apply()
+        }
+        numbers
+    }
 
 class RecordingsViewModel : ViewModel() {
     private val _sessions = MutableStateFlow<List<RecordingSession>>(emptyList())
     val sessions: StateFlow<List<RecordingSession>> = _sessions.asStateFlow()
 
     fun loadSessions(context: Context, recordingsDir: File) {
+        val appContext = context.applicationContext
         viewModelScope.launch(Dispatchers.IO) {
             if (!recordingsDir.exists()) {
                 _sessions.value = emptyList()
                 return@launch
             }
 
-            val namePrefs = context.getSharedPreferences("recording_names", Context.MODE_PRIVATE)
-            val starPrefs = context.getSharedPreferences(
-                "recording_stars",
-                Context.MODE_PRIVATE
-            ) // NEW: Prefs for stars
-            val sessionMap = mutableMapOf<String, Pair<File?, File?>>()
+            val namePrefs = appContext.getSharedPreferences("recording_names", Context.MODE_PRIVATE)
+            val starPrefs = appContext.getSharedPreferences("recording_stars", Context.MODE_PRIVATE)
 
-            recordingsDir.listFiles()?.forEach { file ->
-                val name = file.name
-                if (name.startsWith("session_") && name.endsWith("_audio.wav")) {
-                    val id = name.substringAfter("session_").substringBefore("_audio.wav")
-                    val existing = sessionMap[id] ?: Pair(null, null)
-                    sessionMap[id] = existing.copy(first = file)
-                } else if (name.startsWith("session_") && name.endsWith("_pitch.json")) {
-                    val id = name.substringAfter("session_").substringBefore("_pitch.json")
-                    val existing = sessionMap[id] ?: Pair(null, null)
-                    sessionMap[id] = existing.copy(second = file)
-                }
+            val files = listSessionFiles(recordingsDir)
+            val numbers = sessionNumbersFor(
+                appContext,
+                files.mapValues { (id, pair) -> sessionTimestamp(id, pair.first) }
+            )
+
+            val sessions = files.map { (id, pair) ->
+                val (audio, pitch) = pair
+                RecordingSession(
+                    sessionId = id,
+                    timestampMs = sessionTimestamp(id, audio),
+                    audioFile = audio,
+                    pitchFile = pitch,
+                    sessionNumber = numbers[id] ?: 0,
+                    customName = namePrefs.getString(id, null),
+                    isStarred = starPrefs.getBoolean(id, false),
+                    durationMs = wavDurationMs(audio.length())
+                )
             }
 
-            val validSessions = sessionMap.mapNotNull { (id, pair) ->
-                val audio = pair.first
-                val pitch = pair.second
-                if (audio != null && pitch != null) {
-                    val timestamp = id.toLongOrNull() ?: audio.lastModified()
-                    val customName = namePrefs.getString(id, null)
-                    val isStarred = starPrefs.getBoolean(id, false) // NEW: Read star state
-                    RecordingSession(id, timestamp, audio, pitch, customName = customName, isStarred = isStarred)
-                } else {
-                    null
-                }
-            }
-
-            // 1. Sort chronologically (oldest first) to assign correct serial numbers
-            val chronologicallySorted = validSessions.sortedBy { it.timestampMs }
-
-            // 2. Assign serial numbers (1, 2, 3...)
-            val numberedSessions = chronologicallySorted.mapIndexed { index, session ->
-                session.copy(sessionNumber = index + 1)
-            }
-
-            // 3. Reverse the list so the newest recordings appear at the top
-            _sessions.value = numberedSessions.reversed()
+            // Starred recordings first, then newest first
+            _sessions.value = sessions.sortedWith(
+                compareByDescending<RecordingSession> { it.isStarred }.thenByDescending { it.timestampMs }
+            )
         }
     }
 
@@ -147,7 +219,6 @@ class RecordingsViewModel : ViewModel() {
         loadSessions(context, recordingsDir)
     }
 
-    // NEW: Function to handle toggling the star state
     fun toggleStar(context: Context, sessionId: String, currentlyStarred: Boolean, recordingsDir: File) {
         val starPrefs = context.getSharedPreferences("recording_stars", Context.MODE_PRIVATE)
         starPrefs.edit().putBoolean(sessionId, !currentlyStarred).apply()
@@ -155,19 +226,21 @@ class RecordingsViewModel : ViewModel() {
     }
 
     fun deleteSession(context: Context, session: RecordingSession, recordingsDir: File) {
+        val appContext = context.applicationContext
         viewModelScope.launch(Dispatchers.IO) {
             session.audioFile.delete()
             session.pitchFile.delete()
 
-            // Clean up SharedPreferences
-            context.getSharedPreferences("recording_names", Context.MODE_PRIVATE)
+            // Clean up SharedPreferences so deleted session IDs don't pile up
+            appContext.getSharedPreferences("recording_names", Context.MODE_PRIVATE)
+                .edit().remove(session.sessionId).apply()
+            appContext.getSharedPreferences("recording_stars", Context.MODE_PRIVATE)
+                .edit().remove(session.sessionId).apply()
+            // The counter (NEXT_NUMBER_KEY) is left alone so numbers are never reused
+            appContext.getSharedPreferences(NUMBERS_PREFS, Context.MODE_PRIVATE)
                 .edit().remove(session.sessionId).apply()
 
-            // NEW: Clean up star SharedPreferences so deleted session IDs don't pile up
-            context.getSharedPreferences("recording_stars", Context.MODE_PRIVATE)
-                .edit().remove(session.sessionId).apply()
-
-            loadSessions(context, recordingsDir)
+            loadSessions(appContext, recordingsDir)
         }
     }
 }
@@ -184,6 +257,7 @@ fun RecordingsScreen(
     val sessions by viewModel.sessions.collectAsState()
 
     var sessionToRename by remember { mutableStateOf<RecordingSession?>(null) }
+    var sessionToDelete by remember { mutableStateOf<RecordingSession?>(null) }
     var renameText by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
@@ -191,7 +265,7 @@ fun RecordingsScreen(
     }
 
     // --- Rename Dialog ---
-    if (sessionToRename != null) {
+    sessionToRename?.let { session ->
         AlertDialog(
             onDismissRequest = { sessionToRename = null },
             title = { Text("Rename Recording") },
@@ -205,12 +279,32 @@ fun RecordingsScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    viewModel.renameSession(context, sessionToRename!!.sessionId, renameText, recordingsDir)
+                    viewModel.renameSession(context, session.sessionId, renameText, recordingsDir)
                     sessionToRename = null
                 }) { Text("Save") }
             },
             dismissButton = {
                 TextButton(onClick = { sessionToRename = null }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // --- Delete Confirmation Dialog ---
+    sessionToDelete?.let { session ->
+        AlertDialog(
+            onDismissRequest = { sessionToDelete = null },
+            title = { Text("Delete Recording") },
+            text = {
+                Text("Delete \"${session.displayTitle}\"? This action cannot be undone.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteSession(context, session, recordingsDir)
+                    sessionToDelete = null
+                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { sessionToDelete = null }) { Text("Cancel") }
             }
         )
     }
@@ -236,7 +330,7 @@ fun RecordingsScreen(
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(sessions) { session ->
+                    items(sessions, key = { it.sessionId }) { session ->
                         RecordingItem(
                             session = session,
                             onClick = { onSessionSelected(session.sessionId) },
@@ -247,12 +341,12 @@ fun RecordingsScreen(
                                     session.isStarred,
                                     recordingsDir
                                 )
-                            }, // NEW
+                            },
                             onRename = {
                                 renameText = session.customName ?: ""
                                 sessionToRename = session
                             },
-                            onDelete = { viewModel.deleteSession(context, session, recordingsDir) }
+                            onDelete = { sessionToDelete = session }
                         )
                     }
                 }
@@ -265,7 +359,7 @@ fun RecordingsScreen(
 fun RecordingItem(
     session: RecordingSession,
     onClick: () -> Unit,
-    onToggleStar: () -> Unit, // NEW
+    onToggleStar: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -300,7 +394,7 @@ fun RecordingItem(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = session.formattedDate,
+                        text = "${session.formattedDate} • ${session.formattedDuration}",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -308,12 +402,11 @@ fun RecordingItem(
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // NEW: Star/Bookmark IconButton
                 IconButton(onClick = onToggleStar) {
                     Icon(
                         imageVector = Icons.Default.Star,
                         contentDescription = if (session.isStarred) "Unstar Session" else "Star Session",
-                        // Uses primary color if starred, otherwise a faded gray/surface variant color
+                        // Primary colour if starred, otherwise a faded surface-variant colour
                         tint = if (session.isStarred) {
                             MaterialTheme.colorScheme.primary
                         } else {

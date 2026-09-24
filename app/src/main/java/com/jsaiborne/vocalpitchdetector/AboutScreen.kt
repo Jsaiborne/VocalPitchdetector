@@ -53,11 +53,9 @@ import androidx.navigation.NavHostController
 fun AboutScreen(navController: NavHostController, consentManager: ConsentManager) {
     val uriHandler = LocalUriHandler.current
 
-    // TODO: replace these with your real contact details
     val email = "bahehdowski@gmail.com"
     val website = "https://jsaiborne.github.io/"
     val github = "https://github.com/Jsaiborne"
-    // added X (if you prefer a different handle change this string)
     val xUrl = "https://x.com/Jsaiborne"
 
     var selectedTab by remember { mutableStateOf(0) }

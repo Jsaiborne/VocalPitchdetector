@@ -3,7 +3,6 @@
 package com.jsaiborne.vocalpitchdetector
 
 import android.Manifest
-import android.app.Activity
 import android.content.Context
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -77,7 +76,6 @@ import androidx.navigation.NavHostController
 import com.google.android.gms.ads.AdRequest
 import com.google.android.gms.ads.AdSize
 import com.google.android.gms.ads.AdView
-import com.google.android.gms.ads.MobileAds
 import java.io.File
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -106,7 +104,6 @@ fun MainScreen(navController: NavHostController? = null) {
 
     val outerPadding = 8.dp
     val smallGap = 8.dp
-    val menuWidth = 320.dp
 
     var autoCenter by rememberSaveable { mutableStateOf(true) }
     var whiteKeyWidthDpFloat by rememberSaveable { mutableFloatStateOf(56f) }
@@ -127,11 +124,10 @@ fun MainScreen(navController: NavHostController? = null) {
 
     val sharedScroll = rememberScrollState()
 
-    var isRecording by rememberSaveable { mutableStateOf(false) }
-    var isRecordingPaused by rememberSaveable { mutableStateOf(false) }
+    val isRecording by engine.isRecording.collectAsState()
+    val isRecordingPaused by engine.isPaused.collectAsState()
     var showSavedDialog by remember { mutableStateOf(false) }
     var showDiscardDialog by rememberSaveable { mutableStateOf(false) }
-    var currentSessionId by remember { mutableStateOf("") }
 
     var hasMicPermission by remember {
         mutableStateOf(
@@ -179,10 +175,8 @@ fun MainScreen(navController: NavHostController? = null) {
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_PAUSE) {
-                if (isRecording && !isRecordingPaused) {
-                    engine.pauseRecording()
-                    isRecordingPaused = true
-                }
+                // No-op unless a recording is active and running
+                engine.pauseRecording()
                 ToneGenerator.stop()
             }
         }
@@ -210,22 +204,32 @@ fun MainScreen(navController: NavHostController? = null) {
     val config = LocalConfiguration.current
     val isLandscape = config.orientation == Configuration.ORIENTATION_LANDSCAPE
 
-    val consentManager = remember { ConsentManager(context as Activity) }
-    var canShowAds by remember { mutableStateOf(false) }
-
-    LaunchedEffect(Unit) {
-        consentManager.gatherConsent { error ->
-            if (error == null) {
-                MobileAds.initialize(context) {
-                    canShowAds = consentManager.canRequestAds()
-                }
-            } else {
-                canShowAds = consentManager.canRequestAds()
-            }
-        }
-    }
+    val canShowAds = LocalCanShowAds.current
 
     RateAppDialogManager()
+
+    val recordingCallbacks = remember(engine, navController) {
+        RecordingCallbacks(
+            onRecordStart = {
+                val sessionId = System.currentTimeMillis().toString()
+                val recordingsDir = File(context.filesDir, "recordings")
+                recordingsDir.mkdirs()
+                engine.startRecording(
+                    audioFile = File(recordingsDir, "session_${sessionId}_audio.wav"),
+                    pitchFile = File(recordingsDir, "session_${sessionId}_pitch.json")
+                )
+            },
+            onRecordPauseResume = {
+                if (engine.isPaused.value) engine.resumeRecording() else engine.pauseRecording()
+            },
+            onRecordStop = {
+                engine.stopRecording()
+                showSavedDialog = true
+            },
+            onRecordDiscard = { showDiscardDialog = true },
+            onLibraryClick = { navController?.navigate("recordings") }
+        )
+    }
 
     if (showSavedDialog) {
         AlertDialog(
@@ -258,8 +262,6 @@ fun MainScreen(navController: NavHostController? = null) {
                 TextButton(
                     onClick = {
                         engine.cancelRecording()
-                        isRecording = false
-                        isRecordingPaused = false
                         showDiscardDialog = false
                     }
                 ) {
@@ -272,6 +274,55 @@ fun MainScreen(navController: NavHostController? = null) {
         )
     }
 
+    val resetToDefaults = {
+        smoothing = 0.5f
+        bpm = 60f
+        thresholdDb = -34f
+        engine.setVolumeThreshold(dbToRms(-34f))
+        whiteKeyWidthDpFloat = 56f
+        autoCenter = true
+        showNoteLabels = true
+        showHorizontalGrid = true
+        showCurve = true
+        showWhiteTrace = true
+        showWhiteDots = true
+        useSamplePlayer = false
+    }
+
+    val menuSettings = MenuSettings(
+        showNoteLabels = showNoteLabels,
+        showHorizontalGrid = showHorizontalGrid,
+        showCurve = showCurve,
+        showWhiteTrace = showWhiteTrace,
+        showWhiteDots = showWhiteDots,
+        autoCenter = autoCenter,
+        useSamplePlayer = useSamplePlayer,
+        smoothing = smoothing,
+        bpm = bpm,
+        thresholdDb = thresholdDb,
+        currentVolumeDb = currentVolumeDb
+    )
+
+    val menuActions = MenuActions(
+        onShowNoteLabelsChange = { showNoteLabels = it },
+        onShowHorizontalGridChange = { showHorizontalGrid = it },
+        onShowCurveAndTraceChange = { checked ->
+            showCurve = checked
+            showWhiteTrace = checked
+        },
+        onShowWhiteDotsChange = { showWhiteDots = it },
+        onAutoCenterChange = { autoCenter = it },
+        onUseSamplePlayerChange = { useSamplePlayer = it },
+        onSmoothingChange = { smoothing = it },
+        onBpmChange = { bpm = it },
+        onThresholdChange = { newDb ->
+            thresholdDb = newDb
+            engine.setVolumeThreshold(dbToRms(newDb))
+        },
+        onResetDefaults = resetToDefaults,
+        onAbout = { navController?.navigate("about") }
+    )
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -283,84 +334,14 @@ fun MainScreen(navController: NavHostController? = null) {
                 detectedFreq = state.frequency,
                 detectedConfidence = state.confidence,
                 activeMidi = activeMidi,
-                whiteKeyWidthDpFloat = whiteKeyWidthDpFloat,
-                onWhiteKeyWidthChange = { whiteKeyWidthDpFloat = it },
-                autoCenter = autoCenter,
-                onAutoCenterToggle = { autoCenter = it },
                 paused = graphPaused,
                 onTogglePause = { graphPaused = !graphPaused },
-                showNoteLabels = showNoteLabels,
-                onToggleShowNoteLabels = { showNoteLabels = it },
-                showHorizontalGrid = showHorizontalGrid,
-                onToggleShowHorizontalGrid = { showHorizontalGrid = it },
-                showCurve = showCurve,
-                onToggleShowCurve = { showCurve = it },
-                smoothing = smoothing,
-                onSmoothingChange = { smoothing = it },
-                showWhiteTrace = showWhiteTrace,
-                onShowWhiteTraceChange = { showWhiteTrace = it },
-                thresholdDb = thresholdDb,
-                currentVolumeDb = currentVolumeDb,
-                onThresholdChange = { newDb ->
-                    thresholdDb = newDb
-                    engine.setVolumeThreshold(dbToRms(newDb))
-                },
-                bpm = bpm,
-                onBpmChange = { bpm = it },
-                useSamplePlayer = useSamplePlayer,
-                onToggleUseSamplePlayer = { useSamplePlayer = it },
-                showWhiteDots = showWhiteDots,
-                onShowWhiteDotsChange = { showWhiteDots = it },
-                onResetDefaults = {
-                    smoothing = 0.5f
-                    bpm = 60f
-                    thresholdDb = -34f
-                    engine.setVolumeThreshold(dbToRms(-34f))
-                    whiteKeyWidthDpFloat = 56f
-                    autoCenter = true
-                    showNoteLabels = true
-                    showHorizontalGrid = true
-                    showCurve = true
-                    showWhiteTrace = true
-                    showWhiteDots = true
-                    useSamplePlayer = false
-                },
-                navController = navController,
+                menuSettings = menuSettings,
+                menuActions = menuActions,
                 canShowAds = canShowAds,
                 isRecording = isRecording,
                 isRecordingPaused = isRecordingPaused,
-                callbacks = RecordingCallbacks(
-                    onRecordStart = {
-                        currentSessionId = System.currentTimeMillis().toString()
-                        val recordingsDir = File(context.filesDir, "recordings")
-                        recordingsDir.mkdirs()
-                        val audioFile = File(recordingsDir, "session_${currentSessionId}_audio.wav")
-                        val pitchFile = File(
-                            recordingsDir,
-                            "session_${currentSessionId}_pitch.json"
-                        )
-                        engine.startRecording(audioFile, pitchFile)
-                        isRecording = true
-                        isRecordingPaused = false
-                    },
-                    onRecordPauseResume = {
-                        if (isRecordingPaused) {
-                            engine.resumeRecording()
-                            isRecordingPaused = false
-                        } else {
-                            engine.pauseRecording()
-                            isRecordingPaused = true
-                        }
-                    },
-                    onRecordStop = {
-                        engine.stopRecording()
-                        isRecording = false
-                        isRecordingPaused = false
-                        showSavedDialog = true
-                    },
-                    onRecordDiscard = { showDiscardDialog = true },
-                    onLibraryClick = { navController?.navigate("recordings") }
-                )
+                callbacks = recordingCallbacks
             )
 
             Spacer(modifier = Modifier.height(smallGap))
@@ -403,7 +384,6 @@ fun MainScreen(navController: NavHostController? = null) {
                         engine = engine,
                         modifier = Modifier.fillMaxSize(),
                         paused = graphPaused,
-                        onTogglePause = { graphPaused = !graphPaused },
                         startMidi = 24,
                         endMidi = 84,
                         whiteKeyWidthDp = whiteKeyWidthDpFloat.dp,
@@ -446,210 +426,18 @@ fun MainScreen(navController: NavHostController? = null) {
                 )
 
                 Box(modifier = Modifier.align(Alignment.End).padding(end = 12.dp)) {
-                    DropdownMenu(
+                    SettingsMenu(
                         expanded = menuExpandedPortrait,
-                        onDismissRequest = { menuExpandedPortrait = false },
-                        modifier = Modifier.width(menuWidth)
-                    ) {
-                        val portraitMenuScroll = rememberScrollState()
-                        Column(
-                            modifier = Modifier
-                                .padding(12.dp)
-                                .heightIn(max = 360.dp)
-                                .verticalScroll(portraitMenuScroll),
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text(
-                                        "Show note labels",
-                                        modifier = Modifier.weight(1f),
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                    Switch(
-                                        checked = showNoteLabels,
-                                        onCheckedChange = { showNoteLabels = it }
-                                    )
-                                }
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text(
-                                        "Show grid lines",
-                                        modifier = Modifier.weight(1f),
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                    Switch(
-                                        checked = showHorizontalGrid,
-                                        onCheckedChange = { showHorizontalGrid = it }
-                                    )
-                                }
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text(
-                                        "Show curve & trace",
-                                        modifier = Modifier.weight(1f),
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                    Switch(
-                                        checked = showCurve && showWhiteTrace,
-                                        onCheckedChange = { checked ->
-                                            showCurve = checked
-                                            showWhiteTrace = checked
-                                        }
-                                    )
-                                }
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text(
-                                        "Show white dots",
-                                        modifier = Modifier.weight(1f),
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                    Switch(
-                                        checked = showWhiteDots,
-                                        onCheckedChange = { showWhiteDots = it }
-                                    )
-                                }
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text(
-                                        "Auto-center",
-                                        modifier = Modifier.weight(1f),
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                    Switch(
-                                        checked = autoCenter,
-                                        onCheckedChange = { autoCenter = it }
-                                    )
-                                }
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text(
-                                        "Use piano samples",
-                                        modifier = Modifier.weight(1f),
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                    Switch(
-                                        checked = useSamplePlayer,
-                                        onCheckedChange = { useSamplePlayer = it }
-                                    )
-                                }
-                            }
-                            HorizontalDivider()
-                            Text(
-                                "Smoothing: ${(smoothing * 100).roundToInt()}%",
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                            Slider(
-                                value = smoothing,
-                                onValueChange = { smoothing = it },
-                                valueRange = 0f..1f,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Text(
-                                "Tempo: ${bpm.roundToInt()} BPM",
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                            Slider(
-                                value = bpm,
-                                onValueChange = { bpm = it },
-                                valueRange = 60f..240f,
-                                steps = 180,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            LiveVolumeSlider(
-                                thresholdDb = thresholdDb,
-                                currentVolumeDb = currentVolumeDb,
-                                onThresholdChange = { newDb ->
-                                    thresholdDb = newDb
-                                    engine.setVolumeThreshold(dbToRms(newDb))
-                                }
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(12.dp))
-                        HorizontalDivider()
-                        Spacer(modifier = Modifier.height(8.dp))
-                        DropdownMenuItem(
-                            text = { Text("Reset to Defaults") },
-                            onClick = {
-                                smoothing = 0.5f
-                                bpm = 60f
-                                thresholdDb = -34f
-                                engine.setVolumeThreshold(dbToRms(-34f))
-                                whiteKeyWidthDpFloat = 56f
-                                autoCenter = true
-                                showNoteLabels = true
-                                showHorizontalGrid = true
-                                showCurve = true
-                                showWhiteTrace = true
-                                showWhiteDots = true
-                                useSamplePlayer = false
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("About") },
-                            onClick = {
-                                menuExpandedPortrait = false
-                                navController?.navigate("about")
-                            }
-                        )
-                    }
+                        onDismiss = { menuExpandedPortrait = false },
+                        settings = menuSettings,
+                        actions = menuActions
+                    )
                 }
 
                 PortraitRecordingControls(
                     isRecording = isRecording,
                     isRecordingPaused = isRecordingPaused,
-                    callbacks = RecordingCallbacks(
-                        onRecordStart = {
-                            currentSessionId = System.currentTimeMillis().toString()
-                            val recordingsDir = File(context.filesDir, "recordings")
-                            recordingsDir.mkdirs()
-                            val audioFile = File(
-                                recordingsDir,
-                                "session_${currentSessionId}_audio.wav"
-                            )
-                            val pitchFile = File(
-                                recordingsDir,
-                                "session_${currentSessionId}_pitch.json"
-                            )
-                            engine.startRecording(audioFile, pitchFile)
-                            isRecording = true
-                            isRecordingPaused = false
-                        },
-                        onRecordPauseResume = {
-                            if (isRecordingPaused) {
-                                engine.resumeRecording()
-                                isRecordingPaused = false
-                            } else {
-                                engine.pauseRecording()
-                                isRecordingPaused = true
-                            }
-                        },
-                        onRecordStop = {
-                            engine.stopRecording()
-                            isRecording = false
-                            isRecordingPaused = false
-                            showSavedDialog = true
-                        },
-                        onRecordDiscard = { showDiscardDialog = true },
-                        onLibraryClick = { navController?.navigate("recordings") }
-                    )
+                    callbacks = recordingCallbacks
                 )
             }
 
@@ -670,7 +458,7 @@ fun MainScreen(navController: NavHostController? = null) {
             PitchGraphCard(
                 engine = engine,
                 modifier = Modifier.fillMaxWidth().weight(1f),
-                paused = graphPaused, onTogglePause = { graphPaused = !graphPaused },
+                paused = graphPaused,
                 startMidi = 24, endMidi = 84, whiteKeyWidthDp = whiteKeyWidthDpFloat.dp,
                 scrollState = sharedScroll, alignmentOffsetDp = graphAlignmentDp.dp,
                 timeWindowMs = 8000L,
@@ -844,34 +632,11 @@ private fun TopAppBarLandscapeCompact(
     detectedFreq: Float,
     detectedConfidence: Float,
     activeMidi: Int?,
-    whiteKeyWidthDpFloat: Float,
-    onWhiteKeyWidthChange: (Float) -> Unit,
-    autoCenter: Boolean,
-    onAutoCenterToggle: (Boolean) -> Unit,
     paused: Boolean,
     onTogglePause: () -> Unit,
-    showNoteLabels: Boolean,
-    onToggleShowNoteLabels: (Boolean) -> Unit,
-    showHorizontalGrid: Boolean,
-    onToggleShowHorizontalGrid: (Boolean) -> Unit,
-    showCurve: Boolean,
-    onToggleShowCurve: (Boolean) -> Unit,
-    smoothing: Float,
-    onSmoothingChange: (Float) -> Unit,
-    showWhiteTrace: Boolean,
-    onShowWhiteTraceChange: (Boolean) -> Unit,
-    currentVolumeDb: Float,
-    thresholdDb: Float,
-    onThresholdChange: (Float) -> Unit,
-    bpm: Float,
-    onBpmChange: (Float) -> Unit,
-    useSamplePlayer: Boolean,
-    onToggleUseSamplePlayer: (Boolean) -> Unit,
-    showWhiteDots: Boolean,
-    onShowWhiteDotsChange: (Boolean) -> Unit,
-    onResetDefaults: () -> Unit,
+    menuSettings: MenuSettings,
+    menuActions: MenuActions,
     canShowAds: Boolean,
-    navController: NavHostController? = null,
     isRecording: Boolean,
     isRecordingPaused: Boolean,
     callbacks: RecordingCallbacks
@@ -955,153 +720,12 @@ private fun TopAppBarLandscapeCompact(
                                 modifier = Modifier.size(20.dp)
                             )
                         }
-                        DropdownMenu(
+                        SettingsMenu(
                             expanded = menuExpanded,
-                            onDismissRequest = { menuExpanded = false },
-                            modifier = Modifier.width(320.dp)
-                        ) {
-                            val landscapeMenuScroll = rememberScrollState()
-                            Column(
-                                modifier = Modifier.padding(12.dp)
-                                    .heightIn(max = 360.dp)
-                                    .verticalScroll(landscapeMenuScroll),
-                                verticalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                Column(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text(
-                                            "Show note labels",
-                                            modifier = Modifier.weight(1f),
-                                            style = MaterialTheme.typography.bodyMedium
-                                        )
-                                        Switch(
-                                            checked = showNoteLabels,
-                                            onCheckedChange = onToggleShowNoteLabels
-                                        )
-                                    }
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text(
-                                            "Show grid lines",
-                                            modifier = Modifier.weight(1f),
-                                            style = MaterialTheme.typography.bodyMedium
-                                        )
-                                        Switch(
-                                            checked = showHorizontalGrid,
-                                            onCheckedChange = onToggleShowHorizontalGrid
-                                        )
-                                    }
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text(
-                                            "Show curve & trace",
-                                            modifier = Modifier.weight(1f),
-                                            style = MaterialTheme.typography.bodyMedium
-                                        )
-                                        Switch(
-                                            checked = showCurve && showWhiteTrace,
-                                            onCheckedChange = { checked ->
-                                                onToggleShowCurve(checked)
-                                                onShowWhiteTraceChange(checked)
-                                            }
-                                        )
-                                    }
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text(
-                                            "Show white dots",
-                                            modifier = Modifier.weight(1f),
-                                            style = MaterialTheme.typography.bodyMedium
-                                        )
-                                        Switch(
-                                            checked = showWhiteDots,
-                                            onCheckedChange = onShowWhiteDotsChange
-                                        )
-                                    }
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text(
-                                            "Auto-center",
-                                            modifier = Modifier.weight(1f),
-                                            style = MaterialTheme.typography.bodyMedium
-                                        )
-                                        Switch(
-                                            checked = autoCenter,
-                                            onCheckedChange = onAutoCenterToggle
-                                        )
-                                    }
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text(
-                                            "Use piano samples",
-                                            modifier = Modifier.weight(1f),
-                                            style = MaterialTheme.typography.bodyMedium
-                                        )
-                                        Switch(
-                                            checked = useSamplePlayer,
-                                            onCheckedChange = { onToggleUseSamplePlayer(it) }
-                                        )
-                                    }
-                                }
-                                HorizontalDivider()
-                                Text(
-                                    "Smoothing: ${(smoothing * 100).roundToInt()}%",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                                Slider(
-                                    value = smoothing,
-                                    onValueChange = onSmoothingChange,
-                                    valueRange = 0f..1f,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                                Text(
-                                    "Tempo: ${bpm.roundToInt()} BPM",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                                Slider(
-                                    value = bpm,
-                                    onValueChange = onBpmChange,
-                                    valueRange = 60f..240f,
-                                    steps = 180,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                                LiveVolumeSlider(
-                                    thresholdDb = thresholdDb,
-                                    currentVolumeDb = currentVolumeDb,
-                                    onThresholdChange = onThresholdChange
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(12.dp))
-                            HorizontalDivider()
-                            Spacer(modifier = Modifier.height(8.dp))
-                            DropdownMenuItem(
-                                text = { Text("Reset to Defaults") },
-                                onClick = { onResetDefaults() }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("About") },
-                                onClick = {
-                                    menuExpanded = false
-                                    navController?.navigate("about")
-                                }
-                            )
-                        }
+                            onDismiss = { menuExpanded = false },
+                            settings = menuSettings,
+                            actions = menuActions
+                        )
                     }
                 }
 
@@ -1173,6 +797,131 @@ private fun TopAppBarLandscapeCompact(
                 }
             }
         }
+    }
+}
+
+/** Current values shown in the settings dropdown (shared by the portrait and landscape layouts). */
+private data class MenuSettings(
+    val showNoteLabels: Boolean,
+    val showHorizontalGrid: Boolean,
+    val showCurve: Boolean,
+    val showWhiteTrace: Boolean,
+    val showWhiteDots: Boolean,
+    val autoCenter: Boolean,
+    val useSamplePlayer: Boolean,
+    val smoothing: Float,
+    val bpm: Float,
+    val thresholdDb: Float,
+    val currentVolumeDb: Float
+)
+
+/** What the settings dropdown can change. */
+private data class MenuActions(
+    val onShowNoteLabelsChange: (Boolean) -> Unit,
+    val onShowHorizontalGridChange: (Boolean) -> Unit,
+    val onShowCurveAndTraceChange: (Boolean) -> Unit,
+    val onShowWhiteDotsChange: (Boolean) -> Unit,
+    val onAutoCenterChange: (Boolean) -> Unit,
+    val onUseSamplePlayerChange: (Boolean) -> Unit,
+    val onSmoothingChange: (Float) -> Unit,
+    val onBpmChange: (Float) -> Unit,
+    val onThresholdChange: (Float) -> Unit,
+    val onResetDefaults: () -> Unit,
+    val onAbout: () -> Unit
+)
+
+@Composable
+private fun SwitchRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text(
+            label,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+@Suppress("MagicNumber", "LongMethod")
+@Composable
+private fun SettingsMenu(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    settings: MenuSettings,
+    actions: MenuActions
+) {
+    DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = onDismiss,
+        modifier = Modifier.width(320.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .padding(12.dp)
+                .heightIn(max = 360.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                SwitchRow("Show note labels", settings.showNoteLabels, actions.onShowNoteLabelsChange)
+                SwitchRow("Show grid lines", settings.showHorizontalGrid, actions.onShowHorizontalGridChange)
+                SwitchRow(
+                    "Show curve & trace",
+                    settings.showCurve && settings.showWhiteTrace,
+                    actions.onShowCurveAndTraceChange
+                )
+                SwitchRow("Show white dots", settings.showWhiteDots, actions.onShowWhiteDotsChange)
+                SwitchRow("Auto-center", settings.autoCenter, actions.onAutoCenterChange)
+                SwitchRow("Use piano samples", settings.useSamplePlayer, actions.onUseSamplePlayerChange)
+            }
+            HorizontalDivider()
+            Text(
+                "Smoothing: ${(settings.smoothing * 100).roundToInt()}%",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Slider(
+                value = settings.smoothing,
+                onValueChange = actions.onSmoothingChange,
+                valueRange = 0f..1f,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                "Tempo: ${settings.bpm.roundToInt()} BPM",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Slider(
+                value = settings.bpm,
+                onValueChange = actions.onBpmChange,
+                valueRange = 60f..240f,
+                steps = 180,
+                modifier = Modifier.fillMaxWidth()
+            )
+            LiveVolumeSlider(
+                thresholdDb = settings.thresholdDb,
+                currentVolumeDb = settings.currentVolumeDb,
+                onThresholdChange = actions.onThresholdChange
+            )
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        HorizontalDivider()
+        Spacer(modifier = Modifier.height(8.dp))
+        DropdownMenuItem(
+            text = { Text("Reset to Defaults") },
+            onClick = actions.onResetDefaults
+        )
+        DropdownMenuItem(
+            text = { Text("About") },
+            onClick = {
+                onDismiss()
+                actions.onAbout()
+            }
+        )
     }
 }
 

@@ -6,6 +6,7 @@ import java.io.File
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -13,6 +14,31 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
+
+/** Serializes a recorded session to the JSON format read back by [PlaybackViewModel]. */
+internal fun serializePitchSession(
+    pitchPoints: List<RecordedPitchPoint>,
+    stableNotes: List<RecordedPitchPoint>
+): String {
+    fun toJson(points: List<RecordedPitchPoint>): JSONArray {
+        val array = JSONArray()
+        for (point in points) {
+            array.put(
+                JSONObject().apply {
+                    put("timestampMs", point.timestampMs)
+                    put("frequencyHz", point.frequencyHz.toDouble())
+                    put("midiNote", point.midiNote)
+                }
+            )
+        }
+        return array
+    }
+
+    return JSONObject().apply {
+        put("pitchData", toJson(pitchPoints))
+        put("stableNotes", toJson(stableNotes))
+    }.toString()
+}
 
 @Suppress("TooManyFunctions")
 class PitchEngine(
@@ -52,16 +78,25 @@ class PitchEngine(
     private val _stableNotes = MutableSharedFlow<StableNote>(extraBufferCapacity = 10)
     val stableNotes: SharedFlow<StableNote> = _stableNotes
 
+    // --- Recording state (source of truth for the UI) ---
+    private val _isRecording = MutableStateFlow(false)
+    val isRecording: StateFlow<Boolean> = _isRecording
+
+    private val _isPaused = MutableStateFlow(false)
+    val isPaused: StateFlow<Boolean> = _isPaused
+
     private var detector: AudioRecordPitchDetector? = null
+
+    @Volatile
     private var running = false
 
     private var volumeThreshold: Float = DEFAULT_VOLUME_THRESHOLD
     private var pitchConfidenceThreshold: Float = DEFAULT_CONFIDENCE_THRESHOLD
     private var minContiguousFrames: Int = DEFAULT_MIN_CONTIGUOUS_FRAMES
 
-    // --- Recording States ---
-    private var isRecordingSession = false
-    private var isRecordingPaused = false
+    // Everything below is guarded by recordLock: it is written from the audio thread
+    // (recorded points) and the UI thread (start/pause/resume/stop).
+    private val recordLock = Any()
 
     // Time tracking variables to keep JSON aligned with the paused audio
     private var recordingStartTimeMs = 0L
@@ -73,7 +108,7 @@ class PitchEngine(
 
     private var currentPitchFile: File? = null
 
-    // NEW: Track the audio file so we can delete it if discarded
+    // Track the audio file so we can delete it if discarded
     private var currentAudioFile: File? = null
 
     fun start() {
@@ -99,19 +134,11 @@ class PitchEngine(
                         timestampMs = System.currentTimeMillis()
                     )
 
-                    @Suppress("ComplexCondition")
-                    if (isRecordingSession && !isRecordingPaused && freqHz > 0 &&
-                        confidence >= pitchConfidenceThreshold
-                    ) {
-                        val relativeTimeMs = System.currentTimeMillis() - recordingStartTimeMs - accumulatedPauseTimeMs
-                        val midiNote = freqToMidi(freqHz.toDouble()).roundToInt()
-
-                        recordedSession.add(
-                            RecordedPitchPoint(
-                                timestampMs = relativeTimeMs,
-                                frequencyHz = freqHz,
-                                midiNote = midiNote
-                            )
+                    if (freqHz > 0 && confidence >= pitchConfidenceThreshold && _isRecording.value) {
+                        recordPoint(
+                            target = recordedSession,
+                            freqHz = freqHz,
+                            midiNote = freqToMidi(freqHz.toDouble()).roundToInt()
                         )
                     }
                 },
@@ -119,24 +146,16 @@ class PitchEngine(
                     _volumeRms.value = rms
                 },
                 onStableNote = { midiNote, frequencyHz ->
-                    val now = System.currentTimeMillis()
                     _stableNotes.tryEmit(
                         StableNote(
                             midi = midiNote,
                             frequency = frequencyHz,
-                            timestampMs = now
+                            timestampMs = System.currentTimeMillis()
                         )
                     )
 
-                    if (isRecordingSession && !isRecordingPaused) {
-                        val relativeTimeMs = now - recordingStartTimeMs - accumulatedPauseTimeMs
-                        recordedStableNotes.add(
-                            RecordedPitchPoint(
-                                timestampMs = relativeTimeMs,
-                                frequencyHz = frequencyHz,
-                                midiNote = midiNote
-                            )
-                        )
+                    if (_isRecording.value) {
+                        recordPoint(recordedStableNotes, frequencyHz, midiNote)
                     }
                 }
             )
@@ -145,111 +164,119 @@ class PitchEngine(
         running = true
     }
 
-    fun startRecording(audioFile: File, pitchFile: File) {
-        isRecordingSession = true
-        isRecordingPaused = false
-        recordedSession.clear()
-        recordedStableNotes.clear()
-
-        currentPitchFile = pitchFile
-        currentAudioFile = audioFile // NEW: Save reference for discard feature
-
-        recordingStartTimeMs = System.currentTimeMillis()
-        accumulatedPauseTimeMs = 0L
-        pauseStartTimeMs = 0L
-
-        detector?.startDiskRecording(audioFile)
+    /** Adds a point to [target] unless recording has stopped or is paused. */
+    private fun recordPoint(target: MutableList<RecordedPitchPoint>, freqHz: Float, midiNote: Int) {
+        val now = System.currentTimeMillis()
+        synchronized(recordLock) {
+            if (!_isRecording.value || _isPaused.value) return
+            val relativeTimeMs = now - recordingStartTimeMs - accumulatedPauseTimeMs
+            target.add(RecordedPitchPoint(relativeTimeMs, freqHz, midiNote))
+        }
     }
 
+    fun startRecording(audioFile: File, pitchFile: File) {
+        val activeDetector = detector ?: return
+        if (_isRecording.value) return
+
+        synchronized(recordLock) {
+            recordedSession.clear()
+            recordedStableNotes.clear()
+            currentPitchFile = pitchFile
+            currentAudioFile = audioFile
+            recordingStartTimeMs = System.currentTimeMillis()
+            accumulatedPauseTimeMs = 0L
+            pauseStartTimeMs = 0L
+            _isPaused.value = false
+        }
+
+        activeDetector.startDiskRecording(audioFile)
+        _isRecording.value = true
+    }
+
+    /** Finishes the WAV file and saves the pitch trace next to it. Safe to call when not recording. */
     fun stopRecording() {
-        isRecordingSession = false
-        isRecordingPaused = false
+        if (!_isRecording.value) return
+
+        val pitchFile: File?
+        val pitchSnapshot: List<RecordedPitchPoint>
+        val stableSnapshot: List<RecordedPitchPoint>
+        synchronized(recordLock) {
+            _isRecording.value = false
+            _isPaused.value = false
+            pitchFile = currentPitchFile
+            pitchSnapshot = recordedSession.toList()
+            stableSnapshot = recordedStableNotes.toList()
+            recordedSession.clear()
+            recordedStableNotes.clear()
+            currentPitchFile = null
+            currentAudioFile = null
+        }
+
         detector?.stopDiskRecording()
 
-        val pitchFile = currentPitchFile ?: return
+        if (pitchFile == null) return
 
-        scope.launch(Dispatchers.IO) {
+        // NonCancellable: the caller's scope may already be cancelled (e.g. the screen was left
+        // mid-recording), but the file must still be written.
+        scope.launch(Dispatchers.IO + NonCancellable) {
             try {
-                val rootObj = JSONObject()
-
-                // 1. Save Pitch Trace
-                val pitchArray = JSONArray()
-                for (point in recordedSession) {
-                    val obj = JSONObject()
-                    obj.put("timestampMs", point.timestampMs)
-                    obj.put("frequencyHz", point.frequencyHz.toDouble())
-                    obj.put("midiNote", point.midiNote)
-                    pitchArray.put(obj)
-                }
-                rootObj.put("pitchData", pitchArray)
-
-                // 2. Save Stable Markers
-                val stableArray = JSONArray()
-                for (point in recordedStableNotes) {
-                    val obj = JSONObject()
-                    obj.put("timestampMs", point.timestampMs)
-                    obj.put("frequencyHz", point.frequencyHz.toDouble())
-                    obj.put("midiNote", point.midiNote)
-                    stableArray.put(obj)
-                }
-                rootObj.put("stableNotes", stableArray)
-
-                pitchFile.writeText(rootObj.toString())
+                pitchFile.writeText(serializePitchSession(pitchSnapshot, stableSnapshot))
             } catch (e: java.io.IOException) {
                 e.printStackTrace()
-            } finally {
-                currentPitchFile = null
-                currentAudioFile = null // NEW: Clear the audio file reference
-                recordedSession.clear()
-                recordedStableNotes.clear()
             }
         }
     }
 
-    // --- NEW: Cancel & Delete Method ---
+    /** Stops recording and deletes the partial audio/pitch files. */
     fun cancelRecording() {
-        isRecordingSession = false
-        isRecordingPaused = false
-
-        // Stop the underlying writer to release the file lock
-        detector?.stopDiskRecording()
-
-        // Delete the files if they were created
-        try {
-            currentAudioFile?.let { if (it.exists()) it.delete() }
-            currentPitchFile?.let { if (it.exists()) it.delete() }
-        } catch (e: java.io.IOException) {
-            e.printStackTrace()
-        } finally {
-            // Reset state
-            currentAudioFile = null
-            currentPitchFile = null
+        val audioFile: File?
+        val pitchFile: File?
+        synchronized(recordLock) {
+            _isRecording.value = false
+            _isPaused.value = false
+            audioFile = currentAudioFile
+            pitchFile = currentPitchFile
             recordedSession.clear()
             recordedStableNotes.clear()
+            currentAudioFile = null
+            currentPitchFile = null
+        }
+
+        // Stop the underlying writer to release the file lock before deleting
+        detector?.stopDiskRecording()
+
+        try {
+            audioFile?.let { if (it.exists()) it.delete() }
+            pitchFile?.let { if (it.exists()) it.delete() }
+        } catch (e: SecurityException) {
+            e.printStackTrace()
         }
     }
-    // -----------------------------------
 
     fun stop() {
+        // Never drop an in-progress recording just because the screen went away.
+        if (_isRecording.value) stopRecording()
         detector?.stop()
         detector = null
         running = false
     }
 
     fun pauseRecording() {
-        detector?.pauseDiskRecording()
-        if (!isRecordingPaused) {
-            isRecordingPaused = true
+        synchronized(recordLock) {
+            if (!_isRecording.value || _isPaused.value) return
+            _isPaused.value = true
             pauseStartTimeMs = System.currentTimeMillis()
         }
+        detector?.pauseDiskRecording()
     }
 
     fun resumeRecording() {
-        detector?.resumeDiskRecording()
-        if (isRecordingPaused) {
-            isRecordingPaused = false
-            accumulatedPauseTimeMs += (System.currentTimeMillis() - pauseStartTimeMs)
+        synchronized(recordLock) {
+            if (!_isRecording.value || !_isPaused.value) return
+            accumulatedPauseTimeMs += System.currentTimeMillis() - pauseStartTimeMs
+            _isPaused.value = false
         }
+        detector?.resumeDiskRecording()
     }
 
     fun setVolumeThreshold(threshold: Float) {
@@ -259,10 +286,12 @@ class PitchEngine(
 
     fun setPitchConfidenceThreshold(threshold: Float) {
         pitchConfidenceThreshold = threshold.coerceIn(0f, 1f)
+        detector?.pitchConfidenceThreshold = pitchConfidenceThreshold
     }
 
     fun setMinContiguousFrames(frames: Int) {
         minContiguousFrames = frames.coerceAtLeast(1)
+        detector?.minContiguousFrames = minContiguousFrames
     }
 
     fun isRunning(): Boolean = running

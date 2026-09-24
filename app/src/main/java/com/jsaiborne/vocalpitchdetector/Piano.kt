@@ -40,7 +40,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
@@ -66,40 +65,26 @@ fun Piano(
     val sState = scrollState ?: rememberScrollState()
     val density = LocalDensity.current
 
-    // Helper: safe-play wrapper that falls back to ToneGenerator on exception
-    // Helper: safe-play wrapper that falls back to ToneGenerator on exception
+    // Plays a sample when enabled and loaded, otherwise (or on failure) a synthesised tone.
     @Suppress("TooGenericExceptionCaught")
     val playNoteSafely: (Int, Double, Boolean) -> Unit = { midi, freq, sustain ->
-        try {
-            if (useSamplePlayer) {
-                // Check if the sample actually played
-                val didPlay = SamplePlayer.play(midi)
-                if (!didPlay) {
-                    // Fallback while samples are loading
-                    if (sustain) {
-                        ToneGenerator.playToneContinuous(freq)
-                    } else {
-                        ToneGenerator.playTone(freq, 300)
-                    }
-                }
+        val playSynthTone = {
+            if (sustain) {
+                ToneGenerator.playToneContinuous(freq)
             } else {
-                if (sustain) {
-                    ToneGenerator.playToneContinuous(freq)
-                } else {
-                    ToneGenerator.playTone(freq, 300)
-                }
+                ToneGenerator.playTone(freq, 300)
             }
+        }
+        try {
+            // SamplePlayer.play returns false while samples are still loading
+            if (!useSamplePlayer || !SamplePlayer.play(midi)) playSynthTone()
         } catch (e: RuntimeException) {
             Log.w(
                 "Piano",
                 "SamplePlayer.play failed for midi=$midi, " +
                     "falling back to ToneGenerator: ${e.message}"
             )
-            if (sustain) {
-                ToneGenerator.playToneContinuous(freq)
-            } else {
-                ToneGenerator.playTone(freq, 300)
-            }
+            playSynthTone()
         }
     }
 
@@ -133,6 +118,35 @@ fun Piano(
     var pressedMidi by remember { mutableStateOf<Int?>(null) }
     var pressedIndex by remember { mutableStateOf<Int?>(null) }
     var pressedBlackMidi by remember { mutableStateOf<Int?>(null) }
+
+    // Press/tap behaviour shared by the portrait white and black keys
+    fun Modifier.keyGestures(midi: Int): Modifier = pointerInput(midi, useSamplePlayer) {
+        var playedByPress = false
+        detectTapGestures(
+            onPress = {
+                playedByPress = true
+                pressedMidi = midi
+                val freq = midiToFreq(midi)
+                playNoteSafely(midi, freq, true)
+                onKeyPressed?.invoke(midi, freq)
+                try {
+                    tryAwaitRelease()
+                } finally {
+                    // on release stop the continuous tone (if using the oscillator)
+                    if (!useSamplePlayer) ToneGenerator.stop()
+                    pressedMidi = null
+                    playedByPress = false
+                }
+            },
+            onTap = {
+                // only handle tap-sound if onPress didn't already play
+                if (playedByPress) return@detectTapGestures
+                val freq = midiToFreq(midi)
+                playNoteSafely(midi, freq, false)
+                onKeyPressed?.invoke(midi, freq)
+            }
+        )
+    }
 
     if (!rotated) {
         // PORTRAIT
@@ -193,34 +207,7 @@ fun Piano(
                                 .shadow(elevation)
                                 .graphicsLayer { scaleX = scale; scaleY = scale }
                                 .background(bg)
-                                .pointerInput(midi, useSamplePlayer) {
-                                    var playedByPress = false
-                                    detectTapGestures(onPress = {
-                                        playedByPress = true
-                                        pressedMidi = midi
-                                        val freq = 440.0 * 2.0.pow((midi - 69) / 12.0)
-                                        // use safe player
-                                        playNoteSafely(midi, freq, true)
-                                        // notify callback that key was pressed
-                                        onKeyPressed?.invoke(midi, freq)
-                                        try {
-                                            tryAwaitRelease()
-                                        } finally {
-                                            // on release stop continuous tone (if oscillator)
-                                            if (!useSamplePlayer) {
-                                                ToneGenerator.stop()
-                                            }
-                                            pressedMidi = null
-                                            playedByPress = false
-                                        }
-                                    }, onTap = {
-                                            // only handle tap-sound if onPress didn't already play
-                                            if (playedByPress) return@detectTapGestures
-                                            val freq = 440.0 * 2.0.pow((midi - 69) / 12.0)
-                                            playNoteSafely(midi, freq, false)
-                                            onKeyPressed?.invoke(midi, freq)
-                                        })
-                                }
+                                .keyGestures(midi)
                         ) {
                             if (midiToNoteName(midi).startsWith("C")) {
                                 Text(
@@ -263,30 +250,7 @@ fun Piano(
                             .shadow(elevation)
                             .graphicsLayer { scaleX = scale; scaleY = scale }
                             .background(bg)
-                            .pointerInput(midi, useSamplePlayer) {
-                                var playedByPress = false
-                                detectTapGestures(onPress = {
-                                    playedByPress = true
-                                    pressedMidi = midi
-                                    val freq = 440.0 * 2.0.pow((midi - 69) / 12.0)
-                                    playNoteSafely(midi, freq, true)
-                                    onKeyPressed?.invoke(midi, freq)
-                                    try {
-                                        tryAwaitRelease()
-                                    } finally {
-                                        if (!useSamplePlayer) {
-                                            ToneGenerator.stop()
-                                        }
-                                        pressedMidi = null
-                                        playedByPress = false
-                                    }
-                                }, onTap = {
-                                        if (playedByPress) return@detectTapGestures
-                                        val freq = 440.0 * 2.0.pow((midi - 69) / 12.0)
-                                        playNoteSafely(midi, freq, false)
-                                        onKeyPressed?.invoke(midi, freq)
-                                    })
-                            }
+                            .keyGestures(midi)
                     ) {}
                 }
             }
@@ -465,7 +429,7 @@ fun Piano(
 
                                         playedByPress = true
                                         pressedMidi = hitMidi
-                                        val freq = 440.0 * 2.0.pow((hitMidi!! - 69) / 12.0)
+                                        val freq = midiToFreq(hitMidi)
 
                                         // use safe player
                                         playNoteSafely(hitMidi, freq, true)
@@ -512,7 +476,7 @@ fun Piano(
                                             hitMidi = reversedWhite[idx]
                                         }
 
-                                        val freq = 440.0 * 2.0.pow((hitMidi!! - 69) / 12.0)
+                                        val freq = midiToFreq(hitMidi)
                                         playNoteSafely(hitMidi, freq, false)
                                         onKeyPressed?.invoke(hitMidi, freq)
                                     }

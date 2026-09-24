@@ -197,6 +197,8 @@ dependencies {
     implementation(libs.androidx.compose.foundation.layout)
 
     testImplementation(libs.junit)
+    // Real org.json for JVM unit tests (the android.jar copy is stubbed out)
+    testImplementation("org.json:json:20231013")
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
@@ -204,7 +206,6 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 
-    implementation("com.github.st-h:TarsosDSP:2.4.1")
     implementation("androidx.navigation:navigation-compose:2.8.7")
     implementation("com.google.android.gms:play-services-ads:25.0.0")
     implementation("com.google.android.ump:user-messaging-platform:4.0.0")

@@ -22,13 +22,20 @@ object ToneGenerator {
     // Static short-tone AudioTrack
     private var staticTrack: AudioTrack? = null
 
-    // Streaming continuous tone
-    @Volatile
-    private var streaming = false
-    private var streamThread: Thread? = null
-    private var streamTrack: AudioTrack? = null
+    /**
+     * One streaming tone. Each call to [playToneContinuous] gets its own handle so that [stop]
+     * can only ever tear down the tone it was asked to stop, never a newer one.
+     */
+    private class StreamHandle(val track: AudioTrack) {
+        @Volatile
+        var stopRequested = false
+        var thread: Thread? = null
+    }
 
-    private val defaultSampleRate = 44100
+    private val streamLock = Any()
+    private var currentStream: StreamHandle? = null
+
+    private const val DEFAULT_SAMPLE_RATE = 44100
 
     // fade settings (ms) - tweak to taste
     private const val STATIC_FADE_IN_MS = 8
@@ -61,7 +68,7 @@ object ToneGenerator {
     /**
      * Play a short static tone. A small exponential fade-in and fade-out is applied to avoid clicks.
      */
-    fun playTone(freqHz: Double, durationMs: Int = 1000, sampleRate: Int = defaultSampleRate) {
+    fun playTone(freqHz: Double, durationMs: Int = 1000, sampleRate: Int = DEFAULT_SAMPLE_RATE) {
         stopStatic()
 
         val count = (sampleRate * (durationMs / 1000.0)).toInt().coerceAtLeast(1)
@@ -128,9 +135,8 @@ object ToneGenerator {
     }
 
     /** Start a continuous streaming tone (returns immediately). Call stop() to end (will fade out). */
-    fun playToneContinuous(freqHz: Double, sampleRate: Int = defaultSampleRate) {
+    fun playToneContinuous(freqHz: Double, sampleRate: Int = DEFAULT_SAMPLE_RATE) {
         stop() // stop any existing streaming tone
-        streaming = true
 
         val minBufSize = AudioTrack.getMinBufferSize(
             sampleRate,
@@ -139,17 +145,23 @@ object ToneGenerator {
         )
 
         // create streaming audio track
-        streamTrack = AudioTrack(
-            AudioManager.STREAM_MUSIC,
-            sampleRate,
-            AudioFormat.CHANNEL_OUT_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            minBufSize,
-            AudioTrack.MODE_STREAM
+        val handle = StreamHandle(
+            AudioTrack(
+                AudioManager.STREAM_MUSIC,
+                sampleRate,
+                AudioFormat.CHANNEL_OUT_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                minBufSize,
+                AudioTrack.MODE_STREAM
+            )
         )
-        streamTrack?.play()
+        val track = handle.track
+        track.play()
 
-        streamThread = thread(start = true) {
+        // Publish the handle before the thread can run so a concurrent stop() always sees it
+        synchronized(streamLock) { currentStream = handle }
+
+        handle.thread = thread(start = true) {
             val bufferSize = 1024
             val buffer = ShortArray(bufferSize)
             var iLong = 0L
@@ -164,9 +176,9 @@ object ToneGenerator {
             val baseAmp = (Short.MAX_VALUE * 0.25).toInt() // keep headroom to avoid clipping
 
             // Loop until we've finished steady-play and finished fading out
-            loop@ while (streamTrack != null) {
+            loop@ while (true) {
                 // If stop() was called, start fade-out (once)
-                if (!streaming && fadeOutRemaining == -1) {
+                if (handle.stopRequested && fadeOutRemaining == -1) {
                     fadeOutRemaining = totalFadeOutSamples
                 }
 
@@ -206,7 +218,7 @@ object ToneGenerator {
 
                 // Write buffer
                 try {
-                    streamTrack?.write(buffer, 0, buffer.size)
+                    track.write(buffer, 0, buffer.size)
                 } catch (e: IllegalStateException) {
                     android.util.Log.e("ToneGenerator", "Track write failed", e)
                 }
@@ -215,55 +227,47 @@ object ToneGenerator {
             // Flush a tiny bit of silence to ensure the track consumes final samples
             try {
                 val silence = ShortArray(SILENCE_BUFFER_SIZE)
-                streamTrack?.write(silence, 0, silence.size)
+                track.write(silence, 0, silence.size)
             } catch (e: IllegalStateException) {
                 android.util.Log.w("ToneGenerator", "Silence flush failed", e)
             }
 
-            try {
-                streamTrack?.stop()
-            } catch (e: IllegalStateException) {
-                android.util.Log.w("ToneGenerator", "Stream track stop failed", e)
-            }
-            try {
-                streamTrack?.release()
-            } catch (e: IllegalStateException) {
-                android.util.Log.w("ToneGenerator", "Stream track release failed", e)
-            }
-            streamTrack = null
+            releaseTrack(track)
         }
     }
 
     /** Stop any playing tone (static or streaming). Will cause streaming tone to fade out smoothly. */
     fun stop() {
         stopStatic()
-        // signal streaming thread to begin fade-out
-        streaming = false
-        val threadToJoin = streamThread
-        streamThread = null
 
-        if (threadToJoin != null) {
-            thread(start = true) {
-                try {
-                    threadToJoin.join(THREAD_JOIN_TIMEOUT_MS)
-                } catch (e: InterruptedException) {
-                    android.util.Log.e("ToneGenerator", "Thread join interrupted", e)
-                }
-                // In case thread didn't finish for some reason, try to stop/release the track
-                streamTrack?.let {
-                    try {
-                        it.stop()
-                    } catch (e: IllegalStateException) {
-                        android.util.Log.e("ToneGenerator", "Error stopping track", e)
-                    }
-                    try {
-                        it.release()
-                    } catch (e: IllegalStateException) {
-                        android.util.Log.e("ToneGenerator", "Error releasing track", e)
-                    }
-                }
-                streamTrack = null
+        val handle = synchronized(streamLock) {
+            currentStream.also { currentStream = null }
+        } ?: return
+
+        // Signal the streaming thread to begin its fade-out; it releases its own track when done.
+        handle.stopRequested = true
+
+        // Watchdog: if the thread doesn't finish in time, force-release this handle's track only.
+        thread(start = true) {
+            try {
+                handle.thread?.join(THREAD_JOIN_TIMEOUT_MS)
+            } catch (e: InterruptedException) {
+                android.util.Log.e("ToneGenerator", "Thread join interrupted", e)
             }
+            if (handle.thread?.isAlive == true) releaseTrack(handle.track)
+        }
+    }
+
+    private fun releaseTrack(track: AudioTrack) {
+        try {
+            track.stop()
+        } catch (e: IllegalStateException) {
+            android.util.Log.w("ToneGenerator", "Stream track stop failed", e)
+        }
+        try {
+            track.release()
+        } catch (e: IllegalStateException) {
+            android.util.Log.w("ToneGenerator", "Stream track release failed", e)
         }
     }
 }

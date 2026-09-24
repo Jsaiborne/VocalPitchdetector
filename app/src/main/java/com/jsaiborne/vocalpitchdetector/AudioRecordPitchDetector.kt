@@ -29,14 +29,22 @@ class AudioRecordPitchDetector(
     private val stabilityCentsThreshold: Float = 30f,
     private val stabilityConfidenceThreshold: Float = 0.55f,
     private val stabilityRequiredFrames: Int = 3,
-    private val pitchConfidenceThreshold: Float = 0.45f,
-    private val minContiguousFrames: Int = 4
+    pitchConfidenceThreshold: Float = 0.45f,
+    minContiguousFrames: Int = 4
 ) {
     private var audioRecord: AudioRecord? = null
     private val running = AtomicBoolean(false)
     private var workerThread: Thread? = null
 
-    // --- NEW: Disk Recording State ---
+    // Tunable while running (written from the UI thread, read on the audio thread)
+    @Volatile
+    var pitchConfidenceThreshold: Float = pitchConfidenceThreshold
+
+    @Volatile
+    var minContiguousFrames: Int = minContiguousFrames
+
+    // --- Disk Recording State (all access to the stream/counters is guarded by diskLock) ---
+    private val diskLock = Any()
     private var recordingStream: DataOutputStream? = null
     private val isRecordingToDisk = AtomicBoolean(false)
     private val isDiskRecordingPaused = AtomicBoolean(false)
@@ -106,18 +114,9 @@ class AudioRecordPitchDetector(
             while (running.get()) {
                 val read = audioRecord?.read(audioBuffer, 0, bufferSize) ?: 0
                 if (read > 0) {
-                    // --- NEW: Write raw PCM to disk if recording is active ---
+                    // Write raw PCM to disk if recording is active
                     if (isRecordingToDisk.get() && !isDiskRecordingPaused.get()) {
-                        try {
-                            byteBuffer.clear()
-                            for (i in 0 until read) {
-                                byteBuffer.putShort(audioBuffer[i])
-                            }
-                            recordingStream?.write(byteBuffer.array(), 0, read * 2)
-                            recordedBytes += read * 2 // 2 bytes per Short
-                        } catch (e: java.io.IOException) {
-                            Log.e("AudioRecordPitch", "Failed to write audio stream", e)
-                        }
+                        writePcm(audioBuffer, read)
                     }
 
                     // 1. Calculate RMS volume
@@ -138,8 +137,8 @@ class AudioRecordPitchDetector(
                         if (confidence >= pitchConfidenceThreshold) {
                             val finalPitch = tracker.processFrame(
                                 yinResult.pitchHz,
-                                rms.toDouble(),
-                                confidence.toDouble()
+                                yinResult.cmndfMin,
+                                rms.toDouble()
                             )
                             if (finalPitch != null) {
                                 framesWithPitch++
@@ -164,36 +163,60 @@ class AudioRecordPitchDetector(
         workerThread?.start()
     }
 
-    // --- NEW: Recording Control Methods ---
+    private fun writePcm(samples: ShortArray, count: Int) {
+        synchronized(diskLock) {
+            val stream = recordingStream ?: return
+            try {
+                byteBuffer.clear()
+                for (i in 0 until count) {
+                    byteBuffer.putShort(samples[i])
+                }
+                stream.write(byteBuffer.array(), 0, count * 2)
+                recordedBytes += count * 2 // 2 bytes per Short
+            } catch (e: java.io.IOException) {
+                Log.e("AudioRecordPitch", "Failed to write audio stream", e)
+            }
+        }
+    }
+
+    // --- Recording Control Methods ---
     fun startDiskRecording(outputFile: File) {
-        try {
-            currentOutputFile = outputFile
-            recordedBytes = 0
-            recordingStream = DataOutputStream(BufferedOutputStream(FileOutputStream(outputFile)))
-            // Write 44 bytes of empty space to hold the WAV header later
-            recordingStream?.write(ByteArray(44))
-            isRecordingToDisk.set(true)
-        } catch (e: java.io.IOException) {
-            Log.e("AudioRecordPitch", "Failed to start disk recording", e)
+        synchronized(diskLock) {
+            try {
+                currentOutputFile = outputFile
+                recordedBytes = 0
+                isDiskRecordingPaused.set(false)
+                val stream = DataOutputStream(BufferedOutputStream(FileOutputStream(outputFile)))
+                // Write 44 bytes of empty space to hold the WAV header later
+                stream.write(ByteArray(WAV_HEADER_BYTES))
+                recordingStream = stream
+                isRecordingToDisk.set(true)
+            } catch (e: java.io.IOException) {
+                Log.e("AudioRecordPitch", "Failed to start disk recording", e)
+                currentOutputFile = null
+            }
         }
     }
 
     fun stopDiskRecording() {
-        isRecordingToDisk.set(false)
-        try {
-            recordingStream?.close()
+        synchronized(diskLock) {
+            isRecordingToDisk.set(false)
+            val stream = recordingStream
+            val file = currentOutputFile
             recordingStream = null
+            currentOutputFile = null
+            if (stream == null || file == null) return
 
-            // Rewrite the file header with the exact byte lengths
-            currentOutputFile?.let { file ->
+            try {
+                stream.close()
+
+                // Rewrite the file header with the exact byte lengths
                 RandomAccessFile(file, "rw").use { raf ->
                     writeWavHeader(raf, recordedBytes, sampleRate, 1, 16)
                 }
+            } catch (e: java.io.IOException) {
+                Log.e("AudioRecordPitch", "Error stopping disk recording", e)
             }
-        } catch (e: java.io.IOException) {
-            Log.e("AudioRecordPitch", "Error stopping disk recording", e)
-        } finally {
-            currentOutputFile = null
         }
     }
 
@@ -205,37 +228,6 @@ class AudioRecordPitchDetector(
     fun resumeDiskRecording() {
         isDiskRecordingPaused.set(false)
     }
-
-    // -----------------------------
-    private fun writeWavHeader(
-        raf: RandomAccessFile,
-        audioLen: Int,
-        sampleRate: Int,
-        channels: Int,
-        bitDepth: Int
-    ) {
-        val byteRate = sampleRate * channels * bitDepth / 8
-        val totalDataLen = audioLen + 36
-
-        // RandomAccessFile writes in Big Endian, so we use reverseBytes for Little Endian WAV spec
-        raf.seek(0)
-        raf.write("RIFF".toByteArray(Charsets.US_ASCII))
-        raf.writeInt(Integer.reverseBytes(totalDataLen))
-        raf.write("WAVE".toByteArray(Charsets.US_ASCII))
-        raf.write("fmt ".toByteArray(Charsets.US_ASCII))
-        raf.writeInt(Integer.reverseBytes(16)) // Subchunk1Size (16 for PCM)
-        raf.writeShort(java.lang.Short.reverseBytes(1.toShort()).toInt()) // AudioFormat (1 for PCM)
-        raf.writeShort(java.lang.Short.reverseBytes(channels.toShort()).toInt())
-        raf.writeInt(Integer.reverseBytes(sampleRate))
-        raf.writeInt(Integer.reverseBytes(byteRate))
-        raf.writeShort(
-            java.lang.Short.reverseBytes((channels * bitDepth / 8).toShort()).toInt()
-        ) // BlockAlign
-        raf.writeShort(java.lang.Short.reverseBytes(bitDepth.toShort()).toInt()) // BitsPerSample
-        raf.write("data".toByteArray(Charsets.US_ASCII))
-        raf.writeInt(Integer.reverseBytes(audioLen))
-    }
-    // --------------------------------------
 
     fun stop(onStopped: (() -> Unit)? = null) {
         running.set(false)
@@ -283,4 +275,38 @@ class AudioRecordPitchDetector(
             }
         }
     }
+
+    private companion object {
+        private const val WAV_HEADER_BYTES = 44
+    }
+}
+
+/** Writes a 44-byte PCM WAV header at the start of [raf] for [audioLen] bytes of sample data. */
+internal fun writeWavHeader(
+    raf: RandomAccessFile,
+    audioLen: Int,
+    sampleRate: Int,
+    channels: Int,
+    bitDepth: Int
+) {
+    val byteRate = sampleRate * channels * bitDepth / 8
+    val totalDataLen = audioLen + 36
+
+    // RandomAccessFile writes in Big Endian, so we use reverseBytes for Little Endian WAV spec
+    raf.seek(0)
+    raf.write("RIFF".toByteArray(Charsets.US_ASCII))
+    raf.writeInt(Integer.reverseBytes(totalDataLen))
+    raf.write("WAVE".toByteArray(Charsets.US_ASCII))
+    raf.write("fmt ".toByteArray(Charsets.US_ASCII))
+    raf.writeInt(Integer.reverseBytes(16)) // Subchunk1Size (16 for PCM)
+    raf.writeShort(java.lang.Short.reverseBytes(1.toShort()).toInt()) // AudioFormat (1 for PCM)
+    raf.writeShort(java.lang.Short.reverseBytes(channels.toShort()).toInt())
+    raf.writeInt(Integer.reverseBytes(sampleRate))
+    raf.writeInt(Integer.reverseBytes(byteRate))
+    raf.writeShort(
+        java.lang.Short.reverseBytes((channels * bitDepth / 8).toShort()).toInt()
+    ) // BlockAlign
+    raf.writeShort(java.lang.Short.reverseBytes(bitDepth.toShort()).toInt()) // BitsPerSample
+    raf.write("data".toByteArray(Charsets.US_ASCII))
+    raf.writeInt(Integer.reverseBytes(audioLen))
 }

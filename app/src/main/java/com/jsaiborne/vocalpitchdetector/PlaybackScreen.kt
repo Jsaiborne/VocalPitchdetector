@@ -2,7 +2,6 @@
 
 package com.jsaiborne.vocalpitchdetector
 
-import android.app.Activity
 import android.content.Context
 import android.content.res.Configuration
 import android.media.MediaPlayer
@@ -57,13 +56,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.google.android.gms.ads.MobileAds
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -94,31 +94,66 @@ class PlaybackViewModel : ViewModel() {
     var sessionDate by mutableStateOf("")
         private set
 
+    private var loadedAudioPath: String? = null
+    private var loadJob: Job? = null
+
     fun loadSession(
         context: Context,
         audioFile: File,
         pitchFile: File
     ) {
-        mediaPlayer?.release()
-        mediaPlayer = MediaPlayer().apply {
-            setDataSource(audioFile.absolutePath)
-            prepare()
-            totalDurationMs = duration.toLong()
-            setOnCompletionListener {
-                this@PlaybackViewModel.isPlaying = false
-                this@PlaybackViewModel.currentPositionMs = 0L
-                seekTo(0)
-            }
-        }
+        // The screen re-runs this on recomposition; don't rebuild the player for the same file.
+        if (loadedAudioPath == audioFile.absolutePath) return
+        loadedAudioPath = audioFile.absolutePath
 
-        viewModelScope.launch {
+        loadJob?.cancel()
+        mediaPlayer?.release()
+        mediaPlayer = null
+        isPlaying = false
+        currentPositionMs = 0L
+        totalDurationMs = 0L
+
+        val appContext = context.applicationContext
+        loadJob = viewModelScope.launch {
+            // MediaPlayer.prepare() blocks on file IO, so keep it off the main thread
+            val player = withContext(Dispatchers.IO) { createPlayer(audioFile) }
+            if (!isActive) {
+                player?.release()
+                return@launch
+            }
+
+            mediaPlayer = player
+            totalDurationMs = player?.duration?.toLong() ?: 0L
+
             val (data, markers) = parsePitchData(pitchFile)
             pitchData = data
             stableMarkers = markers
 
-            val (title, date) = calculateMetadata(context, audioFile)
+            val (title, date) = calculateMetadata(appContext, audioFile)
             sessionTitle = title
             sessionDate = date
+        }
+    }
+
+    private fun createPlayer(audioFile: File): MediaPlayer? {
+        val player = MediaPlayer()
+        return try {
+            player.setDataSource(audioFile.absolutePath)
+            player.prepare()
+            player.setOnCompletionListener {
+                isPlaying = false
+                currentPositionMs = 0L
+                it.seekTo(0)
+            }
+            player
+        } catch (e: java.io.IOException) {
+            android.util.Log.e("PlaybackViewModel", "Failed to prepare audio", e)
+            player.release()
+            null
+        } catch (e: IllegalStateException) {
+            android.util.Log.e("PlaybackViewModel", "Failed to prepare audio", e)
+            player.release()
+            null
         }
     }
 
@@ -129,25 +164,12 @@ class PlaybackViewModel : ViewModel() {
         val dir = audioFile.parentFile
         val name = audioFile.name
         val idStr = name.substringAfter("session_").substringBefore("_audio.wav")
-        val currentTimestamp = idStr.toLongOrNull() ?: audioFile.lastModified()
+        val currentTimestamp = sessionTimestamp(idStr, audioFile)
 
-        var sessionNum = 1
-        if (dir != null && dir.exists()) {
-            val allAudioFiles = dir.listFiles()?.filter {
-                it.name.startsWith("session_") && it.name.endsWith("_audio.wav")
-            } ?: emptyList()
-
-            val sortedTimestamps = allAudioFiles.map { f ->
-                val id = f.name.substringAfter("session_")
-                    .substringBefore("_audio.wav")
-                id.toLongOrNull() ?: f.lastModified()
-            }.sorted()
-
-            val index = sortedTimestamps.indexOf(currentTimestamp)
-            if (index != -1) {
-                sessionNum = index + 1
-            }
-        }
+        // Same persisted numbering the recordings list uses, so titles always agree
+        val timestamps = (dir?.let { listSessionFiles(it) } ?: emptyMap())
+            .mapValues { (id, files) -> sessionTimestamp(id, files.first) } + (idStr to currentTimestamp)
+        val sessionNum = sessionNumbersFor(context, timestamps)[idStr] ?: 1
 
         val prefs = context.getSharedPreferences("recording_names", Context.MODE_PRIVATE)
         val customName = prefs.getString(idStr, null)
@@ -307,25 +329,11 @@ fun PlaybackScreen(
         }
     }
 
-    // --- Ads Setup ---
-    val consentManager = remember { ConsentManager(context as Activity) }
-    var canShowAds by remember { mutableStateOf(false) }
-
-    LaunchedEffect(Unit) {
-        consentManager.gatherConsent { error ->
-            if (error == null) {
-                MobileAds.initialize(context) {
-                    canShowAds = consentManager.canRequestAds()
-                }
-            } else {
-                canShowAds = consentManager.canRequestAds()
-            }
-        }
-    }
-    // -----------------
+    val canShowAds = LocalCanShowAds.current
 
     var showCurve by remember { mutableStateOf(true) }
     var showDots by remember { mutableStateOf(false) }
+    var showBars by remember { mutableStateOf(false) }
     var showNoteLabels by remember { mutableStateOf(true) }
     var autoCenter by remember { mutableStateOf(true) }
     var showSettingsMenu by remember { mutableStateOf(false) }
@@ -393,6 +401,16 @@ fun PlaybackScreen(
                                 onClick = { showDots = !showDots }
                             )
                             DropdownMenuItem(
+                                text = { Text("Show Bars") },
+                                trailingIcon = {
+                                    Checkbox(
+                                        checked = showBars,
+                                        onCheckedChange = { showBars = it }
+                                    )
+                                },
+                                onClick = { showBars = !showBars }
+                            )
+                            DropdownMenuItem(
                                 text = { Text("Markers & Labels") },
                                 trailingIcon = {
                                     Checkbox(
@@ -419,6 +437,8 @@ fun PlaybackScreen(
                     onToggleShowCurve = { showCurve = it },
                     showDots = showDots,
                     onToggleShowDots = { showDots = it },
+                    showBars = showBars,
+                    onToggleShowBars = { showBars = it },
                     showNoteLabels = showNoteLabels,
                     onToggleShowNoteLabels = { showNoteLabels = it }
                 )
@@ -447,6 +467,7 @@ fun PlaybackScreen(
                         stableMarkers = viewModel.stableMarkers,
                         showCurve = showCurve,
                         showWhiteDots = showDots,
+                        showBars = showBars,
                         showNoteLabels = showNoteLabels,
                         autoCenter = autoCenter
                     )
@@ -457,6 +478,7 @@ fun PlaybackScreen(
                         stableMarkers = viewModel.stableMarkers,
                         showCurve = showCurve,
                         showWhiteDots = showDots,
+                        showBars = showBars,
                         showNoteLabels = showNoteLabels,
                         autoCenter = autoCenter
                     )
@@ -464,15 +486,7 @@ fun PlaybackScreen(
             }
 
             // --- Compact Controls Section ---
-            val formatTime = { ms: Long ->
-                val totalSeconds = ms / 1000
-                String.format(
-                    java.util.Locale.US,
-                    "%d:%02d",
-                    totalSeconds / 60,
-                    totalSeconds % 60
-                )
-            }
+            val formatTime = ::formatDuration
 
             Row(
                 modifier = Modifier
@@ -541,6 +555,8 @@ private fun TopAppBarPlaybackLandscape(
     onToggleShowCurve: (Boolean) -> Unit,
     showDots: Boolean,
     onToggleShowDots: (Boolean) -> Unit,
+    showBars: Boolean,
+    onToggleShowBars: (Boolean) -> Unit,
     showNoteLabels: Boolean,
     onToggleShowNoteLabels: (Boolean) -> Unit
 ) {
@@ -629,6 +645,16 @@ private fun TopAppBarPlaybackLandscape(
                         )
                     },
                     onClick = { onToggleShowDots(!showDots) }
+                )
+                DropdownMenuItem(
+                    text = { Text("Show Bars") },
+                    trailingIcon = {
+                        Checkbox(
+                            checked = showBars,
+                            onCheckedChange = { onToggleShowBars(it) }
+                        )
+                    },
+                    onClick = { onToggleShowBars(!showBars) }
                 )
                 DropdownMenuItem(
                     text = { Text("Markers & Labels") },

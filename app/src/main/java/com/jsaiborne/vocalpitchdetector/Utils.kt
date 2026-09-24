@@ -15,15 +15,19 @@ fun freqToMidi(f: Double): Double {
     return 69.0 + 12.0 * log2(f / 440.0)
 }
 
+private val NOTE_NAMES = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+
+/** Note name with octave, e.g. 60 -> "C4". Works for negative MIDI numbers too. */
 fun midiToNoteName(midi: Int): String {
-    val names = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
-    val octave = midi / 12 - 1
-    return "${names[midi % 12]}$octave"
+    val octave = Math.floorDiv(midi, 12) - 1
+    return "${NOTE_NAMES[Math.floorMod(midi, 12)]}$octave"
 }
 
+/** Frequency in Hz of a MIDI note (A4 = 69 = 440 Hz). */
+fun midiToFreq(midi: Int): Double = 440.0 * 2.0.pow((midi - 69) / 12.0)
+
 fun centsDifference(freq: Double, midiNote: Int): Double {
-    val refFreq = 440.0 * 2.0.pow((midiNote - 69) / 12.0)
-    return 1200.0 * log2(freq / refFreq)
+    return 1200.0 * log2(freq / midiToFreq(midiNote))
 }
 
 fun dbToRms(db: Float, ref: Float = 1f): Float {

@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.compose.NavHost
@@ -26,6 +28,9 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var consentManager: ConsentManager
     private var isMobileAdsInitializeCalled = AtomicBoolean(false)
+
+    // Flips to true once consent is resolved and the Mobile Ads SDK has finished initialising.
+    private val canShowAds = mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,41 +67,43 @@ class MainActivity : ComponentActivity() {
                     // 2. Wrap the NavHost in a Box and apply the padding HERE
                     Box(modifier = Modifier.safeDrawingPadding()) {
                         val navController = rememberNavController()
-                        NavHost(navController = navController, startDestination = "main") {
-                            composable("main") {
-                                // Passing consentManager here so you can show the "Privacy Settings" button
-                                MainScreen(navController = navController)
-                            }
+                        CompositionLocalProvider(LocalCanShowAds provides canShowAds.value) {
+                            NavHost(navController = navController, startDestination = "main") {
+                                composable("main") {
+                                    MainScreen(navController = navController)
+                                }
 
-                            composable("about") {
-                                AboutScreen(navController = navController, consentManager = consentManager)
-                            }
+                                composable("about") {
+                                    AboutScreen(navController = navController, consentManager = consentManager)
+                                }
 
-                            // --- ROUTES FOR RECORDING & PLAYBACK ---
+                                // --- ROUTES FOR RECORDING & PLAYBACK ---
 
-                            composable("recordings") {
-                                RecordingsScreen(
-                                    onNavigateUp = { navController.navigateUp() },
-                                    onSessionSelected = { sessionId ->
-                                        // Route to the playback screen, passing the ID
-                                        navController.navigate("playback/$sessionId")
-                                    }
-                                )
-                            }
+                                composable("recordings") {
+                                    RecordingsScreen(
+                                        onNavigateUp = { navController.navigateUp() },
+                                        onSessionSelected = { sessionId ->
+                                            // Route to the playback screen, passing the ID
+                                            navController.navigate("playback/$sessionId")
+                                        }
+                                    )
+                                }
 
-                            composable("playback/{sessionId}") { backStackEntry ->
-                                val sessionId = backStackEntry.arguments?.getString("sessionId") ?: return@composable
-                                val context = LocalContext.current
+                                composable("playback/{sessionId}") { backStackEntry ->
+                                    val sessionId = backStackEntry.arguments?.getString("sessionId")
+                                        ?: return@composable
+                                    val context = LocalContext.current
 
-                                val recordingsDir = File(context.filesDir, "recordings")
-                                val audioFile = File(recordingsDir, "session_${sessionId}_audio.wav")
-                                val pitchFile = File(recordingsDir, "session_${sessionId}_pitch.json")
+                                    val recordingsDir = File(context.filesDir, "recordings")
+                                    val audioFile = File(recordingsDir, "session_${sessionId}_audio.wav")
+                                    val pitchFile = File(recordingsDir, "session_${sessionId}_pitch.json")
 
-                                PlaybackScreen(
-                                    audioFile = audioFile,
-                                    pitchFile = pitchFile,
-                                    onNavigateUp = { navController.navigateUp() }
-                                )
+                                    PlaybackScreen(
+                                        audioFile = audioFile,
+                                        pitchFile = pitchFile,
+                                        onNavigateUp = { navController.navigateUp() }
+                                    )
+                                }
                             }
                         }
                     }
@@ -108,10 +115,10 @@ class MainActivity : ComponentActivity() {
     private fun initializeMobileAdsSdk() {
         if (isMobileAdsInitializeCalled.getAndSet(true)) return
 
-        // Initialize the Mobile Ads SDK
+        // Initialize the Mobile Ads SDK; only start showing banners once it is ready
         MobileAds.initialize(this) { initializationStatus ->
-            // Optional: Log status or load ads here
             Log.d("AdMob", "SDK Initialized: $initializationStatus")
+            canShowAds.value = consentManager.canRequestAds()
         }
     }
 }

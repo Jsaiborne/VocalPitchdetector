@@ -1,8 +1,16 @@
 package com.jsaiborne.vocalpitchdetector
+
 import android.app.Activity
+import androidx.compose.runtime.compositionLocalOf
 import com.google.android.ump.ConsentInformation
 import com.google.android.ump.ConsentRequestParameters
 import com.google.android.ump.UserMessagingPlatform
+
+/**
+ * True once consent has been resolved and the Mobile Ads SDK is initialised. Provided once by
+ * [MainActivity] so individual screens don't run their own consent/ads setup.
+ */
+val LocalCanShowAds = compositionLocalOf { false }
 
 class ConsentManager(private val activity: Activity) {
     private val consentInformation: ConsentInformation =
