@@ -1,4 +1,5 @@
 @file:OptIn(ExperimentalMaterial3Api::class)
+@file:Suppress("TooManyFunctions")
 
 package com.jsaiborne.vocalpitchdetector
 
@@ -6,6 +7,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
@@ -32,6 +34,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
@@ -126,6 +129,7 @@ fun MainScreen(navController: NavHostController? = null) {
 
     var useSamplePlayer by rememberSaveable { mutableStateOf(false) }
     var showCentsMeter by rememberSaveable { mutableStateOf(true) }
+    var rangeTestActive by rememberSaveable { mutableStateOf(false) }
 
     var graphPaused by remember { mutableStateOf(false) }
     var stableMidi by remember { mutableStateOf<Int?>(null) }
@@ -320,6 +324,11 @@ fun MainScreen(navController: NavHostController? = null) {
         useSamplePlayer = useSamplePlayer,
         showCentsMeter = showCentsMeter,
         useSolfege = NoteNotation.useSolfege,
+        rangeTestUnavailableReason = when {
+            isRecording -> "Stop recording first"
+            !hasMicPermission -> "Microphone permission needed"
+            else -> null
+        },
         bpm = bpm,
         thresholdDb = thresholdDb,
         currentVolumeDb = currentVolumeDb
@@ -340,6 +349,7 @@ fun MainScreen(navController: NavHostController? = null) {
             NoteNotation.useSolfege = checked
             solfegePrefs.edit().putBoolean(PREF_SOLFEGE, checked).apply()
         },
+        onOpenRangeTest = { rangeTestActive = true },
         onBpmChange = { bpm = it },
         onThresholdChange = { newDb ->
             thresholdDb = newDb
@@ -348,6 +358,19 @@ fun MainScreen(navController: NavHostController? = null) {
         onResetDefaults = resetToDefaults,
         onAbout = { navController?.navigate("about") }
     )
+
+    // The guided vocal range test takes over the whole screen (no ad, so its buttons can't be
+    // mis-tapped); the pitch engine and mic keep running underneath.
+    if (rangeTestActive) {
+        BackHandler { rangeTestActive = false }
+        VocalRangeTestScreen(
+            engine = engine,
+            isLandscape = isLandscape,
+            onExit = { rangeTestActive = false },
+            modifier = Modifier.padding(outerPadding)
+        )
+        return
+    }
 
     Column(
         modifier = Modifier
@@ -862,6 +885,8 @@ private data class MenuSettings(
     val useSamplePlayer: Boolean,
     val showCentsMeter: Boolean,
     val useSolfege: Boolean,
+    /** Why the vocal range test can't be opened right now, or null when it can. */
+    val rangeTestUnavailableReason: String?,
     val bpm: Float,
     val thresholdDb: Float,
     val currentVolumeDb: Float
@@ -877,6 +902,7 @@ private data class MenuActions(
     val onUseSamplePlayerChange: (Boolean) -> Unit,
     val onShowCentsMeterChange: (Boolean) -> Unit,
     val onUseSolfegeChange: (Boolean) -> Unit,
+    val onOpenRangeTest: () -> Unit,
     val onBpmChange: (Float) -> Unit,
     val onThresholdChange: (Float) -> Unit,
     val onResetDefaults: () -> Unit,
@@ -898,6 +924,15 @@ private fun SwitchRow(label: String, checked: Boolean, onCheckedChange: (Boolean
     }
 }
 
+@Composable
+private fun MenuSectionHeader(title: String) {
+    Text(
+        text = title.uppercase(Locale.getDefault()),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.primary
+    )
+}
+
 /**
  * How many cents the sung pitch is from the nearest note, as a small bar with a moving needle.
  * Uses a fixed height and keeps its space when nothing is being sung, so the layout never jumps.
@@ -905,7 +940,7 @@ private fun SwitchRow(label: String, checked: Boolean, onCheckedChange: (Boolean
  */
 @Suppress("MagicNumber", "LongMethod")
 @Composable
-private fun CentsMeter(
+internal fun CentsMeter(
     frequency: Float,
     modifier: Modifier = Modifier,
     barWidth: Dp? = null,
@@ -1002,31 +1037,44 @@ private fun SettingsMenu(
         onDismissRequest = onDismiss,
         modifier = Modifier.width(320.dp)
     ) {
+        // Tools stay pinned above the scrolling settings so they are always in reach
+        val rangeTestReason = settings.rangeTestUnavailableReason
+        DropdownMenuItem(
+            text = {
+                Column {
+                    Text("Vocal range test", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        rangeTestReason ?: "Find your lowest and highest notes, guided step by step",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            leadingIcon = { Icon(Icons.Filled.Mic, contentDescription = null) },
+            enabled = rangeTestReason == null,
+            onClick = {
+                onDismiss()
+                actions.onOpenRangeTest()
+            }
+        )
+        HorizontalDivider()
         Column(
             modifier = Modifier
                 .padding(12.dp)
                 .heightIn(max = 360.dp)
                 .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                SwitchRow("Show note labels", settings.showNoteLabels, actions.onShowNoteLabelsChange)
-                SwitchRow("Show grid lines", settings.showHorizontalGrid, actions.onShowHorizontalGridChange)
-                SwitchRow(
-                    "Show curve & trace",
-                    settings.showCurve && settings.showWhiteTrace,
-                    actions.onShowCurveAndTraceChange
-                )
-                SwitchRow("Show white dots", settings.showWhiteDots, actions.onShowWhiteDotsChange)
-                SwitchRow("Auto-center", settings.autoCenter, actions.onAutoCenterChange)
-                SwitchRow("Use piano samples", settings.useSamplePlayer, actions.onUseSamplePlayerChange)
-                SwitchRow("Show cents meter", settings.showCentsMeter, actions.onShowCentsMeterChange)
-                SwitchRow("Solfège note names (Do, Re, Mi)", settings.useSolfege, actions.onUseSolfegeChange)
-            }
-            HorizontalDivider()
+            MenuSectionHeader("Graph")
+            SwitchRow("Show note labels", settings.showNoteLabels, actions.onShowNoteLabelsChange)
+            SwitchRow("Show grid lines", settings.showHorizontalGrid, actions.onShowHorizontalGridChange)
+            SwitchRow(
+                "Show curve & trace",
+                settings.showCurve && settings.showWhiteTrace,
+                actions.onShowCurveAndTraceChange
+            )
+            SwitchRow("Show white dots", settings.showWhiteDots, actions.onShowWhiteDotsChange)
+            SwitchRow("Auto-center", settings.autoCenter, actions.onAutoCenterChange)
             Text(
                 "Tempo: ${settings.bpm.roundToInt()} BPM",
                 style = MaterialTheme.typography.bodySmall
@@ -1038,6 +1086,15 @@ private fun SettingsMenu(
                 steps = 180,
                 modifier = Modifier.fillMaxWidth()
             )
+
+            HorizontalDivider()
+            MenuSectionHeader("Notes & piano")
+            SwitchRow("Show cents meter", settings.showCentsMeter, actions.onShowCentsMeterChange)
+            SwitchRow("Solfège note names (Do, Re, Mi)", settings.useSolfege, actions.onUseSolfegeChange)
+            SwitchRow("Use piano samples", settings.useSamplePlayer, actions.onUseSamplePlayerChange)
+
+            HorizontalDivider()
+            MenuSectionHeader("Microphone")
             LiveVolumeSlider(
                 thresholdDb = settings.thresholdDb,
                 currentVolumeDb = settings.currentVolumeDb,
