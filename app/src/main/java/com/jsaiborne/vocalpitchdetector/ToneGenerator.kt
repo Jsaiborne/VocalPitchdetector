@@ -3,6 +3,7 @@ package com.jsaiborne.vocalpitchdetector
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
+import android.os.SystemClock
 import kotlin.concurrent.thread
 import kotlin.math.PI
 import kotlin.math.exp
@@ -16,7 +17,8 @@ import kotlin.math.sin
  * - playTone(freq, duration): short static tone (uses MODE_STATIC)
  * - playToneContinuous(freq): starts streaming a tone until stop() is called (uses MODE_STREAM)
  *
- * Uses exponential-style envelopes for fade-in/out to reduce clicks.
+ * Uses exponential-style envelopes for the fade-ins, and a long smooth release when a held note is
+ * let go, so notes die away instead of being cut off.
  */
 object ToneGenerator {
     // Static short-tone AudioTrack
@@ -41,15 +43,23 @@ object ToneGenerator {
     private const val STATIC_FADE_IN_MS = 8
     private const val STATIC_FADE_OUT_MS = 20
     private const val STREAM_FADE_IN_MS = 8
-    private const val STREAM_FADE_OUT_MS = 40
 
-    // Exponential shape parameter:
+    // A held note dies away over this long when released, like a piano/organ release, instead of
+    // being cut off. Long enough to sound smooth, short enough that it doesn't feel laggy.
+    private const val STREAM_FADE_OUT_MS = 350
+
+    // Exponential shape parameter (used for the fade-ins and the short static tone):
     // - 0.0 => linear
     // - >0.0 => exponential curve; larger values make the curve more pronounced
     private const val EXP_SHAPE = 6.0
 
     private const val SILENCE_BUFFER_SIZE = 64
-    private const val THREAD_JOIN_TIMEOUT_MS = 300L
+
+    // The watchdog only steps in if the streaming thread is stuck; it must outlast the whole
+    // fade-out plus draining the audio queue, or it would cut the release short
+    private const val THREAD_JOIN_TIMEOUT_MS = 3000L
+    private const val DRAIN_TIMEOUT_MS = 1500L
+    private const val DRAIN_POLL_MS = 5L
 
     /**
      * Exponential-style envelope mapping.
@@ -63,6 +73,16 @@ object ToneGenerator {
         val denom = exp(k) - 1.0
         // If denom is tiny (shouldn't be for >0), avoid division by zero
         return if (denom == 0.0) p else (exp(k * p) - 1.0) / denom
+    }
+
+    /**
+     * Smooth release curve (smoothstep) for a note that has been let go.
+     * [remaining] runs from 1 (release just started) down to 0 (silent); the gain starts and ends
+     * with zero slope, so there is neither a kink when the release starts nor a click at the end.
+     */
+    private fun releaseEnv(remaining: Double): Double {
+        val r = remaining.coerceIn(0.0, 1.0)
+        return r * r * (3.0 - 2.0 * r)
     }
 
     /**
@@ -172,17 +192,19 @@ object ToneGenerator {
 
             var fadeInRemaining = totalFadeInSamples
             var fadeOutRemaining = -1 // -1 means not started fading out yet
+            var framesWritten = 0
 
             val baseAmp = (Short.MAX_VALUE * 0.25).toInt() // keep headroom to avoid clipping
 
             // Loop until we've finished steady-play and finished fading out
-            loop@ while (true) {
+            while (true) {
                 // If stop() was called, start fade-out (once)
                 if (handle.stopRequested && fadeOutRemaining == -1) {
                     fadeOutRemaining = totalFadeOutSamples
                 }
 
                 // Fill buffer
+                var finished = false
                 for (i in 0 until bufferSize) {
                     // envelope multiplier
                     val env = when {
@@ -202,11 +224,13 @@ object ToneGenerator {
                                 0.0
                             }
                             fadeOutRemaining--
-                            expEnv(progress)
+                            releaseEnv(progress)
                         }
                         fadeOutRemaining == 0 -> {
-                            // fade finished, we're done — exit outer loop after writing what we have
-                            break@loop
+                            // Fade finished: pad the rest of this buffer with silence and write it, so
+                            // the very end of the release is played rather than dropped
+                            finished = true
+                            0.0
                         }
                         else -> 1.0
                     }
@@ -219,20 +243,24 @@ object ToneGenerator {
                 // Write buffer
                 try {
                     track.write(buffer, 0, buffer.size)
+                    framesWritten += buffer.size
                 } catch (e: IllegalStateException) {
                     android.util.Log.e("ToneGenerator", "Track write failed", e)
                 }
+
+                if (finished) break
             }
 
             // Flush a tiny bit of silence to ensure the track consumes final samples
             try {
                 val silence = ShortArray(SILENCE_BUFFER_SIZE)
                 track.write(silence, 0, silence.size)
+                framesWritten += silence.size
             } catch (e: IllegalStateException) {
                 android.util.Log.w("ToneGenerator", "Silence flush failed", e)
             }
 
-            releaseTrack(track)
+            drainAndRelease(track, framesWritten)
         }
     }
 
@@ -256,6 +284,25 @@ object ToneGenerator {
             }
             if (handle.thread?.isAlive == true) releaseTrack(handle.track)
         }
+    }
+
+    /**
+     * Waits until the track has actually played everything written to it, then releases it.
+     * Releasing straight after the last write throws away whatever is still queued, which is the
+     * end of the fade-out, and is heard as a click.
+     */
+    private fun drainAndRelease(track: AudioTrack, framesWritten: Int) {
+        val deadline = SystemClock.elapsedRealtime() + DRAIN_TIMEOUT_MS
+        try {
+            while (SystemClock.elapsedRealtime() < deadline && track.playbackHeadPosition < framesWritten) {
+                Thread.sleep(DRAIN_POLL_MS)
+            }
+        } catch (e: InterruptedException) {
+            android.util.Log.w("ToneGenerator", "Drain wait interrupted", e)
+        } catch (e: IllegalStateException) {
+            android.util.Log.w("ToneGenerator", "Track no longer readable while draining", e)
+        }
+        releaseTrack(track)
     }
 
     private fun releaseTrack(track: AudioTrack) {

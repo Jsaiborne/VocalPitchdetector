@@ -7,6 +7,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -34,10 +35,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -64,7 +65,6 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -95,6 +95,14 @@ import kotlinx.coroutines.delay
 private const val PREFS_NAME = "AppPreferences"
 private const val PREF_NEVER_SHOW_RATE = "NeverShowRateApp"
 private const val PREF_SOLFEGE = "UseSolfege"
+private const val PREF_ASKED_NOTIFICATIONS = "AskedNotificationPermission"
+
+/** Notifications only need a runtime permission from Android 13 (Tiramisu) on. */
+private fun notificationPermissionGranted(context: Context): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
+    val state = ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
+    return state == PackageManager.PERMISSION_GRANTED
+}
 
 private data class RecordingCallbacks(
     val onRecordStart: () -> Unit,
@@ -107,8 +115,8 @@ private data class RecordingCallbacks(
 @Suppress("MagicNumber", "LongMethod")
 @Composable
 fun MainScreen(navController: NavHostController? = null) {
-    val scope = rememberCoroutineScope()
-    val engine = remember { PitchEngine(scope) }
+    // One engine for the whole process, so a recording outlives this screen (see RecordingService)
+    val engine = remember { PitchEngineProvider.get() }
     val state by engine.state.collectAsState()
     val volumeRms by engine.volumeRms.collectAsState()
     val currentVolumeDb = rmsToDb(volumeRms)
@@ -174,8 +182,16 @@ fun MainScreen(navController: NavHostController? = null) {
             engine.setVolumeThreshold(dbToRms(thresholdDb))
         }
         onDispose {
-            engine.stop()
+            // A recording keeps going (RecordingService owns its notification); only release the mic
+            // when nothing needs it
+            if (!engine.isRecording.value) engine.stop()
         }
+    }
+
+    // Tells RecordingService whether a screen is open, so it knows if it may release the mic
+    DisposableEffect(Unit) {
+        PitchEngineProvider.uiAttached = true
+        onDispose { PitchEngineProvider.uiAttached = false }
     }
 
     DisposableEffect(useSamplePlayer) {
@@ -192,11 +208,8 @@ fun MainScreen(navController: NavHostController? = null) {
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_PAUSE) {
-                // No-op unless a recording is active and running
-                engine.pauseRecording()
-                ToneGenerator.stop()
-            }
+            // Recording deliberately keeps running when the screen turns off or the app is left
+            if (event == Lifecycle.Event.ON_PAUSE) ToneGenerator.stop()
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
@@ -231,16 +244,34 @@ fun MainScreen(navController: NavHostController? = null) {
 
     RateAppDialogManager()
 
+    val startRecordingNow: () -> Unit = {
+        val sessionId = System.currentTimeMillis().toString()
+        val recordingsDir = File(context.filesDir, "recordings")
+        recordingsDir.mkdirs()
+        engine.startRecording(
+            audioFile = File(recordingsDir, "session_${sessionId}_audio.wav"),
+            pitchFile = File(recordingsDir, "session_${sessionId}_pitch.json")
+        )
+        // The service shows the notification and keeps the mic alive in the background
+        if (engine.isRecording.value) RecordingService.start(context)
+    }
+
+    // Android 13+ needs a runtime permission for the "recording" notification. Recording starts
+    // whatever the answer; without it the recording just has no visible notification.
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { startRecordingNow() }
+
     val recordingCallbacks = remember(engine, navController) {
         RecordingCallbacks(
             onRecordStart = {
-                val sessionId = System.currentTimeMillis().toString()
-                val recordingsDir = File(context.filesDir, "recordings")
-                recordingsDir.mkdirs()
-                engine.startRecording(
-                    audioFile = File(recordingsDir, "session_${sessionId}_audio.wav"),
-                    pitchFile = File(recordingsDir, "session_${sessionId}_pitch.json")
-                )
+                val alreadyAsked = solfegePrefs.getBoolean(PREF_ASKED_NOTIFICATIONS, false)
+                if (!notificationPermissionGranted(context) && !alreadyAsked) {
+                    solfegePrefs.edit().putBoolean(PREF_ASKED_NOTIFICATIONS, true).apply()
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                } else {
+                    startRecordingNow()
+                }
             },
             onRecordPauseResume = {
                 if (engine.isPaused.value) engine.resumeRecording() else engine.pauseRecording()
@@ -366,6 +397,8 @@ fun MainScreen(navController: NavHostController? = null) {
         VocalRangeTestScreen(
             engine = engine,
             isLandscape = isLandscape,
+            thresholdDb = thresholdDb,
+            onThresholdChange = menuActions.onThresholdChange,
             onExit = { rangeTestActive = false },
             modifier = Modifier.padding(outerPadding)
         )
@@ -594,8 +627,8 @@ private fun InfoOverlay(
                 modifier = Modifier.size(32.dp)
             ) {
                 Icon(
-                    imageVector = Icons.Filled.Settings,
-                    contentDescription = "Open settings",
+                    imageVector = Icons.Filled.Menu,
+                    contentDescription = "Open menu",
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -789,8 +822,8 @@ private fun TopAppBarLandscapeCompact(
                             modifier = Modifier.size(28.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Filled.Settings,
-                                contentDescription = "Graph options",
+                                imageVector = Icons.Filled.Menu,
+                                contentDescription = "Open menu",
                                 modifier = Modifier.size(20.dp)
                             )
                         }

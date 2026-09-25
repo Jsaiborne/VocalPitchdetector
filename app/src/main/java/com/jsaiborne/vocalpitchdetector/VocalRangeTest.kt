@@ -32,7 +32,9 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -62,16 +64,16 @@ import kotlinx.coroutines.delay
 
 // --- Detection logic (no Android or Compose types, so it can be unit tested) ----------------------
 
-internal const val HOLD_MS = 1000L
-internal const val HOLD_TOLERANCE_CENTS = 35f
-internal const val HOLD_MIN_CONFIDENCE = 0.6f
-internal const val DROPOUT_GRACE_MS = 150L
+internal const val HOLD_MS = 600L
+internal const val HOLD_WINDOW_SEMITONES = 0.8
+internal const val HOLD_MIN_CONFIDENCE = 0.3f
+internal const val DROPOUT_GRACE_MS = 300L
 
 /** What [RangeHoldTracker] saw for one pitch update. */
 internal data class HoldSnapshot(
     /** Nearest note to the sung pitch, or null when nothing (confident) is being sung. */
     val noteMidi: Int? = null,
-    /** True when the pitch is close enough to [noteMidi] to count towards a hold. */
+    /** True while the pitch is staying put; false when it is sliding around or has just started. */
     val steady: Boolean = false,
     /** 0..1: how much of the hold time the current note has been sung for. */
     val progress: Float = 0f,
@@ -82,64 +84,72 @@ internal data class HoldSnapshot(
 )
 
 /**
- * Decides when the user has *held* a note. A note counts once the same nearest note stays within
- * [toleranceCents] for [holdMs], with short dropouts tolerated. This keeps glitches and octave
- * jumps from ever becoming someone's "lowest" or "highest" note.
+ * Decides when the user has *held* a note. The pitch has to stay within [windowSemitones] of where
+ * the note started for [holdMs] (natural wobble and vibrato are fine; a glide is not), and short
+ * dropouts up to [dropoutGraceMs] are ignored, so weaker microphones and breathy voices still get
+ * through. A glitch or octave jump just starts a new window, so it can never become someone's
+ * "lowest" or "highest" note. The reported note is the rounded average pitch of the window.
  */
 internal class RangeHoldTracker(
     private val holdMs: Long = HOLD_MS,
-    private val toleranceCents: Float = HOLD_TOLERANCE_CENTS,
+    private val windowSemitones: Double = HOLD_WINDOW_SEMITONES,
     private val minConfidence: Float = HOLD_MIN_CONFIDENCE,
     private val dropoutGraceMs: Long = DROPOUT_GRACE_MS
 ) {
-    private var candidate: Int? = null
-    private var candidateStartMs = 0L
-    private var candidateLastSeenMs = 0L
+    private var anchorMidi: Double? = null
+    private var windowStartMs = 0L
+    private var lastHeardMs = 0L
+    private var sum = 0.0
+    private var count = 0
     private var reported = false
     private var lastVoicedMs = 0L
 
     fun reset() {
-        candidate = null
+        anchorMidi = null
+        sum = 0.0
+        count = 0
         reported = false
     }
 
     fun update(frequencyHz: Float, confidence: Float, nowMs: Long): HoldSnapshot {
         val voiced = frequencyHz > 0f && confidence >= minConfidence
         var noteMidi: Int? = null
-        var steadyMidi: Int? = null
+        var held: Int? = null
 
         if (voiced) {
             lastVoicedMs = nowMs
             val exact = freqToMidi(frequencyHz.toDouble())
-            val nearest = exact.roundToInt()
-            noteMidi = nearest
-            if (abs((exact - nearest) * 100.0) <= toleranceCents) steadyMidi = nearest
-        }
+            noteMidi = exact.roundToInt()
 
-        var held: Int? = null
-        if (steadyMidi != null) {
-            if (steadyMidi != candidate) {
-                candidate = steadyMidi
-                candidateStartMs = nowMs
+            val anchor = anchorMidi
+            if (anchor == null || abs(exact - anchor) > windowSemitones) {
+                // Moved too far from where the note started: begin a new window here
+                anchorMidi = exact
+                windowStartMs = nowMs
+                sum = 0.0
+                count = 0
                 reported = false
             }
-            candidateLastSeenMs = nowMs
-            if (!reported && nowMs - candidateStartMs >= holdMs) {
+            sum += exact
+            count++
+            lastHeardMs = nowMs
+
+            if (!reported && nowMs - windowStartMs >= holdMs) {
                 reported = true
-                held = steadyMidi
+                held = (sum / count).roundToInt()
             }
-        } else if (candidate != null && nowMs - candidateLastSeenMs > dropoutGraceMs) {
+        } else if (anchorMidi != null && nowMs - lastHeardMs > dropoutGraceMs) {
             reset()
         }
 
-        val progress = if (candidate != null) {
-            ((nowMs - candidateStartMs).toFloat() / holdMs).coerceIn(0f, 1f)
+        val progress = if (anchorMidi != null) {
+            ((nowMs - windowStartMs).toFloat() / holdMs).coerceIn(0f, 1f)
         } else {
             0f
         }
         return HoldSnapshot(
             noteMidi = noteMidi,
-            steady = steadyMidi != null,
+            steady = voiced && count >= 2,
             progress = progress,
             heldMidi = held,
             lastVoicedMs = lastVoicedMs
@@ -186,10 +196,27 @@ private const val NO_SOUND_AFTER_MS = 3000L
 private const val EVENT_SHOWN_MS = 3500L
 private const val STUCK_HINT_AFTER_MS = 6000L
 private const val COACH_TICK_MS = 250L
+private const val PEAK_WINDOW_MS = 3000L
 private const val SCALE_LOW_MIDI = 24
 private const val SCALE_HIGH_MIDI = 84
 
 private enum class RangeStep { INTRO, WARMUP, LOW, HIGH, RESULT }
+
+/** Why no note is being found, judged from how loud the microphone signal has been. */
+private enum class MicHint { BELOW_THRESHOLD, LOUD_ENOUGH }
+
+/** Loudest microphone level seen recently; kept outside Compose state so it doesn't recompose. */
+private class PeakLevel {
+    var peakDb = -80f
+    private var peakAtMs = 0L
+
+    fun record(levelDb: Float, nowMs: Long) {
+        if (levelDb >= peakDb || nowMs - peakAtMs > PEAK_WINDOW_MS) {
+            peakDb = levelDb
+            peakAtMs = nowMs
+        }
+    }
+}
 
 private data class RangeEvent(val text: String, val atMs: Long)
 
@@ -222,11 +249,16 @@ private fun saveRange(context: Context, low: Int, high: Int) {
 fun VocalRangeTestScreen(
     engine: PitchEngine,
     isLandscape: Boolean,
+    thresholdDb: Float,
+    onThresholdChange: (Float) -> Unit,
     onExit: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val tracker = remember { RangeHoldTracker() }
+    val peakLevel = remember { PeakLevel() }
+    val volumeRms by engine.volumeRms.collectAsState()
+    val volumeDb = rmsToDb(volumeRms)
     val savedRange = remember { readSavedRange(context) }
 
     var step by remember { mutableStateOf(RangeStep.INTRO) }
@@ -239,6 +271,17 @@ fun VocalRangeTestScreen(
     var extremeAtMs by remember { mutableLongStateOf(0L) }
     var event by remember { mutableStateOf<RangeEvent?>(null) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+
+    // A quiet or breathy voice is easy to miss, so ask the engine to be more forgiving while the
+    // test is open (restored when it closes)
+    DisposableEffect(engine) {
+        engine.setSensitiveDetection(true)
+        onDispose { engine.setSensitiveDetection(false) }
+    }
+
+    LaunchedEffect(engine) {
+        engine.volumeRms.collect { rms -> peakLevel.record(rmsToDb(rms), System.currentTimeMillis()) }
+    }
 
     // Time-based coaching (silence, "stuck") needs a clock even when no new pitch arrives
     LaunchedEffect(Unit) {
@@ -298,7 +341,11 @@ fun VocalRangeTestScreen(
 
     val low = lowMidi
     val high = highMidi
-    val coach = coachMessage(step, snapshot, now, stepStartMs, extremeAtMs, event)
+    val micHint = if (peakLevel.peakDb < thresholdDb) MicHint.BELOW_THRESHOLD else MicHint.LOUD_ENOUGH
+    val silentFor = now - maxOf(snapshot.lastVoicedMs, stepStartMs)
+    val micNeedsAttention = silentFor > NO_SOUND_AFTER_MS && micHint == MicHint.BELOW_THRESHOLD &&
+        (step == RangeStep.WARMUP || step == RangeStep.LOW || step == RangeStep.HIGH)
+    val coach = coachMessage(step, snapshot, now, stepStartMs, extremeAtMs, event, micHint)
 
     Column(
         modifier = modifier
@@ -312,6 +359,9 @@ fun VocalRangeTestScreen(
         when (step) {
             RangeStep.INTRO -> RangeIntro(
                 savedRange = savedRange,
+                thresholdDb = thresholdDb,
+                volumeDb = volumeDb,
+                onThresholdChange = onThresholdChange,
                 onStart = { goTo(RangeStep.WARMUP) },
                 onExit = onExit,
                 modifier = Modifier.weight(1f)
@@ -324,6 +374,10 @@ fun VocalRangeTestScreen(
                 coach = coach,
                 lowMidi = low,
                 highMidi = high,
+                thresholdDb = thresholdDb,
+                volumeDb = volumeDb,
+                micNeedsAttention = micNeedsAttention,
+                onThresholdChange = onThresholdChange,
                 onConfirmLow = {
                     val t = System.currentTimeMillis()
                     event = RangeEvent("Lowest saved: ${midiToDisplayName(low ?: 0)}. Now let's go up.", t)
@@ -358,21 +412,28 @@ fun VocalRangeTestScreen(
 }
 
 /** What the coach says right now; derived from the current step and what has been heard. */
+@Suppress("LongParameterList")
 private fun coachMessage(
     step: RangeStep,
     snapshot: HoldSnapshot,
     now: Long,
     stepStartMs: Long,
     extremeAtMs: Long,
-    event: RangeEvent?
+    event: RangeEvent?,
+    micHint: MicHint
 ): String {
     val silentFor = now - maxOf(snapshot.lastVoicedMs, stepStartMs)
     val direction = if (step == RangeStep.HIGH) "higher" else "lower"
     return when {
         step == RangeStep.INTRO || step == RangeStep.RESULT -> ""
         event != null && now - event.atMs < EVENT_SHOWN_MS -> event.text
+        silentFor > NO_SOUND_AFTER_MS && micHint == MicHint.BELOW_THRESHOLD ->
+            "Your voice is below the volume threshold, so I can't pick it up. " +
+                "Drag the Microphone level slider below to the left to lower the threshold, " +
+                "or sing a little louder."
         silentFor > NO_SOUND_AFTER_MS ->
-            "I can't hear you yet. Sing \"ahh\" a little closer to the mic, or lower the volume threshold in Settings."
+            "I can hear sound but can't lock onto a clear note. Sing a steady \"ahh\". " +
+                "If the room is noisy, raise the volume threshold with the slider below."
         snapshot.noteMidi != null && !snapshot.steady ->
             "Almost! Try to hold the note steady, without sliding."
         step == RangeStep.WARMUP ->
@@ -415,9 +476,13 @@ private fun RangeHeader(step: RangeStep, onExit: () -> Unit) {
     }
 }
 
+@Suppress("LongParameterList")
 @Composable
 private fun RangeIntro(
     savedRange: SavedRange?,
+    thresholdDb: Float,
+    volumeDb: Float,
+    onThresholdChange: (Float) -> Unit,
     onStart: () -> Unit,
     onExit: () -> Unit,
     modifier: Modifier = Modifier
@@ -455,6 +520,13 @@ private fun RangeIntro(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+        MicLevelCard(
+            thresholdDb = thresholdDb,
+            volumeDb = volumeDb,
+            onThresholdChange = onThresholdChange,
+            highlight = false,
+            hint = "Say \"ahh\": the live level should rise above the threshold."
+        )
         Button(onClick = onStart, modifier = Modifier.fillMaxWidth()) { Text("Start the test") }
         TextButton(onClick = onExit) { Text("Not now") }
     }
@@ -470,6 +542,10 @@ private fun RangeLive(
     coach: String,
     lowMidi: Int?,
     highMidi: Int?,
+    thresholdDb: Float,
+    volumeDb: Float,
+    micNeedsAttention: Boolean,
+    onThresholdChange: (Float) -> Unit,
     onConfirmLow: () -> Unit,
     onConfirmHigh: () -> Unit,
     onRedo: () -> Unit,
@@ -519,6 +595,17 @@ private fun RangeLive(
                 }
                 else -> Unit
             }
+            MicLevelCard(
+                thresholdDb = thresholdDb,
+                volumeDb = volumeDb,
+                onThresholdChange = onThresholdChange,
+                highlight = micNeedsAttention,
+                hint = if (micNeedsAttention) {
+                    "Drag the threshold left until the live level goes above it while you sing."
+                } else {
+                    "Your voice should push the live level above the threshold."
+                }
+            )
         }
     }
 
@@ -545,6 +632,40 @@ private fun RangeLive(
         ) {
             readout(Modifier)
             guidance(Modifier.widthIn(max = 560.dp))
+        }
+    }
+}
+
+/** The volume threshold and live microphone level, so it can be tuned without leaving the test. */
+@Composable
+private fun MicLevelCard(
+    thresholdDb: Float,
+    volumeDb: Float,
+    onThresholdChange: (Float) -> Unit,
+    highlight: Boolean,
+    hint: String
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = if (highlight) {
+                MaterialTheme.colorScheme.errorContainer
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant
+            }
+        ),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text("Microphone level", style = MaterialTheme.typography.titleSmall)
+            Text(hint, style = MaterialTheme.typography.bodySmall)
+            LiveVolumeSlider(
+                thresholdDb = thresholdDb,
+                currentVolumeDb = volumeDb,
+                onThresholdChange = onThresholdChange
+            )
         }
     }
 }

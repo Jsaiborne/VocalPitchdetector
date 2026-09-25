@@ -55,6 +55,8 @@ class PitchEngine(
         private const val DEFAULT_VOLUME_THRESHOLD = 0.02f
         private const val DEFAULT_CONFIDENCE_THRESHOLD = 0.45f
         private const val DEFAULT_MIN_CONTIGUOUS_FRAMES = 4
+        private const val SENSITIVE_CONFIDENCE_THRESHOLD = 0.30f
+        private const val SENSITIVE_MIN_CONTIGUOUS_FRAMES = 2
     }
 
     data class PitchState(
@@ -294,5 +296,34 @@ class PitchEngine(
         detector?.minContiguousFrames = minContiguousFrames
     }
 
+    /**
+     * Relaxes the engine's own pitch gates so quieter or breathier voices are still picked up
+     * (used by the vocal range test), or restores the normal defaults.
+     */
+    fun setSensitiveDetection(enabled: Boolean) {
+        setPitchConfidenceThreshold(
+            if (enabled) SENSITIVE_CONFIDENCE_THRESHOLD else DEFAULT_CONFIDENCE_THRESHOLD
+        )
+        setMinContiguousFrames(
+            if (enabled) SENSITIVE_MIN_CONTIGUOUS_FRAMES else DEFAULT_MIN_CONTIGUOUS_FRAMES
+        )
+    }
+
     fun isRunning(): Boolean = running
+}
+
+/**
+ * Holds the one [PitchEngine] for the whole process, so an in-progress recording keeps going when
+ * the screen leaves composition, the app is backgrounded, or the activity is destroyed while
+ * [RecordingService] keeps the process alive.
+ */
+object PitchEngineProvider {
+    private var engine: PitchEngine? = null
+
+    /** True while the main screen is on screen; lets the service know whether it may release the mic. */
+    @Volatile
+    var uiAttached: Boolean = false
+
+    @Synchronized
+    fun get(): PitchEngine = engine ?: PitchEngine().also { engine = it }
 }

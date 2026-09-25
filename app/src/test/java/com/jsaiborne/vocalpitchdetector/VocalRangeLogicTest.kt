@@ -1,8 +1,8 @@
 package com.jsaiborne.vocalpitchdetector
 
+import kotlin.math.pow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -31,56 +31,82 @@ class VocalRangeLogicTest {
     }
 
     @Test
-    fun noteIsReportedOnceAfterOneSecond() {
+    fun noteIsReportedOnceAfterTheHoldTime() {
         val tracker = RangeHoldTracker()
-        assertTrue(feed(tracker, a4, 0L, 900L).isEmpty())
-        assertEquals(listOf(69), feed(tracker, a4, 920L, 3000L))
+        assertTrue(feed(tracker, a4, 0L, 560L).isEmpty())
+        assertEquals(listOf(69), feed(tracker, a4, 580L, 3000L))
     }
 
     @Test
     fun changingNoteRestartsTheHold() {
         val tracker = RangeHoldTracker()
-        feed(tracker, a4, 0L, 800L)
-        // Jump a whole tone up: the earlier progress must not count towards the new note
-        val heldAfterJump = feed(tracker, 493.88f, 820L, 1500L)
-        assertTrue(heldAfterJump.isEmpty())
-        assertEquals(listOf(71), feed(tracker, 493.88f, 1520L, 2000L))
+        feed(tracker, a4, 0L, 400L)
+        // A whole tone up: earlier progress must not count towards the new note
+        assertTrue(feed(tracker, 493.88f, 420L, 1000L).isEmpty())
+        assertEquals(listOf(71), feed(tracker, 493.88f, 1020L, 2000L))
     }
 
     @Test
-    fun lowConfidenceNeverCounts() {
+    fun veryLowConfidenceNeverCounts() {
         val tracker = RangeHoldTracker()
-        assertTrue(feed(tracker, a4, 0L, 3000L, confidence = 0.3f).isEmpty())
+        assertTrue(feed(tracker, a4, 0L, 3000L, confidence = 0.1f).isEmpty())
     }
 
     @Test
-    fun outOfTuneNoteIsNotAccepted() {
+    fun weakButUsableConfidenceStillCounts() {
         val tracker = RangeHoldTracker()
-        // ~47 cents sharp of A4 is outside the 35 cent tolerance
-        assertTrue(feed(tracker, 452f, 0L, 3000L).isEmpty())
-        val snapshot = tracker.update(452f, confident, 3020L)
-        assertFalse(snapshot.steady)
-        assertNotNull(snapshot.noteMidi)
+        assertEquals(listOf(69), feed(tracker, a4, 0L, 2000L, confidence = 0.35f))
+    }
+
+    @Test
+    fun wobbleWithinTheWindowStillCounts() {
+        val tracker = RangeHoldTracker()
+        val held = mutableListOf<Int>()
+        var t = 0L
+        // Alternates between A4 and ~47 cents sharp, like an unsteady voice
+        while (t <= 2000L) {
+            val freq = if ((t / 20L) % 2L == 0L) a4 else 452f
+            tracker.update(freq, confident, t).heldMidi?.let { held.add(it) }
+            t += 20L
+        }
+        assertEquals(listOf(69), held)
+    }
+
+    @Test
+    fun fastGlideNeverCountsAsAHeldNote() {
+        val tracker = RangeHoldTracker()
+        val held = mutableListOf<Int>()
+        var t = 0L
+        var semitones = 0.0
+        // 5 semitones per second: leaves the window every ~160 ms, well short of the hold time
+        while (t <= 3000L) {
+            val freq = (a4 * 2.0.pow(semitones / 12.0)).toFloat()
+            tracker.update(freq, confident, t).heldMidi?.let { held.add(it) }
+            semitones += 0.1
+            t += 20L
+        }
+        assertTrue(held.isEmpty())
     }
 
     @Test
     fun shortDropoutDoesNotResetTheHold() {
         val tracker = RangeHoldTracker()
         val held = mutableListOf<Int>()
-        held += feed(tracker, a4, 0L, 500L)
-        held += feed(tracker, -1f, 520L, 600L) // 100 ms of silence, inside the 150 ms grace
-        held += feed(tracker, a4, 620L, 1200L)
+        held += feed(tracker, a4, 0L, 300L)
+        held += feed(tracker, -1f, 320L, 500L) // 200 ms of silence, inside the 300 ms grace
+        held += feed(tracker, a4, 520L, 1200L)
         assertEquals(listOf(69), held)
     }
 
     @Test
     fun longSilenceResetsTheHold() {
         val tracker = RangeHoldTracker()
-        feed(tracker, a4, 0L, 800L)
-        feed(tracker, -1f, 820L, 1200L) // well over the grace period
-        val snapshot = tracker.update(a4, confident, 1220L)
+        feed(tracker, a4, 0L, 400L)
+        feed(tracker, -1f, 420L, 1000L) // well over the grace period
+        val snapshot = tracker.update(a4, confident, 1020L)
         assertEquals(0f, snapshot.progress, 0.05f)
         assertNull(snapshot.heldMidi)
+        assertFalse(snapshot.steady)
     }
 
     @Test

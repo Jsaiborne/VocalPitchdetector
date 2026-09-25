@@ -21,10 +21,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Repeat
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -394,7 +394,7 @@ fun PlaybackScreen(
                     },
                     actions = {
                         IconButton(onClick = { showSettingsMenu = true }) {
-                            Icon(Icons.Default.Settings, contentDescription = "Settings")
+                            Icon(Icons.Default.Menu, contentDescription = "Menu")
                         }
                         DropdownMenu(
                             expanded = showSettingsMenu,
@@ -747,7 +747,7 @@ private fun TopAppBarPlaybackLandscape(
         // RIGHT SIDE: Settings Menu
         Box {
             IconButton(onClick = { onToggleSettingsMenu(true) }) {
-                Icon(Icons.Default.Settings, contentDescription = "Settings")
+                Icon(Icons.Default.Menu, contentDescription = "Menu")
             }
             DropdownMenu(
                 expanded = showSettingsMenu,
