@@ -89,6 +89,7 @@ internal const val PLAYBACK_PIXELS_PER_SECOND = 300f
 internal const val PLAYBACK_PIXELS_PER_MIDI = 60f
 internal const val PLAYBACK_SILENCE_GAP_MS = 150L
 internal const val PLAYBACK_CURVE_SMOOTHING = 1.8f
+internal const val LIVE_CURVE_SMOOTHING = 0.5f
 internal const val PLAYHEAD_SCREEN_FRACTION = 0.2f
 
 /**

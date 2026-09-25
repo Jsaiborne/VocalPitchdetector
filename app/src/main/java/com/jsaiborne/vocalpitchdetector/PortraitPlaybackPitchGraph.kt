@@ -103,7 +103,7 @@ fun PortraitPlaybackPitchGraph(
                     val noteName = midiToNoteName(midi)
                     if (!noteName.contains("#")) {
                         drawContext.canvas.nativeCanvas.drawText(
-                            noteName,
+                            midiToDisplayName(midi),
                             x + 8f,
                             viewportY + canvasH - 24f,
                             paints.label
@@ -150,7 +150,7 @@ fun PortraitPlaybackPitchGraph(
 
                         if (y in (viewportY - 100f)..(viewportY + canvasH + 100f)) {
                             drawContext.canvas.nativeCanvas.drawText(
-                                midiToNoteName(m.midiNote),
+                                midiToDisplayName(m.midiNote),
                                 x + 6f,
                                 y - 10f,
                                 paints.yellow

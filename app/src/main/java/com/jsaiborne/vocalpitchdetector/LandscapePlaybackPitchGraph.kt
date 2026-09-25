@@ -103,7 +103,7 @@ fun LandscapePlaybackPitchGraph(
                     val noteName = midiToNoteName(midi)
                     if (!noteName.contains("#")) {
                         drawContext.canvas.nativeCanvas.drawText(
-                            noteName,
+                            midiToDisplayName(midi),
                             viewportX + 16f,
                             y - 8f,
                             paints.label
@@ -150,7 +150,7 @@ fun LandscapePlaybackPitchGraph(
 
                         if (x in (viewportX - 100f)..(viewportX + canvasW + 100f)) {
                             drawContext.canvas.nativeCanvas.drawText(
-                                midiToNoteName(m.midiNote),
+                                midiToDisplayName(m.midiNote),
                                 x + 6f,
                                 y - 10f,
                                 paints.yellow

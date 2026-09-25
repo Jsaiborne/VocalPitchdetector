@@ -112,7 +112,6 @@ fun PitchGraphCard(
     showNoteLabels: Boolean = true,
     showHorizontalGrid: Boolean = true,
     showCurve: Boolean = true,
-    smoothing: Float = 0.5f,
     showWhiteTrace: Boolean = true,
     showBars: Boolean = false,
     showWhiteDots: Boolean = true // <-- NEW
@@ -139,7 +138,6 @@ fun PitchGraphCard(
                     showNoteLabels = showNoteLabels,
                     showHorizontalGrid = showHorizontalGrid,
                     showCurve = showCurve,
-                    smoothing = smoothing,
                     showWhiteTrace = showWhiteTrace,
                     bpm = bpm,
                     showBars = showBars,
@@ -160,7 +158,6 @@ fun PitchGraphCard(
                     showNoteLabels = showNoteLabels,
                     showHorizontalGrid = showHorizontalGrid,
                     showCurve = showCurve,
-                    smoothing = smoothing,
                     showWhiteTrace = showWhiteTrace,
                     bpm = bpm,
                     showBars = showBars,
@@ -175,6 +172,7 @@ fun PitchGraphCard(
  * Horizontal graph: midi -> x, time -> y
  * Time flows downwards (Top = Old, Bottom = New)
  */
+@Suppress("LongParameterList", "LongMethod", "CyclomaticComplexMethod")
 @Composable
 fun PitchGraphHorizontal(
     engine: PitchEngine,
@@ -190,7 +188,6 @@ fun PitchGraphHorizontal(
     showNoteLabels: Boolean = true,
     showHorizontalGrid: Boolean = true,
     showCurve: Boolean = true,
-    smoothing: Float = 0.5f,
     showWhiteTrace: Boolean = true,
     bpm: Float = 120f,
     showBars: Boolean = false,
@@ -323,7 +320,7 @@ fun PitchGraphHorizontal(
                         )
                         drawIntoCanvas { canvas ->
                             canvas.nativeCanvas.drawText(
-                                midiToNoteName(m),
+                                midiToDisplayName(m),
                                 x + 6f,
                                 padTop + 18f,
                                 paints.small
@@ -427,7 +424,7 @@ fun PitchGraphHorizontal(
                 // Build smoothed paths for each continuous segment
                 val smoothedPaths = mutableListOf<Path>()
                 for (seg in pointsSegments) {
-                    if (seg.size >= 2) smoothedPaths.add(buildSmoothedPath(seg, smoothing.coerceIn(0f, 1f)))
+                    if (seg.size >= 2) smoothedPaths.add(buildSmoothedPath(seg, LIVE_CURVE_SMOOTHING))
                 }
 
                 if (showCurve) {
@@ -551,15 +548,25 @@ fun PitchGraphHorizontal(
                     )
                     if (showNoteLabels) {
                         val labelY = y - 10f
-                        // FIX: Check boundary so labels disappear at the top edge, just like the curve
-                        if (labelY > padTop) {
+                        // Fade the label out over its last stretch before the top edge (where the
+                        // oldest content leaves the graph) instead of cutting it off abruptly
+                        val fadeHeightPx = 48f
+                        val fade = ((labelY - padTop) / fadeHeightPx).coerceIn(0f, 1f)
+                        if (fade > 0f) {
                             drawIntoCanvas { canvas ->
-                                canvas.nativeCanvas.drawText(
-                                    midiToNoteName(m.midi),
+                                val nativeCanvas = canvas.nativeCanvas
+                                val originalAlpha = paints.yellow.alpha
+                                paints.yellow.alpha = (originalAlpha * fade).toInt()
+                                nativeCanvas.save()
+                                nativeCanvas.clipRect(padLeft, padTop, padLeft + innerW, padTop + innerH)
+                                nativeCanvas.drawText(
+                                    midiToDisplayName(m.midi),
                                     x + 6f,
                                     labelY,
                                     paints.yellow
                                 )
+                                nativeCanvas.restore()
+                                paints.yellow.alpha = originalAlpha
                             }
                         }
                     }
@@ -582,7 +589,7 @@ fun PitchGraphHorizontal(
                     if (showNoteLabels) {
                         drawIntoCanvas { canvas ->
                             canvas.nativeCanvas.drawText(
-                                midiToNoteName(nearest),
+                                midiToDisplayName(nearest),
                                 x + 6f,
                                 y - 10f, // Changed to - 10f so the text draws just above the bottom cut-off
                                 paints.label
@@ -601,6 +608,7 @@ fun PitchGraphHorizontal(
  * - time -> x (left to right)
  * Time flows Rightwards (Left = Old, Right = New)
  */
+@Suppress("LongParameterList", "LongMethod", "CyclomaticComplexMethod")
 @Composable
 fun PitchGraphVertical(
     engine: PitchEngine,
@@ -616,7 +624,6 @@ fun PitchGraphVertical(
     showNoteLabels: Boolean = true,
     showHorizontalGrid: Boolean = true,
     showCurve: Boolean = true,
-    smoothing: Float = 0.5f,
     showWhiteTrace: Boolean = true,
     bpm: Float = 120f,
     showBars: Boolean = false,
@@ -749,7 +756,7 @@ fun PitchGraphVertical(
                     if (isNatural) {
                         drawIntoCanvas { canvas ->
                             canvas.nativeCanvas.drawText(
-                                midiToNoteName(m),
+                                midiToDisplayName(m),
                                 padLeft + 6f,
                                 y - 6f,
                                 paints.small
@@ -843,7 +850,7 @@ fun PitchGraphVertical(
                 // Build smoothed paths for each continuous segment
                 val smoothedPaths = mutableListOf<Path>()
                 for (seg in pointsSegments) {
-                    if (seg.size >= 2) smoothedPaths.add(buildSmoothedPath(seg, smoothing.coerceIn(0f, 1f)))
+                    if (seg.size >= 2) smoothedPaths.add(buildSmoothedPath(seg, LIVE_CURVE_SMOOTHING))
                 }
 
                 if (showCurve) {
@@ -964,7 +971,7 @@ fun PitchGraphVertical(
                     )
                     if (showNoteLabels) {
                         drawIntoCanvas { canvas ->
-                            val noteName = midiToNoteName(m.midi)
+                            val noteName = midiToDisplayName(m.midi)
                             val textWidth = paints.yellow.measureText(noteName)
                             var labelX = x + 8f
                             val labelY = y - 10f
@@ -995,7 +1002,7 @@ fun PitchGraphVertical(
                         val nearest = lastSample.midi.roundToInt().coerceIn(minMidi, maxMidi)
                         val targetIndex = (nearest - minMidi).coerceIn(0, midiY.lastIndex)
                         val y = midiY[targetIndex]
-                        val noteName = midiToNoteName(nearest)
+                        val noteName = midiToDisplayName(nearest)
                         val textWidth = paints.label.measureText(noteName)
                         val rightEdge = padLeft + innerW
                         var labelX = rightEdge - textWidth - 8f

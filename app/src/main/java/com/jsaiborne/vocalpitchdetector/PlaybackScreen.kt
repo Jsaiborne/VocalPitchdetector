@@ -195,67 +195,7 @@ class PlaybackViewModel : ViewModel() {
     private suspend fun parsePitchData(
         pitchFile: File
     ): Pair<List<RecordedPitchPoint>, List<RecordedPitchPoint>> = withContext(Dispatchers.IO) {
-        val pitchDataList = mutableListOf<RecordedPitchPoint>()
-        val stableMarkersList = mutableListOf<RecordedPitchPoint>()
-
-        if (pitchFile.exists()) {
-            try {
-                val jsonString = pitchFile.readText().trimStart()
-
-                if (jsonString.startsWith("[")) {
-                    // --- OLD FORMAT (Legacy support for previous recordings) ---
-                    val jsonArray = JSONArray(jsonString)
-                    for (i in 0 until jsonArray.length()) {
-                        val obj = jsonArray.getJSONObject(i)
-                        pitchDataList.add(
-                            RecordedPitchPoint(
-                                timestampMs = obj.getLong("timestampMs"),
-                                frequencyHz = obj.getDouble("frequencyHz").toFloat(),
-                                midiNote = obj.getInt("midiNote")
-                            )
-                        )
-                    }
-                } else if (jsonString.startsWith("{")) {
-                    // --- NEW FORMAT (Includes stable markers) ---
-                    val rootObj = JSONObject(jsonString)
-
-                    // Extract Pitch Data
-                    if (rootObj.has("pitchData")) {
-                        val pitchArray = rootObj.getJSONArray("pitchData")
-                        for (i in 0 until pitchArray.length()) {
-                            val obj = pitchArray.getJSONObject(i)
-                            pitchDataList.add(
-                                RecordedPitchPoint(
-                                    timestampMs = obj.getLong("timestampMs"),
-                                    frequencyHz = obj.getDouble("frequencyHz").toFloat(),
-                                    midiNote = obj.getInt("midiNote")
-                                )
-                            )
-                        }
-                    }
-
-                    // Extract Stable Markers
-                    if (rootObj.has("stableNotes")) {
-                        val stableArray = rootObj.getJSONArray("stableNotes")
-                        for (i in 0 until stableArray.length()) {
-                            val obj = stableArray.getJSONObject(i)
-                            stableMarkersList.add(
-                                RecordedPitchPoint(
-                                    timestampMs = obj.getLong("timestampMs"),
-                                    frequencyHz = obj.getDouble("frequencyHz").toFloat(),
-                                    midiNote = obj.getInt("midiNote")
-                                )
-                            )
-                        }
-                    }
-                }
-            } catch (e: org.json.JSONException) {
-                android.util.Log.e("PlaybackViewModel", "Failed to parse pitch JSON", e)
-            } catch (e: java.io.IOException) {
-                android.util.Log.e("PlaybackViewModel", "Failed to read pitch file", e)
-            }
-        }
-        Pair(pitchDataList, stableMarkersList)
+        parsePitchFile(pitchFile)
     }
 
     fun togglePlayPause() {
@@ -676,4 +616,47 @@ private fun TopAppBarPlaybackLandscape(
             }
         }
     }
+}
+
+/**
+ * Reads a recorded session's pitch file into (pitch points, stable-note markers). Handles both the
+ * legacy array format and the newer object format. Blocking, so call it off the main thread.
+ */
+internal fun parsePitchFile(pitchFile: File): Pair<List<RecordedPitchPoint>, List<RecordedPitchPoint>> {
+    val pitchDataList = mutableListOf<RecordedPitchPoint>()
+    val stableMarkersList = mutableListOf<RecordedPitchPoint>()
+
+    fun JSONArray.readInto(target: MutableList<RecordedPitchPoint>) {
+        for (i in 0 until length()) {
+            val obj = getJSONObject(i)
+            target.add(
+                RecordedPitchPoint(
+                    timestampMs = obj.getLong("timestampMs"),
+                    frequencyHz = obj.getDouble("frequencyHz").toFloat(),
+                    midiNote = obj.getInt("midiNote")
+                )
+            )
+        }
+    }
+
+    if (pitchFile.exists()) {
+        try {
+            val jsonString = pitchFile.readText().trimStart()
+
+            if (jsonString.startsWith("[")) {
+                // --- OLD FORMAT (Legacy support for previous recordings) ---
+                JSONArray(jsonString).readInto(pitchDataList)
+            } else if (jsonString.startsWith("{")) {
+                // --- NEW FORMAT (Includes stable markers) ---
+                val rootObj = JSONObject(jsonString)
+                if (rootObj.has("pitchData")) rootObj.getJSONArray("pitchData").readInto(pitchDataList)
+                if (rootObj.has("stableNotes")) rootObj.getJSONArray("stableNotes").readInto(stableMarkersList)
+            }
+        } catch (e: org.json.JSONException) {
+            android.util.Log.e("PlaybackViewModel", "Failed to parse pitch JSON", e)
+        } catch (e: java.io.IOException) {
+            android.util.Log.e("PlaybackViewModel", "Failed to read pitch file", e)
+        }
+    }
+    return Pair(pitchDataList, stableMarkersList)
 }

@@ -213,7 +213,7 @@ fun Piano(
                         ) {
                             if (midiToNoteName(midi).startsWith("C")) {
                                 Text(
-                                    text = midiToNoteName(midi),
+                                    text = midiToDisplayName(midi),
                                     modifier = Modifier
                                         .align(Alignment.BottomEnd)
                                         .padding(bottom = 6.dp, end = 6.dp),
@@ -343,7 +343,7 @@ fun Piano(
                                 // show C labels at bottom-center of each white key
                                 if (midiToNoteName(midi).startsWith("C")) {
                                     Text(
-                                        text = midiToNoteName(midi),
+                                        text = midiToDisplayName(midi),
                                         modifier = Modifier
                                             .align(Alignment.BottomEnd)
                                             .padding(

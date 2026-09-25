@@ -1,6 +1,11 @@
+@file:Suppress("TooManyFunctions")
+
 package com.jsaiborne.vocalpitchdetector
 
+import android.content.ActivityNotFoundException
 import android.content.Context
+import android.content.Intent
+import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,10 +26,13 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -40,13 +48,16 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -59,6 +70,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 // --- Data Model ---
 data class RecordingSession(
@@ -69,7 +81,8 @@ data class RecordingSession(
     val sessionNumber: Int = 0,
     val customName: String? = null,
     val isStarred: Boolean = false,
-    val durationMs: Long = 0L
+    val durationMs: Long = 0L,
+    val note: String? = null
 ) {
     val formattedDate: String
         get() {
@@ -93,6 +106,7 @@ private const val MS_PER_SECOND = 1000L
 private const val SECONDS_PER_MINUTE = 60L
 
 private const val NUMBERS_PREFS = "recording_numbers"
+private const val NOTES_PREFS = "recording_notes"
 private const val NEXT_NUMBER_KEY = "__next"
 private val numberingLock = Any()
 
@@ -181,6 +195,7 @@ class RecordingsViewModel : ViewModel() {
 
             val namePrefs = appContext.getSharedPreferences("recording_names", Context.MODE_PRIVATE)
             val starPrefs = appContext.getSharedPreferences("recording_stars", Context.MODE_PRIVATE)
+            val notePrefs = appContext.getSharedPreferences(NOTES_PREFS, Context.MODE_PRIVATE)
 
             val files = listSessionFiles(recordingsDir)
             val numbers = sessionNumbersFor(
@@ -198,7 +213,8 @@ class RecordingsViewModel : ViewModel() {
                     sessionNumber = numbers[id] ?: 0,
                     customName = namePrefs.getString(id, null),
                     isStarred = starPrefs.getBoolean(id, false),
-                    durationMs = wavDurationMs(audio.length())
+                    durationMs = wavDurationMs(audio.length()),
+                    note = notePrefs.getString(id, null)
                 )
             }
 
@@ -209,13 +225,15 @@ class RecordingsViewModel : ViewModel() {
         }
     }
 
-    fun renameSession(context: Context, sessionId: String, newName: String, recordingsDir: File) {
-        val prefs = context.getSharedPreferences("recording_names", Context.MODE_PRIVATE)
-        if (newName.isNotBlank()) {
-            prefs.edit().putString(sessionId, newName.trim()).apply()
-        } else {
-            prefs.edit().remove(sessionId).apply()
+    /** Saves the custom name and note together; blank values clear them. */
+    fun saveDetails(context: Context, sessionId: String, newName: String, newNote: String, recordingsDir: File) {
+        fun updateText(prefsName: String, value: String) {
+            val editor = context.getSharedPreferences(prefsName, Context.MODE_PRIVATE).edit()
+            if (value.isNotBlank()) editor.putString(sessionId, value.trim()) else editor.remove(sessionId)
+            editor.apply()
         }
+        updateText("recording_names", newName)
+        updateText(NOTES_PREFS, newNote)
         loadSessions(context, recordingsDir)
     }
 
@@ -235,6 +253,8 @@ class RecordingsViewModel : ViewModel() {
             appContext.getSharedPreferences("recording_names", Context.MODE_PRIVATE)
                 .edit().remove(session.sessionId).apply()
             appContext.getSharedPreferences("recording_stars", Context.MODE_PRIVATE)
+                .edit().remove(session.sessionId).apply()
+            appContext.getSharedPreferences(NOTES_PREFS, Context.MODE_PRIVATE)
                 .edit().remove(session.sessionId).apply()
             // The counter (NEXT_NUMBER_KEY) is left alone so numbers are never reused
             appContext.getSharedPreferences(NUMBERS_PREFS, Context.MODE_PRIVATE)
@@ -259,27 +279,40 @@ fun RecordingsScreen(
     var sessionToRename by remember { mutableStateOf<RecordingSession?>(null) }
     var sessionToDelete by remember { mutableStateOf<RecordingSession?>(null) }
     var renameText by remember { mutableStateOf("") }
+    var noteText by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         viewModel.loadSessions(context, recordingsDir)
     }
 
-    // --- Rename Dialog ---
+    // --- Edit Details Dialog (name + note) ---
     sessionToRename?.let { session ->
         AlertDialog(
             onDismissRequest = { sessionToRename = null },
-            title = { Text("Rename Recording") },
+            title = { Text("Edit Recording") },
             text = {
-                OutlinedTextField(
-                    value = renameText,
-                    onValueChange = { renameText = it },
-                    singleLine = true,
-                    placeholder = { Text("e.g., Chorus Take 1") }
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = renameText,
+                        onValueChange = { renameText = it },
+                        singleLine = true,
+                        label = { Text("Name") },
+                        placeholder = { Text("e.g., Chorus Take 1") }
+                    )
+                    OutlinedTextField(
+                        value = noteText,
+                        onValueChange = { noteText = it },
+                        minLines = 2,
+                        maxLines = 4,
+                        label = { Text("Note") },
+                        placeholder = { Text("e.g., Watch the high notes") }
+                    )
+                }
             },
             confirmButton = {
                 TextButton(onClick = {
-                    viewModel.renameSession(context, session.sessionId, renameText, recordingsDir)
+                    viewModel.saveDetails(context, session.sessionId, renameText, noteText, recordingsDir)
                     sessionToRename = null
                 }) { Text("Save") }
             },
@@ -344,7 +377,17 @@ fun RecordingsScreen(
                             },
                             onRename = {
                                 renameText = session.customName ?: ""
+                                noteText = session.note ?: ""
                                 sessionToRename = session
+                            },
+                            onShareAudio = {
+                                shareFile(context, session.audioFile, "audio/wav", "Share recording")
+                            },
+                            onShareCsv = {
+                                scope.launch {
+                                    val csv = withContext(Dispatchers.IO) { writeSessionCsv(context, session) }
+                                    shareFile(context, csv, "text/csv", "Share pitch data")
+                                }
                             },
                             onDelete = { sessionToDelete = session }
                         )
@@ -355,14 +398,18 @@ fun RecordingsScreen(
     }
 }
 
+@Suppress("LongParameterList")
 @Composable
 fun RecordingItem(
     session: RecordingSession,
     onClick: () -> Unit,
     onToggleStar: () -> Unit,
     onRename: () -> Unit,
+    onShareAudio: () -> Unit,
+    onShareCsv: () -> Unit,
     onDelete: () -> Unit
 ) {
+    var shareMenuOpen by remember { mutableStateOf(false) }
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -398,6 +445,15 @@ fun RecordingItem(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    if (!session.note.isNullOrBlank()) {
+                        Text(
+                            text = session.note,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
             }
 
@@ -418,9 +474,34 @@ fun RecordingItem(
                 IconButton(onClick = onRename) {
                     Icon(
                         imageVector = Icons.Default.Edit,
-                        contentDescription = "Rename Session",
+                        contentDescription = "Edit Session",
                         tint = MaterialTheme.colorScheme.primary
                     )
+                }
+                Box {
+                    IconButton(onClick = { shareMenuOpen = true }) {
+                        Icon(
+                            imageVector = Icons.Default.Share,
+                            contentDescription = "Share Session",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    DropdownMenu(expanded = shareMenuOpen, onDismissRequest = { shareMenuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Share audio (WAV)") },
+                            onClick = {
+                                shareMenuOpen = false
+                                onShareAudio()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Share pitch data (CSV)") },
+                            onClick = {
+                                shareMenuOpen = false
+                                onShareCsv()
+                            }
+                        )
+                    }
                 }
                 IconButton(onClick = onDelete) {
                     Icon(
@@ -432,6 +513,46 @@ fun RecordingItem(
             }
         }
     }
+}
+
+/** Opens the system share sheet for [file], served through the app's FileProvider. */
+private fun shareFile(context: Context, file: File, mimeType: String, chooserTitle: String) {
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    val send = Intent(Intent.ACTION_SEND).apply {
+        type = mimeType
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    try {
+        context.startActivity(Intent.createChooser(send, chooserTitle))
+    } catch (e: ActivityNotFoundException) {
+        android.util.Log.w("RecordingsScreen", "No app can handle sharing", e)
+        Toast.makeText(context, "No app available to share with", Toast.LENGTH_SHORT).show()
+    }
+}
+
+/**
+ * Writes a session's pitch data to a CSV in the cache directory (columns: type, timestampMs,
+ * frequencyHz, midiNote, noteName; type is "pitch" or "stable"). Blocking, so call it off the main thread.
+ */
+private fun writeSessionCsv(context: Context, session: RecordingSession): File {
+    val (pitchPoints, stableNotes) = parsePitchFile(session.pitchFile)
+    val exportDir = File(context.cacheDir, "exports").apply { mkdirs() }
+    val safeName = session.displayTitle.replace(Regex("[^A-Za-z0-9._-]+"), "_")
+    val csv = File(exportDir, "${safeName}_pitch.csv")
+
+    csv.bufferedWriter().use { out ->
+        out.write("type,timestampMs,frequencyHz,midiNote,noteName\n")
+        fun write(type: String, points: List<RecordedPitchPoint>) {
+            for (p in points) {
+                val freq = String.format(Locale.US, "%.2f", p.frequencyHz)
+                out.write("$type,${p.timestampMs},$freq,${p.midiNote},${midiToNoteName(p.midiNote)}\n")
+            }
+        }
+        write("pitch", pitchPoints)
+        write("stable", stableNotes)
+    }
+    return csv
 }
 
 @Composable

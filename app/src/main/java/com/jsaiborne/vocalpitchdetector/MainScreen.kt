@@ -8,6 +8,9 @@ import android.content.pm.PackageManager
 import android.content.res.Configuration
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -64,9 +67,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -83,6 +91,7 @@ import kotlinx.coroutines.delay
 
 private const val PREFS_NAME = "AppPreferences"
 private const val PREF_NEVER_SHOW_RATE = "NeverShowRateApp"
+private const val PREF_SOLFEGE = "UseSolfege"
 
 private data class RecordingCallbacks(
     val onRecordStart: () -> Unit,
@@ -107,7 +116,6 @@ fun MainScreen(navController: NavHostController? = null) {
 
     var autoCenter by rememberSaveable { mutableStateOf(true) }
     var whiteKeyWidthDpFloat by rememberSaveable { mutableFloatStateOf(56f) }
-    var smoothing by rememberSaveable { mutableFloatStateOf(0.5f) }
     var showNoteLabels by rememberSaveable { mutableStateOf(true) }
     var showHorizontalGrid by rememberSaveable { mutableStateOf(true) }
     var showCurve by rememberSaveable { mutableStateOf(true) }
@@ -117,6 +125,7 @@ fun MainScreen(navController: NavHostController? = null) {
     var showWhiteDots by rememberSaveable { mutableStateOf(true) }
 
     var useSamplePlayer by rememberSaveable { mutableStateOf(false) }
+    var showCentsMeter by rememberSaveable { mutableStateOf(true) }
 
     var graphPaused by remember { mutableStateOf(false) }
     var stableMidi by remember { mutableStateOf<Int?>(null) }
@@ -190,6 +199,11 @@ fun MainScreen(navController: NavHostController? = null) {
             lifecycleOwner.lifecycle.removeObserver(observer)
             ToneGenerator.stop()
         }
+    }
+
+    val solfegePrefs = remember { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
+    LaunchedEffect(Unit) {
+        NoteNotation.useSolfege = solfegePrefs.getBoolean(PREF_SOLFEGE, false)
     }
 
     LaunchedEffect(engine) {
@@ -280,7 +294,6 @@ fun MainScreen(navController: NavHostController? = null) {
     }
 
     val resetToDefaults = {
-        smoothing = 0.5f
         bpm = 60f
         thresholdDb = -34f
         engine.setVolumeThreshold(dbToRms(-34f))
@@ -292,6 +305,9 @@ fun MainScreen(navController: NavHostController? = null) {
         showWhiteTrace = true
         showWhiteDots = true
         useSamplePlayer = false
+        showCentsMeter = true
+        NoteNotation.useSolfege = false
+        solfegePrefs.edit().putBoolean(PREF_SOLFEGE, false).apply()
     }
 
     val menuSettings = MenuSettings(
@@ -302,7 +318,8 @@ fun MainScreen(navController: NavHostController? = null) {
         showWhiteDots = showWhiteDots,
         autoCenter = autoCenter,
         useSamplePlayer = useSamplePlayer,
-        smoothing = smoothing,
+        showCentsMeter = showCentsMeter,
+        useSolfege = NoteNotation.useSolfege,
         bpm = bpm,
         thresholdDb = thresholdDb,
         currentVolumeDb = currentVolumeDb
@@ -318,7 +335,11 @@ fun MainScreen(navController: NavHostController? = null) {
         onShowWhiteDotsChange = { showWhiteDots = it },
         onAutoCenterChange = { autoCenter = it },
         onUseSamplePlayerChange = { useSamplePlayer = it },
-        onSmoothingChange = { smoothing = it },
+        onShowCentsMeterChange = { showCentsMeter = it },
+        onUseSolfegeChange = { checked ->
+            NoteNotation.useSolfege = checked
+            solfegePrefs.edit().putBoolean(PREF_SOLFEGE, checked).apply()
+        },
         onBpmChange = { bpm = it },
         onThresholdChange = { newDb ->
             thresholdDb = newDb
@@ -343,6 +364,7 @@ fun MainScreen(navController: NavHostController? = null) {
                 onTogglePause = { graphPaused = !graphPaused },
                 menuSettings = menuSettings,
                 menuActions = menuActions,
+                showCentsMeter = showCentsMeter,
                 canShowAds = canShowAds,
                 isRecording = isRecording,
                 isRecordingPaused = isRecordingPaused,
@@ -402,7 +424,6 @@ fun MainScreen(navController: NavHostController? = null) {
                         showCurve = showCurve,
                         rotated = true,
                         blackKeyShiftFraction = 0.5f,
-                        smoothing = smoothing,
                         showWhiteTrace = showWhiteTrace,
                         showWhiteDots = showWhiteDots,
                         bpm = bpm
@@ -431,6 +452,17 @@ fun MainScreen(navController: NavHostController? = null) {
                     onTogglePause = { graphPaused = !graphPaused },
                     onOpenSettings = { menuExpandedPortrait = true }
                 )
+
+                // Sits in the top card, well away from the banner ad at the bottom of the screen
+                if (showCentsMeter) {
+                    CentsMeter(
+                        frequency = state.frequency,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp)
+                            .padding(bottom = 4.dp)
+                    )
+                }
 
                 Box(modifier = Modifier.align(Alignment.End).padding(end = 12.dp)) {
                     SettingsMenu(
@@ -472,7 +504,7 @@ fun MainScreen(navController: NavHostController? = null) {
                 timeWindowMs = 8000L,
                 showNoteLabels = showNoteLabels, showHorizontalGrid = showHorizontalGrid,
                 showCurve = showCurve, rotated = false, blackKeyShiftFraction = 0.5f,
-                smoothing = smoothing, showWhiteTrace = showWhiteTrace,
+                showWhiteTrace = showWhiteTrace,
                 showWhiteDots = showWhiteDots,
                 bpm = bpm
             )
@@ -509,7 +541,7 @@ private fun InfoOverlay(
         } else {
             "--"
         }
-        val noteText = if (activeMidi != null) midiToNoteName(activeMidi) else "-"
+        val noteText = if (activeMidi != null) midiToDisplayName(activeMidi) else "-"
 
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(text = noteText, style = MaterialTheme.typography.titleLarge)
@@ -644,6 +676,7 @@ private fun TopAppBarLandscapeCompact(
     onTogglePause: () -> Unit,
     menuSettings: MenuSettings,
     menuActions: MenuActions,
+    showCentsMeter: Boolean,
     canShowAds: Boolean,
     isRecording: Boolean,
     isRecordingPaused: Boolean,
@@ -663,7 +696,7 @@ private fun TopAppBarLandscapeCompact(
         ) {
             // LEFT SIDE: Note, Freq, Conf
             Column(verticalArrangement = Arrangement.Center) {
-                val noteText = if (activeMidi != null) midiToNoteName(activeMidi) else "-"
+                val noteText = if (activeMidi != null) midiToDisplayName(activeMidi) else "-"
                 val freqText = if (detectedFreq > 0f) {
                     "%.1f Hz".format(Locale.US, detectedFreq)
                 } else {
@@ -679,6 +712,16 @@ private fun TopAppBarLandscapeCompact(
                     text = "Conf: %.2f".format(Locale.US, detectedConfidence),
                     style = MaterialTheme.typography.labelSmall
                 )
+                if (showCentsMeter) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    // Fixed small width so this column never grows into the centred ad
+                    CentsMeter(
+                        frequency = detectedFreq,
+                        barWidth = 64.dp,
+                        labelWidth = 34.dp,
+                        height = 12.dp
+                    )
+                }
             }
 
             // CENTER: The Floating Landscape Ad
@@ -817,7 +860,8 @@ private data class MenuSettings(
     val showWhiteDots: Boolean,
     val autoCenter: Boolean,
     val useSamplePlayer: Boolean,
-    val smoothing: Float,
+    val showCentsMeter: Boolean,
+    val useSolfege: Boolean,
     val bpm: Float,
     val thresholdDb: Float,
     val currentVolumeDb: Float
@@ -831,7 +875,8 @@ private data class MenuActions(
     val onShowWhiteDotsChange: (Boolean) -> Unit,
     val onAutoCenterChange: (Boolean) -> Unit,
     val onUseSamplePlayerChange: (Boolean) -> Unit,
-    val onSmoothingChange: (Float) -> Unit,
+    val onShowCentsMeterChange: (Boolean) -> Unit,
+    val onUseSolfegeChange: (Boolean) -> Unit,
     val onBpmChange: (Float) -> Unit,
     val onThresholdChange: (Float) -> Unit,
     val onResetDefaults: () -> Unit,
@@ -852,6 +897,97 @@ private fun SwitchRow(label: String, checked: Boolean, onCheckedChange: (Boolean
         Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
+
+/**
+ * How many cents the sung pitch is from the nearest note, as a small bar with a moving needle.
+ * Uses a fixed height and keeps its space when nothing is being sung, so the layout never jumps.
+ * Give [barWidth] and [labelWidth] for a compact, fixed-size version; otherwise the bar fills the width.
+ */
+@Suppress("MagicNumber", "LongMethod")
+@Composable
+private fun CentsMeter(
+    frequency: Float,
+    modifier: Modifier = Modifier,
+    barWidth: Dp? = null,
+    labelWidth: Dp = 56.dp,
+    height: Dp = 20.dp
+) {
+    val hasPitch = frequency > 0f
+    val cents = if (hasPitch) {
+        val nearest = freqToMidi(frequency.toDouble()).roundToInt()
+        centsDifference(frequency.toDouble(), nearest).toFloat().coerceIn(-MAX_CENTS, MAX_CENTS)
+    } else {
+        0f
+    }
+    val animatedCents by animateFloatAsState(
+        targetValue = cents,
+        animationSpec = tween(durationMillis = 120),
+        label = "CentsNeedle"
+    )
+
+    val needleColor = when {
+        !hasPitch -> Color.Transparent
+        kotlin.math.abs(cents) <= IN_TUNE_CENTS -> Color(0xFF66BB6A)
+        kotlin.math.abs(cents) <= NEAR_TUNE_CENTS -> Color(0xFFFFB74D)
+        else -> Color(0xFFEF5350)
+    }
+    val trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
+    val tickColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+
+    Row(
+        modifier = modifier.height(height),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Canvas(
+            modifier = (if (barWidth != null) Modifier.width(barWidth) else Modifier.weight(1f))
+                .fillMaxHeight()
+        ) {
+            val trackHeight = 4.dp.toPx()
+            val centerX = size.width / 2f
+            val centerY = size.height / 2f
+
+            drawLine(
+                color = trackColor,
+                start = Offset(0f, centerY),
+                end = Offset(size.width, centerY),
+                strokeWidth = trackHeight,
+                cap = StrokeCap.Round
+            )
+            // Ticks at -25, 0 and +25 cents
+            for (fraction in floatArrayOf(-0.5f, 0f, 0.5f)) {
+                val x = centerX + fraction * (size.width / 2f)
+                val tickHalf = if (fraction == 0f) size.height * 0.4f else size.height * 0.25f
+                drawLine(
+                    color = tickColor,
+                    start = Offset(x, centerY - tickHalf),
+                    end = Offset(x, centerY + tickHalf),
+                    strokeWidth = 1.5.dp.toPx()
+                )
+            }
+            if (hasPitch) {
+                val needleX = centerX + (animatedCents / MAX_CENTS) * (size.width / 2f)
+                drawLine(
+                    color = needleColor,
+                    start = Offset(needleX, centerY - size.height * 0.45f),
+                    end = Offset(needleX, centerY + size.height * 0.45f),
+                    strokeWidth = 3.dp.toPx(),
+                    cap = StrokeCap.Round
+                )
+            }
+        }
+        Text(
+            text = if (hasPitch) String.format(Locale.US, "%+d¢", cents.roundToInt()) else "--",
+            modifier = Modifier.width(labelWidth),
+            textAlign = TextAlign.End,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (hasPitch) needleColor else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+private const val MAX_CENTS = 50f
+private const val IN_TUNE_CENTS = 10f
+private const val NEAR_TUNE_CENTS = 25f
 
 @Suppress("MagicNumber", "LongMethod")
 @Composable
@@ -887,18 +1023,10 @@ private fun SettingsMenu(
                 SwitchRow("Show white dots", settings.showWhiteDots, actions.onShowWhiteDotsChange)
                 SwitchRow("Auto-center", settings.autoCenter, actions.onAutoCenterChange)
                 SwitchRow("Use piano samples", settings.useSamplePlayer, actions.onUseSamplePlayerChange)
+                SwitchRow("Show cents meter", settings.showCentsMeter, actions.onShowCentsMeterChange)
+                SwitchRow("Solfège note names (Do, Re, Mi)", settings.useSolfege, actions.onUseSolfegeChange)
             }
             HorizontalDivider()
-            Text(
-                "Smoothing: ${(settings.smoothing * 100).roundToInt()}%",
-                style = MaterialTheme.typography.bodySmall
-            )
-            Slider(
-                value = settings.smoothing,
-                onValueChange = actions.onSmoothingChange,
-                valueRange = 0f..1f,
-                modifier = Modifier.fillMaxWidth()
-            )
             Text(
                 "Tempo: ${settings.bpm.roundToInt()} BPM",
                 style = MaterialTheme.typography.bodySmall

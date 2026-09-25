@@ -6,6 +6,9 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import kotlin.math.log2
@@ -21,6 +24,23 @@ private val NOTE_NAMES = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#"
 fun midiToNoteName(midi: Int): String {
     val octave = Math.floorDiv(midi, 12) - 1
     return "${NOTE_NAMES[Math.floorMod(midi, 12)]}$octave"
+}
+
+private val SOLFEGE_NAMES = arrayOf("Do", "Do#", "Re", "Re#", "Mi", "Fa", "Fa#", "Sol", "Sol#", "La", "La#", "Si")
+
+/** User choice between letter names (C, D, E...) and solfège (Do, Re, Mi...) for on-screen labels. */
+object NoteNotation {
+    var useSolfege by mutableStateOf(false)
+}
+
+/**
+ * Note name to show the user, honouring [NoteNotation]. Use [midiToNoteName] (always letters) for
+ * layout logic such as spotting sharps or C keys; use this only for text drawn on screen.
+ */
+fun midiToDisplayName(midi: Int): String {
+    if (!NoteNotation.useSolfege) return midiToNoteName(midi)
+    val octave = Math.floorDiv(midi, 12) - 1
+    return "${SOLFEGE_NAMES[Math.floorMod(midi, 12)]}$octave"
 }
 
 /** Frequency in Hz of a MIDI note (A4 = 69 = 440 Hz). */
