@@ -8,6 +8,7 @@ import android.media.MediaPlayer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,8 +20,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -32,6 +35,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -40,6 +44,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -83,6 +88,10 @@ data class RecordedPitchPoint(
 internal val RecordedPitchPoint.midiFloat: Float
     get() = if (frequencyHz > 0f) freqToMidi(frequencyHz.toDouble()).toFloat() else midiNote.toFloat()
 
+private const val MIN_LOOP_MS = 300L
+private val PLAYBACK_SPEEDS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f)
+
+@Suppress("TooManyFunctions")
 class PlaybackViewModel : ViewModel() {
     private var mediaPlayer: MediaPlayer? = null
 
@@ -99,6 +108,16 @@ class PlaybackViewModel : ViewModel() {
     var sessionTitle by mutableStateOf("")
         private set
     var sessionDate by mutableStateOf("")
+        private set
+
+    // Speed is kept between recordings; the loop is reset whenever a new recording loads
+    var playbackSpeed by mutableFloatStateOf(1f)
+        private set
+    var loopEnabled by mutableStateOf(false)
+        private set
+    var loopStartMs by mutableStateOf<Long?>(null)
+        private set
+    var loopEndMs by mutableStateOf<Long?>(null)
         private set
 
     private var loadedAudioPath: String? = null
@@ -119,6 +138,7 @@ class PlaybackViewModel : ViewModel() {
         isPlaying = false
         currentPositionMs = 0L
         totalDurationMs = 0L
+        clearLoop()
 
         val appContext = context.applicationContext
         loadJob = viewModelScope.launch {
@@ -148,9 +168,18 @@ class PlaybackViewModel : ViewModel() {
             player.setDataSource(audioFile.absolutePath)
             player.prepare()
             player.setOnCompletionListener {
-                isPlaying = false
-                currentPositionMs = 0L
-                it.seekTo(0)
+                if (loopEnabled) {
+                    // Loop from marker A (or the start) once the recording runs out
+                    val start = loopStartMs ?: 0L
+                    it.seekTo(start.toInt())
+                    currentPositionMs = start
+                    applySpeed(it)
+                    it.start()
+                } else {
+                    isPlaying = false
+                    currentPositionMs = 0L
+                    it.seekTo(0)
+                }
             }
             player
         } catch (e: java.io.IOException) {
@@ -204,6 +233,7 @@ class PlaybackViewModel : ViewModel() {
                 player.pause()
                 isPlaying = false
             } else {
+                applySpeed(player)
                 player.start()
                 isPlaying = true
             }
@@ -227,9 +257,63 @@ class PlaybackViewModel : ViewModel() {
     fun updatePositionFromPlayer() {
         mediaPlayer?.let { player ->
             if (player.isPlaying) {
-                currentPositionMs = player.currentPosition.toLong()
+                val position = player.currentPosition.toLong()
+                val end = loopEndMs
+                if (loopEnabled && end != null && position >= end) {
+                    seekTo(loopStartMs ?: 0L)
+                } else {
+                    currentPositionMs = position
+                }
             }
         }
+    }
+
+    fun setSpeed(speed: Float) {
+        playbackSpeed = speed
+        // While paused only remember it: on some Android versions changing the playback params of a
+        // paused player starts it. It is applied by togglePlayPause when playback begins.
+        mediaPlayer?.let { if (it.isPlaying) applySpeed(it) }
+    }
+
+    /** Pitch stays the same at any speed, because PlaybackParams leaves the pitch at 1.0. */
+    private fun applySpeed(player: MediaPlayer) {
+        try {
+            player.playbackParams = player.playbackParams.setSpeed(playbackSpeed)
+        } catch (e: IllegalStateException) {
+            android.util.Log.w("PlaybackViewModel", "Could not set playback speed", e)
+        } catch (e: IllegalArgumentException) {
+            android.util.Log.w("PlaybackViewModel", "Unsupported playback speed $playbackSpeed", e)
+        }
+    }
+
+    /** Marks the loop start (A) at the current position. */
+    fun setLoopStart() {
+        val position = currentPositionMs
+        loopStartMs = position
+        val end = loopEndMs
+        if (end != null && end - position < MIN_LOOP_MS) loopEndMs = null
+        if (loopEndMs != null) loopEnabled = true
+    }
+
+    /** Marks the loop end (B) at the current position and turns looping on. */
+    fun setLoopEnd() {
+        val position = currentPositionMs
+        val start = loopStartMs ?: 0L
+        if (position - start < MIN_LOOP_MS) return
+        loopStartMs = start
+        loopEndMs = position
+        loopEnabled = true
+    }
+
+    /** With no markers set this loops the whole recording. */
+    fun toggleLoop() {
+        loopEnabled = !loopEnabled
+    }
+
+    fun clearLoop() {
+        loopEnabled = false
+        loopStartMs = null
+        loopEndMs = null
     }
 
     override fun onCleared() {
@@ -435,6 +519,24 @@ fun PlaybackScreen(
             // --- Compact Controls Section ---
             val formatTime = ::formatDuration
 
+            val loopSpeedControls: @Composable (Modifier) -> Unit = { controlsModifier ->
+                PlaybackLoopSpeedControls(
+                    speed = viewModel.playbackSpeed,
+                    onSpeedChange = viewModel::setSpeed,
+                    loopStartMs = viewModel.loopStartMs,
+                    loopEndMs = viewModel.loopEndMs,
+                    loopEnabled = viewModel.loopEnabled,
+                    onSetStart = viewModel::setLoopStart,
+                    onSetEnd = viewModel::setLoopEnd,
+                    onToggleLoop = viewModel::toggleLoop,
+                    onClear = viewModel::clearLoop,
+                    modifier = controlsModifier
+                )
+            }
+
+            // Portrait: own row above the transport row, so it never sits next to the banner ad below
+            if (isPortrait) loopSpeedControls(Modifier.fillMaxWidth())
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -471,6 +573,9 @@ fun PlaybackScreen(
                     text = formatTime(viewModel.totalDurationMs),
                     style = MaterialTheme.typography.bodySmall
                 )
+
+                // Landscape: share the transport row so the graph keeps its height
+                if (!isPortrait) loopSpeedControls(Modifier)
             }
 
             // --- Portrait Banner Ad ---
@@ -482,6 +587,92 @@ fun PlaybackScreen(
                 )
             } else if (isPortrait) {
                 Spacer(modifier = Modifier.height(60.dp))
+            }
+        }
+    }
+}
+
+private fun formatSpeed(speed: Float): String = "${if (speed % 1f == 0f) speed.toInt() else speed}×"
+
+/** Speed picker, A/B loop markers, loop toggle and clear button for the playback screen. */
+@Suppress("LongParameterList")
+@Composable
+private fun PlaybackLoopSpeedControls(
+    speed: Float,
+    onSpeedChange: (Float) -> Unit,
+    loopStartMs: Long?,
+    loopEndMs: Long?,
+    loopEnabled: Boolean,
+    onSetStart: () -> Unit,
+    onSetEnd: () -> Unit,
+    onToggleLoop: () -> Unit,
+    onClear: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var speedMenuOpen by remember { mutableStateOf(false) }
+    val buttonPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
+
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Box {
+            OutlinedButton(
+                onClick = { speedMenuOpen = true },
+                modifier = Modifier.height(32.dp),
+                contentPadding = buttonPadding
+            ) {
+                Text(formatSpeed(speed), style = MaterialTheme.typography.labelMedium)
+            }
+            DropdownMenu(expanded = speedMenuOpen, onDismissRequest = { speedMenuOpen = false }) {
+                for (option in PLAYBACK_SPEEDS) {
+                    DropdownMenuItem(
+                        text = { Text(formatSpeed(option)) },
+                        onClick = {
+                            onSpeedChange(option)
+                            speedMenuOpen = false
+                        }
+                    )
+                }
+            }
+        }
+
+        OutlinedButton(
+            onClick = onSetStart,
+            modifier = Modifier.height(32.dp),
+            contentPadding = buttonPadding
+        ) {
+            Text(
+                text = if (loopStartMs != null) "A ${formatDuration(loopStartMs)}" else "A",
+                style = MaterialTheme.typography.labelMedium
+            )
+        }
+        OutlinedButton(
+            onClick = onSetEnd,
+            modifier = Modifier.height(32.dp),
+            contentPadding = buttonPadding
+        ) {
+            Text(
+                text = if (loopEndMs != null) "B ${formatDuration(loopEndMs)}" else "B",
+                style = MaterialTheme.typography.labelMedium
+            )
+        }
+
+        IconButton(onClick = onToggleLoop, modifier = Modifier.size(36.dp)) {
+            Icon(
+                imageVector = Icons.Default.Repeat,
+                contentDescription = if (loopEnabled) "Turn loop off" else "Turn loop on",
+                tint = if (loopEnabled) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                }
+            )
+        }
+        if (loopStartMs != null || loopEndMs != null) {
+            IconButton(onClick = onClear, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.Default.Close, contentDescription = "Clear loop markers")
             }
         }
     }
