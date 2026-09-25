@@ -44,8 +44,10 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
 @SuppressLint("UnusedBoxWithConstraintsScope")
+@Suppress("LongParameterList", "LongMethod", "CyclomaticComplexMethod")
 @Composable
 fun Piano(
+    modifier: Modifier = Modifier,
     startMidi: Int = 24,
     endMidi: Int = 84,
     onKeyPressed: ((midi: Int, freqHz: Double) -> Unit)? = null,
@@ -151,7 +153,7 @@ fun Piano(
     if (!rotated) {
         // PORTRAIT
         BoxWithConstraints(
-            modifier = Modifier
+            modifier = modifier
                 .fillMaxWidth()
                 .height(whiteKeyHeight)
         ) {
@@ -257,7 +259,7 @@ fun Piano(
         }
     } else {
         // ROTATED MODE
-        BoxWithConstraints(modifier = Modifier.fillMaxHeight()) {
+        BoxWithConstraints(modifier = modifier.fillMaxHeight()) {
             val parentFullWidthDp = maxWidth
             val visibleWidthDp = parentFullWidthDp * 0.80f
             val containerHeightPx = with(density) { maxHeight.toPx() }

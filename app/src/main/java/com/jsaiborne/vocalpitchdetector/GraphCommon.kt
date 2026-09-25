@@ -6,18 +6,21 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -27,10 +30,12 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.unit.dp
 import kotlin.math.hypot
+import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -163,6 +168,79 @@ internal fun Modifier.playbackCameraGestures(camera: PlaybackCamera, autoCenter:
                 camera.scope.launch { camera.panAnimX.animateTo(0f, spring()) }
                 camera.scope.launch { camera.panAnimY.animateTo(0f, spring()) }
             }
+        }
+    }
+
+// --- Live graph pitch-axis zoom ---------------------------------------------------------------
+
+internal const val MIN_KEY_SIZE_DP = 24f
+internal const val MAX_KEY_SIZE_DP = 140f
+
+/**
+ * Pinch-zoom for the live screen. The piano and the pitch graph both size their pitch axis from
+ * one key size and share one [scroll], so changing the key size (and nudging the scroll to keep
+ * the pinch point still) rescales both together and keeps them aligned.
+ */
+internal class PitchAxisZoom(
+    private val keySizeDp: () -> Float,
+    private val setKeySizeDp: (Float) -> Unit,
+    val scroll: ScrollState
+) {
+    /**
+     * Scroll position to apply once the content has been re-laid out at the new size;
+     * [ScrollState.scrollTo] would otherwise clamp to the old, smaller maximum.
+     */
+    var pendingScroll: Float? = null
+
+    fun zoomBy(zoomChange: Float, focalPx: Float) {
+        val oldSize = keySizeDp()
+        val newSize = (oldSize * zoomChange).coerceIn(MIN_KEY_SIZE_DP, MAX_KEY_SIZE_DP)
+        if (newSize == oldSize) return
+
+        val ratio = newSize / oldSize
+        val base = pendingScroll ?: scroll.value.toFloat()
+        pendingScroll = ((base + focalPx) * ratio - focalPx).coerceAtLeast(0f)
+        setKeySizeDp(newSize)
+    }
+}
+
+@Composable
+internal fun rememberPitchAxisZoom(
+    keySizeDp: () -> Float,
+    setKeySizeDp: (Float) -> Unit,
+    scroll: ScrollState
+): PitchAxisZoom {
+    val zoom = remember(scroll) { PitchAxisZoom(keySizeDp, setKeySizeDp, scroll) }
+    LaunchedEffect(zoom) {
+        // The scroll range changes exactly when the content re-lays out at the new key size.
+        snapshotFlow { scroll.maxValue }.collect {
+            zoom.pendingScroll?.let { target ->
+                zoom.pendingScroll = null
+                scroll.scrollTo(target.roundToInt())
+            }
+        }
+    }
+    return zoom
+}
+
+/**
+ * Two-finger pinch on the pitch axis ([vertical] in landscape, horizontal in portrait). Events are
+ * only observed, never consumed, so scrolling and key presses keep working.
+ */
+internal fun Modifier.pitchAxisZoom(zoom: PitchAxisZoom, vertical: Boolean): Modifier =
+    pointerInput(zoom, vertical) {
+        awaitEachGesture {
+            awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            do {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                if (event.changes.count { it.pressed } >= 2) {
+                    val zoomChange = event.calculateZoom()
+                    val centroid = event.calculateCentroid(useCurrent = false)
+                    if (zoomChange != 1f && centroid != Offset.Unspecified) {
+                        zoom.zoomBy(zoomChange, if (vertical) centroid.y else centroid.x)
+                    }
+                }
+            } while (event.changes.any { it.pressed })
         }
     }
 

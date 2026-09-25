@@ -123,6 +123,11 @@ fun MainScreen(navController: NavHostController? = null) {
     val graphAlignmentDp by remember { mutableFloatStateOf(0f) }
 
     val sharedScroll = rememberScrollState()
+    val pitchZoom = rememberPitchAxisZoom(
+        keySizeDp = { whiteKeyWidthDpFloat },
+        setKeySizeDp = { whiteKeyWidthDpFloat = it },
+        scroll = sharedScroll
+    )
 
     val isRecording by engine.isRecording.collectAsState()
     val isRecordingPaused by engine.isPaused.collectAsState()
@@ -356,6 +361,7 @@ fun MainScreen(navController: NavHostController? = null) {
                         .fillMaxHeight()
                         .width(250.dp)
                         .padding(vertical = 6.dp, horizontal = 2.dp)
+                        .pitchAxisZoom(pitchZoom, vertical = true)
                 ) {
                     Piano(
                         startMidi = 24,
@@ -379,6 +385,7 @@ fun MainScreen(navController: NavHostController? = null) {
                         .fillMaxHeight()
                         .weight(1f)
                         .padding(vertical = 6.dp, horizontal = 2.dp)
+                        .pitchAxisZoom(pitchZoom, vertical = true)
                 ) {
                     PitchGraphCard(
                         engine = engine,
@@ -444,6 +451,7 @@ fun MainScreen(navController: NavHostController? = null) {
             Spacer(modifier = Modifier.height(8.dp))
 
             Piano(
+                modifier = Modifier.pitchAxisZoom(pitchZoom, vertical = false),
                 startMidi = 24, endMidi = 84, onKeyPressed = { _, _ -> },
                 activeMidi = activeMidi, autoCenter = autoCenter, stableMidi = stableMidi,
                 whiteKeyWidthDp = whiteKeyWidthDpFloat.dp, scrollState = sharedScroll,
@@ -457,7 +465,7 @@ fun MainScreen(navController: NavHostController? = null) {
 
             PitchGraphCard(
                 engine = engine,
-                modifier = Modifier.fillMaxWidth().weight(1f),
+                modifier = Modifier.fillMaxWidth().weight(1f).pitchAxisZoom(pitchZoom, vertical = false),
                 paused = graphPaused,
                 startMidi = 24, endMidi = 84, whiteKeyWidthDp = whiteKeyWidthDpFloat.dp,
                 scrollState = sharedScroll, alignmentOffsetDp = graphAlignmentDp.dp,
