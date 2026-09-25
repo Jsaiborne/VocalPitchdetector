@@ -48,7 +48,7 @@ fun LandscapePlaybackPitchGraph(
 
     val currentPoint = remember(currentPositionMs, pitchData) { pitchData.nearestTo(currentPositionMs) }
 
-    val targetMidi = currentPoint?.midiNote?.toFloat() ?: 60f
+    val targetMidi = currentPoint?.midiFloat ?: 60f
     val animatedCenterMidi by animateFloatAsState(
         targetValue = targetMidi,
         animationSpec = spring(stiffness = Spring.StiffnessLow),
@@ -168,7 +168,7 @@ fun LandscapePlaybackPitchGraph(
                     maxTimeMs = maxVisibleTimeMs.toLong(),
                     breakDistance = canvasH * 0.35f
                 ) { point ->
-                    Offset((point.timestampMs / 1000f) * pixelsPerSecond, -point.midiNote * pixelsPerMidi)
+                    Offset((point.timestampMs / 1000f) * pixelsPerSecond, -point.midiFloat * pixelsPerMidi)
                 }
                 drawTraceSegments(segments, showBars, showWhiteDots, showCurve)
 
@@ -181,7 +181,7 @@ fun LandscapePlaybackPitchGraph(
                 )
 
                 currentPoint?.let { point ->
-                    val cy = -point.midiNote * pixelsPerMidi
+                    val cy = -point.midiFloat * pixelsPerMidi
                     drawCircle(color = playheadColor, radius = 6.dp.toPx(), center = Offset(playheadVirtualX, cy))
                 }
             }

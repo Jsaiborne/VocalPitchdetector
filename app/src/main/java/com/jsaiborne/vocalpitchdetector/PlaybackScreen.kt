@@ -76,6 +76,13 @@ data class RecordedPitchPoint(
     val midiNote: Int
 )
 
+/**
+ * Un-rounded MIDI pitch, so playback curves glide between semitone lines like the live graph.
+ * [RecordedPitchPoint.midiNote] is rounded at record time; this is recovered from [RecordedPitchPoint.frequencyHz].
+ */
+internal val RecordedPitchPoint.midiFloat: Float
+    get() = if (frequencyHz > 0f) freqToMidi(frequencyHz.toDouble()).toFloat() else midiNote.toFloat()
+
 class PlaybackViewModel : ViewModel() {
     private var mediaPlayer: MediaPlayer? = null
 

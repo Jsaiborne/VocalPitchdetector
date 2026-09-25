@@ -48,7 +48,7 @@ fun PortraitPlaybackPitchGraph(
 
     val currentPoint = remember(currentPositionMs, pitchData) { pitchData.nearestTo(currentPositionMs) }
 
-    val targetMidi = currentPoint?.midiNote?.toFloat() ?: 60f
+    val targetMidi = currentPoint?.midiFloat ?: 60f
     val animatedCenterMidi by animateFloatAsState(
         targetValue = targetMidi,
         animationSpec = spring(stiffness = Spring.StiffnessLow),
@@ -168,7 +168,7 @@ fun PortraitPlaybackPitchGraph(
                     maxTimeMs = maxVisibleTimeMs.toLong(),
                     breakDistance = canvasW * 0.35f
                 ) { point ->
-                    Offset(point.midiNote * pixelsPerMidi, (point.timestampMs / 1000f) * pixelsPerSecond)
+                    Offset(point.midiFloat * pixelsPerMidi, (point.timestampMs / 1000f) * pixelsPerSecond)
                 }
                 drawTraceSegments(segments, showBars, showWhiteDots, showCurve)
 
@@ -181,7 +181,7 @@ fun PortraitPlaybackPitchGraph(
                 )
 
                 currentPoint?.let { point ->
-                    val cx = point.midiNote * pixelsPerMidi
+                    val cx = point.midiFloat * pixelsPerMidi
                     drawCircle(color = playheadColor, radius = 6.dp.toPx(), center = Offset(cx, playheadVirtualY))
                 }
             }
