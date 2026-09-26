@@ -122,8 +122,11 @@ internal class RangeHoldTracker(
             noteMidi = exact.roundToInt()
 
             val anchor = anchorMidi
-            if (anchor == null || abs(exact - anchor) > windowSemitones) {
-                // Moved too far from where the note started: begin a new window here
+            // A gap longer than the grace period also starts over, even if no silent update came
+            // in between (the engine reports silence only once)
+            val resumedAfterGap = nowMs - lastHeardMs > dropoutGraceMs
+            if (anchor == null || resumedAfterGap || abs(exact - anchor) > windowSemitones) {
+                // Moved too far from where the note started (or paused too long): new window here
                 anchorMidi = exact
                 windowStartMs = nowMs
                 sum = 0.0
@@ -220,9 +223,9 @@ private class PeakLevel {
 
 private data class RangeEvent(val text: String, val atMs: Long)
 
-private data class SavedRange(val low: Int, val high: Int, val timeMs: Long)
+internal data class SavedRange(val low: Int, val high: Int, val timeMs: Long)
 
-private fun readSavedRange(context: Context): SavedRange? {
+internal fun readSavedRange(context: Context): SavedRange? {
     val prefs = context.getSharedPreferences(RANGE_PREFS, Context.MODE_PRIVATE)
     if (!prefs.contains(KEY_RANGE_LOW) || !prefs.contains(KEY_RANGE_HIGH)) return null
     return SavedRange(
@@ -287,6 +290,12 @@ fun VocalRangeTestScreen(
     LaunchedEffect(Unit) {
         while (true) {
             now = System.currentTimeMillis()
+            // The engine reports silence only once, so keep the hold tracker (and its progress
+            // ring) up to date while nothing is being sung
+            val live = step == RangeStep.WARMUP || step == RangeStep.LOW || step == RangeStep.HIGH
+            if (live && engine.state.value.frequency <= 0f) {
+                snapshot = tracker.update(-1f, 0f, now)
+            }
             delay(COACH_TICK_MS)
         }
     }
@@ -404,6 +413,8 @@ fun VocalRangeTestScreen(
                 onSave = {
                     saveRange(context, low ?: 0, high ?: 0)
                     onExit()
+                    // Finishing the test is a good moment to (occasionally) ask for a rating
+                    ReviewPrompter.onPositiveMoment(context)
                 },
                 modifier = Modifier.weight(1f)
             )

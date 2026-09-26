@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -94,10 +95,10 @@ import java.io.File
 import java.util.Locale
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 private const val PREFS_NAME = "AppPreferences"
-private const val PREF_NEVER_SHOW_RATE = "NeverShowRateApp"
 private const val PREF_SOLFEGE = "UseSolfege"
 private const val PREF_ASKED_NOTIFICATIONS = "AskedNotificationPermission"
 
@@ -113,6 +114,13 @@ private const val PREF_BPM = "ScrollBpm"
 private const val PREF_WHITE_DOTS = "ShowWhiteDots"
 private const val PREF_SAMPLE_PLAYER = "UseSamplePlayer"
 private const val PREF_CENTS_METER = "ShowCentsMeter"
+private const val PREF_RANGE_ON_PIANO = "ShowRangeOnPiano"
+private const val PREF_GESTURE_TIP_SEEN = "GestureTipSeen"
+
+// Landscape piano: a share of the screen width, kept within sensible limits
+private const val LANDSCAPE_PIANO_WIDTH_FRACTION = 0.22f
+private const val LANDSCAPE_PIANO_MIN_WIDTH_DP = 160f
+private const val LANDSCAPE_PIANO_MAX_WIDTH_DP = 250f
 private const val SETTINGS_SAVE_DELAY_MS = 400L
 private const val RECORDING_TIMER_TICK_MS = 250L
 
@@ -137,8 +145,6 @@ fun MainScreen(navController: NavHostController? = null) {
     // One engine for the whole process, so a recording outlives this screen (see RecordingService)
     val engine = remember { PitchEngineProvider.get() }
     val state by engine.state.collectAsState()
-    val volumeRms by engine.volumeRms.collectAsState()
-    val currentVolumeDb = rmsToDb(volumeRms)
     val context = LocalContext.current
 
     val outerPadding = 8.dp
@@ -160,11 +166,14 @@ fun MainScreen(navController: NavHostController? = null) {
 
     var useSamplePlayer by rememberSaveable { mutableStateOf(appPrefs.getBoolean(PREF_SAMPLE_PLAYER, false)) }
     var showCentsMeter by rememberSaveable { mutableStateOf(appPrefs.getBoolean(PREF_CENTS_METER, true)) }
+    var showRangeOnPiano by rememberSaveable { mutableStateOf(appPrefs.getBoolean(PREF_RANGE_ON_PIANO, true)) }
+    var showGestureTip by remember { mutableStateOf(!appPrefs.getBoolean(PREF_GESTURE_TIP_SEEN, false)) }
 
     // Save settings shortly after they change (the delay coalesces slider drags into one write)
     LaunchedEffect(
         autoCenter, whiteKeyWidthDpFloat, showNoteLabels, showHorizontalGrid, showCurve,
-        showWhiteTrace, thresholdDb, bpm, showWhiteDots, useSamplePlayer, showCentsMeter
+        showWhiteTrace, thresholdDb, bpm, showWhiteDots, useSamplePlayer, showCentsMeter,
+        showRangeOnPiano
     ) {
         delay(SETTINGS_SAVE_DELAY_MS)
         appPrefs.edit()
@@ -179,18 +188,34 @@ fun MainScreen(navController: NavHostController? = null) {
             .putBoolean(PREF_WHITE_DOTS, showWhiteDots)
             .putBoolean(PREF_SAMPLE_PLAYER, useSamplePlayer)
             .putBoolean(PREF_CENTS_METER, showCentsMeter)
+            .putBoolean(PREF_RANGE_ON_PIANO, showRangeOnPiano)
             .apply()
     }
     var rangeTestActive by rememberSaveable { mutableStateOf(false) }
+
+    // The last saved range-test result; re-read whenever the test closes, in case it was retaken
+    var savedRange by remember { mutableStateOf(readSavedRange(context)) }
+    LaunchedEffect(rangeTestActive) {
+        if (!rangeTestActive) savedRange = readSavedRange(context)
+    }
+    val pianoVocalRange = savedRange?.takeIf { showRangeOnPiano }?.let { it.low..it.high }
 
     var graphPaused by remember { mutableStateOf(false) }
     var stableMidi by remember { mutableStateOf<Int?>(null) }
     val graphAlignmentDp by remember { mutableFloatStateOf(0f) }
 
     val sharedScroll = rememberScrollState()
+    val dismissGestureTip = {
+        showGestureTip = false
+        appPrefs.edit().putBoolean(PREF_GESTURE_TIP_SEEN, true).apply()
+    }
     val pitchZoom = rememberPitchAxisZoom(
         keySizeDp = { whiteKeyWidthDpFloat },
-        setKeySizeDp = { whiteKeyWidthDpFloat = it },
+        setKeySizeDp = {
+            whiteKeyWidthDpFloat = it
+            // They've found the pinch gesture, so the tip is no longer needed
+            if (showGestureTip) dismissGestureTip()
+        },
         scroll = sharedScroll
     )
 
@@ -295,8 +320,6 @@ fun MainScreen(navController: NavHostController? = null) {
 
     val canShowAds = LocalCanShowAds.current
 
-    RateAppDialogManager()
-
     val startRecordingNow: () -> Unit = {
         val sessionId = System.currentTimeMillis().toString()
         val recordingsDir = File(context.filesDir, "recordings")
@@ -357,7 +380,11 @@ fun MainScreen(navController: NavHostController? = null) {
             title = { Text("Recording Saved") },
             text = { Text("Your vocal session has been saved successfully.") },
             confirmButton = {
-                TextButton(onClick = { showSavedDialog = false }) { Text("OK") }
+                TextButton(onClick = {
+                    showSavedDialog = false
+                    // A finished take is a good moment to (occasionally) ask for a rating
+                    ReviewPrompter.onPositiveMoment(context)
+                }) { Text("OK") }
             },
             dismissButton = {
                 TextButton(onClick = {
@@ -407,6 +434,7 @@ fun MainScreen(navController: NavHostController? = null) {
         showWhiteDots = true
         useSamplePlayer = false
         showCentsMeter = true
+        showRangeOnPiano = true
         NoteNotation.useSolfege = false
         appPrefs.edit().putBoolean(PREF_SOLFEGE, false).apply()
     }
@@ -421,6 +449,8 @@ fun MainScreen(navController: NavHostController? = null) {
         useSamplePlayer = useSamplePlayer,
         showCentsMeter = showCentsMeter,
         useSolfege = NoteNotation.useSolfege,
+        savedRangeText = savedRange?.let { "${midiToDisplayName(it.low)} – ${midiToDisplayName(it.high)}" },
+        showRangeOnPiano = showRangeOnPiano,
         rangeTestUnavailableReason = when {
             isRecording -> "Stop recording first"
             !hasMicPermission -> "Microphone permission needed"
@@ -429,7 +459,9 @@ fun MainScreen(navController: NavHostController? = null) {
         },
         bpm = bpm,
         thresholdDb = thresholdDb,
-        currentVolumeDb = currentVolumeDb
+        // Passed as the flow, not a value: only the open menu listens to the level, so the whole
+        // screen isn't recomposed ~21 times a second just because the mic level changed
+        volumeRms = engine.volumeRms
     )
 
     val menuActions = MenuActions(
@@ -448,6 +480,7 @@ fun MainScreen(navController: NavHostController? = null) {
             appPrefs.edit().putBoolean(PREF_SOLFEGE, checked).apply()
         },
         onOpenRangeTest = { rangeTestActive = true },
+        onShowRangeOnPianoChange = { showRangeOnPiano = it },
         onBpmChange = { bpm = it },
         onThresholdChange = { newDb ->
             thresholdDb = newDb
@@ -510,10 +543,12 @@ fun MainScreen(navController: NavHostController? = null) {
                     .fillMaxWidth()
                     .weight(1f)
             ) {
+                val pianoWidthDp = (config.screenWidthDp * LANDSCAPE_PIANO_WIDTH_FRACTION)
+                    .coerceIn(LANDSCAPE_PIANO_MIN_WIDTH_DP, LANDSCAPE_PIANO_MAX_WIDTH_DP)
                 Box(
                     modifier = Modifier
                         .fillMaxHeight()
-                        .width(250.dp)
+                        .width(pianoWidthDp.dp)
                         .padding(vertical = 6.dp, horizontal = 2.dp)
                         .pitchAxisZoom(pitchZoom, vertical = true)
                 ) {
@@ -528,7 +563,8 @@ fun MainScreen(navController: NavHostController? = null) {
                         scrollState = sharedScroll,
                         rotated = true,
                         blackKeyShiftFraction = 0.5f,
-                        useSamplePlayer = useSamplePlayer
+                        useSamplePlayer = useSamplePlayer,
+                        vocalRange = pianoVocalRange
                     )
                 }
 
@@ -560,6 +596,15 @@ fun MainScreen(navController: NavHostController? = null) {
                         showWhiteDots = showWhiteDots,
                         bpm = bpm
                     )
+                    // Bottom of the graph, away from the ad in the top bar
+                    if (showGestureTip) {
+                        GestureTip(
+                            onDismiss = dismissGestureTip,
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(12.dp)
+                        )
+                    }
                 }
             }
             Spacer(modifier = Modifier.height(smallGap))
@@ -620,7 +665,8 @@ fun MainScreen(navController: NavHostController? = null) {
                 startMidi = 24, endMidi = 84, onKeyPressed = { _, _ -> },
                 activeMidi = activeMidi, autoCenter = autoCenter, stableMidi = stableMidi,
                 whiteKeyWidthDp = whiteKeyWidthDpFloat.dp, scrollState = sharedScroll,
-                rotated = false, blackKeyShiftFraction = 0.5f, useSamplePlayer = useSamplePlayer
+                rotated = false, blackKeyShiftFraction = 0.5f, useSamplePlayer = useSamplePlayer,
+                vocalRange = pianoVocalRange
             )
 
             HorizontalDivider(
@@ -628,19 +674,30 @@ fun MainScreen(navController: NavHostController? = null) {
                 color = MaterialTheme.colorScheme.outlineVariant
             )
 
-            PitchGraphCard(
-                engine = engine,
-                modifier = Modifier.fillMaxWidth().weight(1f).pitchAxisZoom(pitchZoom, vertical = false),
-                paused = graphPaused,
-                startMidi = 24, endMidi = 84, whiteKeyWidthDp = whiteKeyWidthDpFloat.dp,
-                scrollState = sharedScroll, alignmentOffsetDp = graphAlignmentDp.dp,
-                timeWindowMs = 8000L,
-                showNoteLabels = showNoteLabels, showHorizontalGrid = showHorizontalGrid,
-                showCurve = showCurve, rotated = false, blackKeyShiftFraction = 0.5f,
-                showWhiteTrace = showWhiteTrace,
-                showWhiteDots = showWhiteDots,
-                bpm = bpm
-            )
+            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                PitchGraphCard(
+                    engine = engine,
+                    modifier = Modifier.fillMaxSize().pitchAxisZoom(pitchZoom, vertical = false),
+                    paused = graphPaused,
+                    startMidi = 24, endMidi = 84, whiteKeyWidthDp = whiteKeyWidthDpFloat.dp,
+                    scrollState = sharedScroll, alignmentOffsetDp = graphAlignmentDp.dp,
+                    timeWindowMs = 8000L,
+                    showNoteLabels = showNoteLabels, showHorizontalGrid = showHorizontalGrid,
+                    showCurve = showCurve, rotated = false, blackKeyShiftFraction = 0.5f,
+                    showWhiteTrace = showWhiteTrace,
+                    showWhiteDots = showWhiteDots,
+                    bpm = bpm
+                )
+                // Top of the graph, away from the banner ad at the bottom of the screen
+                if (showGestureTip) {
+                    GestureTip(
+                        onDismiss = dismissGestureTip,
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(12.dp)
+                    )
+                }
+            }
             Spacer(modifier = Modifier.height(8.dp))
 
             if (canShowAds) {
@@ -781,6 +838,29 @@ private fun RecordingTimer(elapsedMs: Long, paused: Boolean, compact: Boolean = 
         style = if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.titleSmall,
         color = if (paused) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error
     )
+}
+
+/** One-time hint about zooming and scrolling the piano and graph together. */
+@Composable
+private fun GestureTip(onDismiss: () -> Unit, modifier: Modifier = Modifier) {
+    Card(
+        modifier = modifier.widthIn(max = 420.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "Tip: pinch with two fingers to zoom the piano and graph together, and drag to scroll.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = onDismiss) { Text("Got it") }
+        }
+    }
 }
 
 /** Shown when the microphone couldn't be opened (e.g. during a call), with a way to try again. */
@@ -1036,11 +1116,14 @@ private data class MenuSettings(
     val useSamplePlayer: Boolean,
     val showCentsMeter: Boolean,
     val useSolfege: Boolean,
+    /** The saved range-test result as text (e.g. "E2 – G4"), or null if the test hasn't been taken. */
+    val savedRangeText: String?,
+    val showRangeOnPiano: Boolean,
     /** Why the vocal range test can't be opened right now, or null when it can. */
     val rangeTestUnavailableReason: String?,
     val bpm: Float,
     val thresholdDb: Float,
-    val currentVolumeDb: Float
+    val volumeRms: StateFlow<Float>
 )
 
 /** What the settings dropdown can change. */
@@ -1054,6 +1137,7 @@ private data class MenuActions(
     val onShowCentsMeterChange: (Boolean) -> Unit,
     val onUseSolfegeChange: (Boolean) -> Unit,
     val onOpenRangeTest: () -> Unit,
+    val onShowRangeOnPianoChange: (Boolean) -> Unit,
     val onBpmChange: (Float) -> Unit,
     val onThresholdChange: (Float) -> Unit,
     val onResetDefaults: () -> Unit,
@@ -1188,6 +1272,9 @@ private fun SettingsMenu(
         onDismissRequest = onDismiss,
         modifier = Modifier.width(320.dp)
     ) {
+        // Collected here, inside the menu, so the live level is only tracked while the menu is open
+        val liveVolumeRms by settings.volumeRms.collectAsState()
+
         // Tools stay pinned above the scrolling settings so they are always in reach
         val rangeTestReason = settings.rangeTestUnavailableReason
         DropdownMenuItem(
@@ -1195,7 +1282,9 @@ private fun SettingsMenu(
                 Column {
                     Text("Vocal range test", style = MaterialTheme.typography.titleSmall)
                     Text(
-                        rangeTestReason ?: "Find your lowest and highest notes, guided step by step",
+                        rangeTestReason
+                            ?: settings.savedRangeText?.let { "Your range: $it · tap to retake" }
+                            ?: "Find your lowest and highest notes, guided step by step",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1243,12 +1332,19 @@ private fun SettingsMenu(
             SwitchRow("Show cents meter", settings.showCentsMeter, actions.onShowCentsMeterChange)
             SwitchRow("Solfège note names (Do, Re, Mi)", settings.useSolfege, actions.onUseSolfegeChange)
             SwitchRow("Use piano samples", settings.useSamplePlayer, actions.onUseSamplePlayerChange)
+            if (settings.savedRangeText != null) {
+                SwitchRow(
+                    "Shade my vocal range on the piano",
+                    settings.showRangeOnPiano,
+                    actions.onShowRangeOnPianoChange
+                )
+            }
 
             HorizontalDivider()
             MenuSectionHeader("Microphone")
             LiveVolumeSlider(
                 thresholdDb = settings.thresholdDb,
-                currentVolumeDb = settings.currentVolumeDb,
+                currentVolumeDb = rmsToDb(liveVolumeRms),
                 onThresholdChange = actions.onThresholdChange
             )
         }
@@ -1311,63 +1407,6 @@ fun LiveVolumeSlider(
             valueRange = -80f..-6f,
             steps = 74,
             modifier = Modifier.fillMaxWidth().height(32.dp)
-        )
-    }
-}
-
-@Composable
-fun RateAppDialogManager() {
-    val context = LocalContext.current
-    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-    val neverShowAgain = prefs.getBoolean(PREF_NEVER_SHOW_RATE, false)
-    var hasShownThisSession by rememberSaveable { mutableStateOf(false) }
-    var showDialog by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        if (!neverShowAgain && !hasShownThisSession) {
-            delay(30000)
-            showDialog = true
-            hasShownThisSession = true
-        }
-    }
-    if (showDialog) {
-        AlertDialog(
-            onDismissRequest = { showDialog = false },
-            title = { Text("Enjoying the App?") },
-            text = {
-                Text(
-                    "If you like using this app, " +
-                        "would you mind taking a moment to rate it? It really helps out!"
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        prefs.edit().putBoolean(PREF_NEVER_SHOW_RATE, true).apply()
-                        showDialog = false
-                        openPlayStore(context)
-                    }
-                ) {
-                    Text("Rate Us")
-                }
-            },
-            dismissButton = {
-                Row(
-                    modifier = Modifier.padding(end = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    TextButton(onClick = { showDialog = false }) {
-                        Text("Ask Me Later", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    TextButton(
-                        onClick = {
-                            prefs.edit().putBoolean(PREF_NEVER_SHOW_RATE, true).apply()
-                            showDialog = false
-                        }
-                    ) {
-                        Text("No Thanks", color = MaterialTheme.colorScheme.error)
-                    }
-                }
-            }
         )
     }
 }

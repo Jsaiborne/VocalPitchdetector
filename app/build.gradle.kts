@@ -209,4 +209,6 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.8.7")
     implementation("com.google.android.gms:play-services-ads:25.0.0")
     implementation("com.google.android.ump:user-messaging-platform:4.0.0")
+    // Google Play in-app review sheet (replaces the old timed "rate us" dialog)
+    implementation("com.google.android.play:review:2.0.2")
 }

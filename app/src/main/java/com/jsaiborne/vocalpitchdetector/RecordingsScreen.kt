@@ -107,6 +107,12 @@ private const val SECONDS_PER_MINUTE = 60L
 
 private const val NUMBERS_PREFS = "recording_numbers"
 private const val NOTES_PREFS = "recording_notes"
+
+/** The note the user attached to a recording, or null when there is none. */
+internal fun readRecordingNote(context: Context, sessionId: String): String? =
+    context.getSharedPreferences(NOTES_PREFS, Context.MODE_PRIVATE)
+        .getString(sessionId, null)
+        ?.takeIf { it.isNotBlank() }
 private const val NEXT_NUMBER_KEY = "__next"
 private val numberingLock = Any()
 

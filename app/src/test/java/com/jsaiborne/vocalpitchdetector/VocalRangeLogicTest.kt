@@ -110,6 +110,19 @@ class VocalRangeLogicTest {
     }
 
     @Test
+    fun longGapWithoutSilentUpdatesStillRestartsTheHold() {
+        // The engine reports silence only once, so the tracker may see no updates during a pause
+        val tracker = RangeHoldTracker()
+        feed(tracker, a4, 0L, 400L)
+        val afterGap = tracker.update(a4, confident, 1500L)
+        assertEquals(0f, afterGap.progress, 0.05f)
+        assertNull(afterGap.heldMidi)
+        // ...and needs a fresh full hold from there
+        assertTrue(feed(tracker, a4, 1520L, 2060L).isEmpty())
+        assertEquals(listOf(69), feed(tracker, a4, 2080L, 2400L))
+    }
+
+    @Test
     fun voiceTypeIsEstimatedFromTheCentreOfTheRange() {
         assertEquals("Tenor", estimateVoiceType(48, 72).label) // C3 to C5
         assertEquals("Bass", estimateVoiceType(40, 64).label) // E2 to E4

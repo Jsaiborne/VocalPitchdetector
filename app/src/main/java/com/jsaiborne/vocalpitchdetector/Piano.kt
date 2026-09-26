@@ -43,6 +43,10 @@ import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
+/** Soft tints for keys inside the user's saved vocal range. */
+private val VOCAL_RANGE_WHITE = Color(0xFFE3F4E6)
+private val VOCAL_RANGE_BLACK = Color(0xFF24422C)
+
 @SuppressLint("UnusedBoxWithConstraintsScope")
 @Suppress("LongParameterList", "LongMethod", "CyclomaticComplexMethod")
 @Composable
@@ -61,7 +65,9 @@ fun Piano(
     scrollState: ScrollState? = null,
     rotated: Boolean = false,
     // whether to use the SamplePlayer instead of the ToneGenerator
-    useSamplePlayer: Boolean = false
+    useSamplePlayer: Boolean = false,
+    // The user's saved vocal range (from the range test); those keys get a soft green tint
+    vocalRange: IntRange? = null
 ) {
     val scope = rememberCoroutineScope()
     val sState = scrollState ?: rememberScrollState()
@@ -198,6 +204,7 @@ fun Piano(
                         val bg = when {
                             isPressed -> Color(0xFFBBDEFB)
                             isActive -> Color(0xFF90CAF9)
+                            vocalRange != null && midi in vocalRange -> VOCAL_RANGE_WHITE
                             else -> Color.White
                         }
 
@@ -241,6 +248,7 @@ fun Piano(
                     val bg = when {
                         isPressed -> Color(0xFF1565C0)
                         isActive -> Color(0xFF1E88E5)
+                        vocalRange != null && midi in vocalRange -> VOCAL_RANGE_BLACK
                         else -> Color.Black
                     }
 
@@ -330,6 +338,7 @@ fun Piano(
                             val bg = when {
                                 isPressed -> Color(0xFFBBDEFB)
                                 isActive -> Color(0xFF90CAF9)
+                                vocalRange != null && midi in vocalRange -> VOCAL_RANGE_WHITE
                                 else -> Color.White
                             }
                             Box(
@@ -371,6 +380,7 @@ fun Piano(
                         val bg = when {
                             isPressed -> Color(0xFF1565C0)
                             isActive -> Color(0xFF1E88E5)
+                            vocalRange != null && bk.midi in vocalRange -> VOCAL_RANGE_BLACK
                             else -> Color.Black
                         }
 

@@ -138,6 +138,9 @@ class PitchEngine(
         val started = newDetector.run {
             start(
                 onPitchDetected = { freqHz, confidence ->
+                    // Silence is reported once, when a note ends. Re-publishing it every frame
+                    // (~21/s) would keep the whole UI recomposing while nobody is singing.
+                    if (freqHz <= 0f && _state.value.frequency <= 0f) return@start
                     _state.value = PitchState(
                         frequency = freqHz,
                         confidence = confidence,

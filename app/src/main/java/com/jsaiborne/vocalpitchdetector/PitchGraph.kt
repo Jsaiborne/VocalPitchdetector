@@ -39,6 +39,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 
 private data class PitchSample(val tMs: Long, val freq: Float, val midi: Float)
@@ -68,7 +69,33 @@ private class TraceBuffer {
         while (markers.isNotEmpty() && markers.first().tMs < cutoffMs) markers.removeFirst()
         version++
     }
+
+    /**
+     * Drops data older than [cutoffMs] and asks the graph to redraw, so the trace keeps scrolling
+     * (and old markers leave the screen) even when no new pitch data arrives.
+     */
+    fun tick(cutoffMs: Long) {
+        while (samples.isNotEmpty() && samples.first().tMs < cutoffMs) samples.removeFirst()
+        while (markers.isNotEmpty() && markers.first().tMs < cutoffMs) markers.removeFirst()
+        version++
+    }
+
+    /** True while any sung pitch or note marker newer than [sinceMs] is still in the buffer. */
+    fun hasContentSince(sinceMs: Long): Boolean {
+        if (markers.isNotEmpty() && markers.last().tMs >= sinceMs) return true
+        for (i in samples.indices.reversed()) {
+            val s = samples[i]
+            if (s.tMs < sinceMs) break
+            if (!s.midi.isNaN()) return true
+        }
+        return false
+    }
 }
+
+/** Scroll redraw interval (~30 fps), and how long to keep scrolling after the last sung note. */
+private const val SCROLL_FRAME_MS = 33L
+private const val SCROLL_IDLE_POLL_MS = 150L
+private const val SCROLL_EXIT_MARGIN_MS = 500L
 
 @Composable
 private fun rememberTraceBuffer(engine: PitchEngine, paused: Boolean, windowMs: Long): TraceBuffer {
@@ -80,6 +107,21 @@ private fun rememberTraceBuffer(engine: PitchEngine, paused: Boolean, windowMs: 
                 val t = System.currentTimeMillis()
                 val midi = if (s.frequency > 0f) freqToMidi(s.frequency.toDouble()).toFloat() else Float.NaN
                 buffer.addSample(PitchSample(tMs = t, freq = s.frequency, midi = midi), cutoffMs = t - windowMs)
+            }
+        }
+    }
+
+    // The engine reports silence only once, so the graph drives its own scrolling: it redraws at
+    // ~30 fps while a trace or marker is still on screen, and stops redrawing once it has scrolled
+    // away, so an idle screen costs almost nothing
+    LaunchedEffect(buffer, paused, windowMs) {
+        while (true) {
+            val now = System.currentTimeMillis()
+            if (!paused && buffer.hasContentSince(now - windowMs - SCROLL_EXIT_MARGIN_MS)) {
+                buffer.tick(cutoffMs = now - windowMs)
+                delay(SCROLL_FRAME_MS)
+            } else {
+                delay(SCROLL_IDLE_POLL_MS)
             }
         }
     }

@@ -109,6 +109,8 @@ class PlaybackViewModel : ViewModel() {
         private set
     var sessionDate by mutableStateOf("")
         private set
+    var sessionNote by mutableStateOf<String?>(null)
+        private set
 
     // Speed is kept between recordings; the loop is reset whenever a new recording loads
     var playbackSpeed by mutableFloatStateOf(1f)
@@ -131,6 +133,7 @@ class PlaybackViewModel : ViewModel() {
         // The screen re-runs this on recomposition; don't rebuild the player for the same file.
         if (loadedAudioPath == audioFile.absolutePath) return
         loadedAudioPath = audioFile.absolutePath
+        sessionNote = null
 
         loadJob?.cancel()
         mediaPlayer?.release()
@@ -159,6 +162,9 @@ class PlaybackViewModel : ViewModel() {
             val (title, date) = calculateMetadata(appContext, audioFile)
             sessionTitle = title
             sessionDate = date
+
+            val sessionId = audioFile.name.substringAfter("session_").substringBefore("_audio.wav")
+            sessionNote = withContext(Dispatchers.IO) { readRecordingNote(appContext, sessionId) }
         }
     }
 
@@ -377,15 +383,7 @@ fun PlaybackScreen(
             if (isPortrait) {
                 TopAppBar(
                     title = {
-                        Column(verticalArrangement = Arrangement.Center) {
-                            Text(
-                                text = viewModel.sessionTitle,
-                                style = MaterialTheme.typography.titleSmall,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                                lineHeight = 16.sp
-                            )
-                        }
+                        SessionTitleWithNote(title = viewModel.sessionTitle, note = viewModel.sessionNote)
                     },
                     navigationIcon = {
                         IconButton(onClick = onNavigateUp) {
@@ -458,6 +456,7 @@ fun PlaybackScreen(
                 // Custom landscape TopAppBar to hold the ad
                 TopAppBarPlaybackLandscape(
                     sessionTitle = viewModel.sessionTitle,
+                    sessionNote = viewModel.sessionNote,
                     onNavigateUp = onNavigateUp,
                     canShowAds = canShowAds,
                     showSettingsMenu = showSettingsMenu,
@@ -678,11 +677,36 @@ private fun PlaybackLoopSpeedControls(
     }
 }
 
+/** The recording's title, with its note (if any) underneath in one ellipsized line. */
+@Composable
+private fun SessionTitleWithNote(title: String, note: String?, modifier: Modifier = Modifier) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.Center) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            // Leave room for the note line in the fixed-height app bar
+            maxLines = if (note == null) 2 else 1,
+            overflow = TextOverflow.Ellipsis,
+            lineHeight = 16.sp
+        )
+        if (note != null) {
+            Text(
+                text = note,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
 // --- UPDATED COMPOSABLE: Custom Landscape TopAppBar for Playback Screen ---
 @Suppress("LongParameterList")
 @Composable
 private fun TopAppBarPlaybackLandscape(
     sessionTitle: String,
+    sessionNote: String?,
     onNavigateUp: () -> Unit,
     canShowAds: Boolean,
     showSettingsMenu: Boolean,
@@ -714,12 +738,9 @@ private fun TopAppBarPlaybackLandscape(
         Spacer(modifier = Modifier.width(4.dp))
 
         // LEFT/CENTER: Dynamic Title Text that wraps and doesn't push into the ad
-        Text(
-            text = sessionTitle,
-            style = MaterialTheme.typography.titleSmall,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            lineHeight = 16.sp,
+        SessionTitleWithNote(
+            title = sessionTitle,
+            note = sessionNote,
             modifier = Modifier
                 .weight(1f)
                 .padding(end = 8.dp)
