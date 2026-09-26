@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.os.Build
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -63,8 +64,10 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -91,11 +94,27 @@ import java.io.File
 import java.util.Locale
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private const val PREFS_NAME = "AppPreferences"
 private const val PREF_NEVER_SHOW_RATE = "NeverShowRateApp"
 private const val PREF_SOLFEGE = "UseSolfege"
 private const val PREF_ASKED_NOTIFICATIONS = "AskedNotificationPermission"
+
+// Settings remembered between app launches
+private const val PREF_AUTO_CENTER = "AutoCenter"
+private const val PREF_KEY_WIDTH = "KeyWidthDp"
+private const val PREF_NOTE_LABELS = "ShowNoteLabels"
+private const val PREF_GRID = "ShowGrid"
+private const val PREF_CURVE = "ShowCurve"
+private const val PREF_WHITE_TRACE = "ShowWhiteTrace"
+private const val PREF_THRESHOLD_DB = "ThresholdDb"
+private const val PREF_BPM = "ScrollBpm"
+private const val PREF_WHITE_DOTS = "ShowWhiteDots"
+private const val PREF_SAMPLE_PLAYER = "UseSamplePlayer"
+private const val PREF_CENTS_METER = "ShowCentsMeter"
+private const val SETTINGS_SAVE_DELAY_MS = 400L
+private const val RECORDING_TIMER_TICK_MS = 250L
 
 /** Notifications only need a runtime permission from Android 13 (Tiramisu) on. */
 private fun notificationPermissionGranted(context: Context): Boolean {
@@ -112,7 +131,7 @@ private data class RecordingCallbacks(
     val onLibraryClick: () -> Unit
 )
 
-@Suppress("MagicNumber", "LongMethod")
+@Suppress("MagicNumber", "LongMethod", "CyclomaticComplexMethod")
 @Composable
 fun MainScreen(navController: NavHostController? = null) {
     // One engine for the whole process, so a recording outlives this screen (see RecordingService)
@@ -125,18 +144,43 @@ fun MainScreen(navController: NavHostController? = null) {
     val outerPadding = 8.dp
     val smallGap = 8.dp
 
-    var autoCenter by rememberSaveable { mutableStateOf(true) }
-    var whiteKeyWidthDpFloat by rememberSaveable { mutableFloatStateOf(56f) }
-    var showNoteLabels by rememberSaveable { mutableStateOf(true) }
-    var showHorizontalGrid by rememberSaveable { mutableStateOf(true) }
-    var showCurve by rememberSaveable { mutableStateOf(true) }
-    var showWhiteTrace by rememberSaveable { mutableStateOf(true) }
-    var thresholdDb by rememberSaveable { mutableFloatStateOf(-34f) }
-    var bpm by rememberSaveable { mutableFloatStateOf(60f) }
-    var showWhiteDots by rememberSaveable { mutableStateOf(true) }
+    val appPrefs = remember { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
+    val uiScope = rememberCoroutineScope()
 
-    var useSamplePlayer by rememberSaveable { mutableStateOf(false) }
-    var showCentsMeter by rememberSaveable { mutableStateOf(true) }
+    // Settings start from what was saved last time (defaults on first launch)
+    var autoCenter by rememberSaveable { mutableStateOf(appPrefs.getBoolean(PREF_AUTO_CENTER, true)) }
+    var whiteKeyWidthDpFloat by rememberSaveable { mutableFloatStateOf(appPrefs.getFloat(PREF_KEY_WIDTH, 56f)) }
+    var showNoteLabels by rememberSaveable { mutableStateOf(appPrefs.getBoolean(PREF_NOTE_LABELS, true)) }
+    var showHorizontalGrid by rememberSaveable { mutableStateOf(appPrefs.getBoolean(PREF_GRID, true)) }
+    var showCurve by rememberSaveable { mutableStateOf(appPrefs.getBoolean(PREF_CURVE, true)) }
+    var showWhiteTrace by rememberSaveable { mutableStateOf(appPrefs.getBoolean(PREF_WHITE_TRACE, true)) }
+    var thresholdDb by rememberSaveable { mutableFloatStateOf(appPrefs.getFloat(PREF_THRESHOLD_DB, -34f)) }
+    var bpm by rememberSaveable { mutableFloatStateOf(appPrefs.getFloat(PREF_BPM, 60f)) }
+    var showWhiteDots by rememberSaveable { mutableStateOf(appPrefs.getBoolean(PREF_WHITE_DOTS, true)) }
+
+    var useSamplePlayer by rememberSaveable { mutableStateOf(appPrefs.getBoolean(PREF_SAMPLE_PLAYER, false)) }
+    var showCentsMeter by rememberSaveable { mutableStateOf(appPrefs.getBoolean(PREF_CENTS_METER, true)) }
+
+    // Save settings shortly after they change (the delay coalesces slider drags into one write)
+    LaunchedEffect(
+        autoCenter, whiteKeyWidthDpFloat, showNoteLabels, showHorizontalGrid, showCurve,
+        showWhiteTrace, thresholdDb, bpm, showWhiteDots, useSamplePlayer, showCentsMeter
+    ) {
+        delay(SETTINGS_SAVE_DELAY_MS)
+        appPrefs.edit()
+            .putBoolean(PREF_AUTO_CENTER, autoCenter)
+            .putFloat(PREF_KEY_WIDTH, whiteKeyWidthDpFloat)
+            .putBoolean(PREF_NOTE_LABELS, showNoteLabels)
+            .putBoolean(PREF_GRID, showHorizontalGrid)
+            .putBoolean(PREF_CURVE, showCurve)
+            .putBoolean(PREF_WHITE_TRACE, showWhiteTrace)
+            .putFloat(PREF_THRESHOLD_DB, thresholdDb)
+            .putFloat(PREF_BPM, bpm)
+            .putBoolean(PREF_WHITE_DOTS, showWhiteDots)
+            .putBoolean(PREF_SAMPLE_PLAYER, useSamplePlayer)
+            .putBoolean(PREF_CENTS_METER, showCentsMeter)
+            .apply()
+    }
     var rangeTestActive by rememberSaveable { mutableStateOf(false) }
 
     var graphPaused by remember { mutableStateOf(false) }
@@ -152,6 +196,16 @@ fun MainScreen(navController: NavHostController? = null) {
 
     val isRecording by engine.isRecording.collectAsState()
     val isRecordingPaused by engine.isPaused.collectAsState()
+    val micUnavailable by engine.micUnavailable.collectAsState()
+
+    var recordingElapsedMs by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(isRecording) {
+        while (isRecording) {
+            recordingElapsedMs = engine.recordingElapsedMs()
+            delay(RECORDING_TIMER_TICK_MS)
+        }
+        recordingElapsedMs = 0L
+    }
     var showSavedDialog by remember { mutableStateOf(false) }
     var showDiscardDialog by rememberSaveable { mutableStateOf(false) }
 
@@ -218,9 +272,8 @@ fun MainScreen(navController: NavHostController? = null) {
         }
     }
 
-    val solfegePrefs = remember { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
     LaunchedEffect(Unit) {
-        NoteNotation.useSolfege = solfegePrefs.getBoolean(PREF_SOLFEGE, false)
+        NoteNotation.useSolfege = appPrefs.getBoolean(PREF_SOLFEGE, false)
     }
 
     LaunchedEffect(engine) {
@@ -253,7 +306,12 @@ fun MainScreen(navController: NavHostController? = null) {
             pitchFile = File(recordingsDir, "session_${sessionId}_pitch.json")
         )
         // The service shows the notification and keeps the mic alive in the background
-        if (engine.isRecording.value) RecordingService.start(context)
+        if (engine.isRecording.value) {
+            RecordingService.start(context)
+        } else {
+            Toast.makeText(context, "Couldn't start recording: the microphone is unavailable", Toast.LENGTH_LONG)
+                .show()
+        }
     }
 
     // Android 13+ needs a runtime permission for the "recording" notification. Recording starts
@@ -265,9 +323,13 @@ fun MainScreen(navController: NavHostController? = null) {
     val recordingCallbacks = remember(engine, navController) {
         RecordingCallbacks(
             onRecordStart = {
-                val alreadyAsked = solfegePrefs.getBoolean(PREF_ASKED_NOTIFICATIONS, false)
-                if (!notificationPermissionGranted(context) && !alreadyAsked) {
-                    solfegePrefs.edit().putBoolean(PREF_ASKED_NOTIFICATIONS, true).apply()
+                val alreadyAsked = appPrefs.getBoolean(PREF_ASKED_NOTIFICATIONS, false)
+                if (!hasMicPermission) {
+                    // Without the microphone there is nothing to record; ask again
+                    Toast.makeText(context, "Microphone permission is needed to record", Toast.LENGTH_SHORT).show()
+                    permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                } else if (!notificationPermissionGranted(context) && !alreadyAsked) {
+                    appPrefs.edit().putBoolean(PREF_ASKED_NOTIFICATIONS, true).apply()
                     notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                 } else {
                     startRecordingNow()
@@ -277,8 +339,12 @@ fun MainScreen(navController: NavHostController? = null) {
                 if (engine.isPaused.value) engine.resumeRecording() else engine.pauseRecording()
             },
             onRecordStop = {
-                engine.stopRecording()
-                showSavedDialog = true
+                // Only say "saved" (and allow "View Recordings") once the files are on disk
+                val saveJob = engine.stopRecording()
+                uiScope.launch {
+                    saveJob?.join()
+                    showSavedDialog = true
+                }
             },
             onRecordDiscard = { showDiscardDialog = true },
             onLibraryClick = { navController?.navigate("recordings") }
@@ -342,7 +408,7 @@ fun MainScreen(navController: NavHostController? = null) {
         useSamplePlayer = false
         showCentsMeter = true
         NoteNotation.useSolfege = false
-        solfegePrefs.edit().putBoolean(PREF_SOLFEGE, false).apply()
+        appPrefs.edit().putBoolean(PREF_SOLFEGE, false).apply()
     }
 
     val menuSettings = MenuSettings(
@@ -358,6 +424,7 @@ fun MainScreen(navController: NavHostController? = null) {
         rangeTestUnavailableReason = when {
             isRecording -> "Stop recording first"
             !hasMicPermission -> "Microphone permission needed"
+            micUnavailable -> "Microphone unavailable"
             else -> null
         },
         bpm = bpm,
@@ -378,7 +445,7 @@ fun MainScreen(navController: NavHostController? = null) {
         onShowCentsMeterChange = { showCentsMeter = it },
         onUseSolfegeChange = { checked ->
             NoteNotation.useSolfege = checked
-            solfegePrefs.edit().putBoolean(PREF_SOLFEGE, checked).apply()
+            appPrefs.edit().putBoolean(PREF_SOLFEGE, checked).apply()
         },
         onOpenRangeTest = { rangeTestActive = true },
         onBpmChange = { bpm = it },
@@ -411,6 +478,14 @@ fun MainScreen(navController: NavHostController? = null) {
             .padding(outerPadding),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        if (micUnavailable && hasMicPermission) {
+            MicUnavailableBanner(
+                onRetry = {
+                    if (engine.start()) engine.setVolumeThreshold(dbToRms(thresholdDb))
+                }
+            )
+            Spacer(modifier = Modifier.height(smallGap))
+        }
         if (isLandscape) {
             TopAppBarLandscapeCompact(
                 detectedFreq = state.frequency,
@@ -424,6 +499,7 @@ fun MainScreen(navController: NavHostController? = null) {
                 canShowAds = canShowAds,
                 isRecording = isRecording,
                 isRecordingPaused = isRecordingPaused,
+                recordingElapsedMs = recordingElapsedMs,
                 callbacks = recordingCallbacks
             )
 
@@ -532,6 +608,7 @@ fun MainScreen(navController: NavHostController? = null) {
                 PortraitRecordingControls(
                     isRecording = isRecording,
                     isRecordingPaused = isRecordingPaused,
+                    recordingElapsedMs = recordingElapsedMs,
                     callbacks = recordingCallbacks
                 )
             }
@@ -617,7 +694,7 @@ private fun InfoOverlay(
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
             ) {
                 Text(
-                    text = if (graphPaused) "Resume" else "Hold",
+                    text = if (graphPaused) "Resume" else "Freeze",
                     style = MaterialTheme.typography.labelSmall
                 )
             }
@@ -640,6 +717,7 @@ private fun InfoOverlay(
 private fun PortraitRecordingControls(
     isRecording: Boolean,
     isRecordingPaused: Boolean,
+    recordingElapsedMs: Long,
     callbacks: RecordingCallbacks
 ) {
     Row(
@@ -690,6 +768,39 @@ private fun PortraitRecordingControls(
                     tint = MaterialTheme.colorScheme.primary
                 )
             }
+            RecordingTimer(elapsedMs = recordingElapsedMs, paused = isRecordingPaused)
+        }
+    }
+}
+
+/** "● 1:23" while recording, "Paused 1:23" while paused. */
+@Composable
+private fun RecordingTimer(elapsedMs: Long, paused: Boolean, compact: Boolean = false) {
+    Text(
+        text = if (paused) "Paused ${formatDuration(elapsedMs)}" else "\u25CF ${formatDuration(elapsedMs)}",
+        style = if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.titleSmall,
+        color = if (paused) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error
+    )
+}
+
+/** Shown when the microphone couldn't be opened (e.g. during a call), with a way to try again. */
+@Composable
+private fun MicUnavailableBanner(onRetry: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "Microphone unavailable. Is another app or a call using it?",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = onRetry) { Text("Retry") }
         }
     }
 }
@@ -736,6 +847,7 @@ private fun TopAppBarLandscapeCompact(
     canShowAds: Boolean,
     isRecording: Boolean,
     isRecordingPaused: Boolean,
+    recordingElapsedMs: Long,
     callbacks: RecordingCallbacks
 ) {
     Card(
@@ -764,10 +876,16 @@ private fun TopAppBarLandscapeCompact(
                     Text(text = freqText, style = MaterialTheme.typography.bodySmall)
                 }
                 Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = "Conf: %.2f".format(Locale.US, detectedConfidence),
-                    style = MaterialTheme.typography.labelSmall
-                )
+                // While recording, the timer takes the confidence line's place so this column
+                // doesn't get wider and crowd the centred ad
+                if (isRecording) {
+                    RecordingTimer(elapsedMs = recordingElapsedMs, paused = isRecordingPaused, compact = true)
+                } else {
+                    Text(
+                        text = "Conf: %.2f".format(Locale.US, detectedConfidence),
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
                 if (showCentsMeter) {
                     Spacer(modifier = Modifier.height(2.dp))
                     // Fixed small width so this column never grows into the centred ad
@@ -811,7 +929,7 @@ private fun TopAppBarLandscapeCompact(
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
                     ) {
                         Text(
-                            text = if (paused) "Resume" else "Hold",
+                            text = if (paused) "Resume" else "Freeze",
                             style = MaterialTheme.typography.labelSmall
                         )
                     }
@@ -1109,7 +1227,7 @@ private fun SettingsMenu(
             SwitchRow("Show white dots", settings.showWhiteDots, actions.onShowWhiteDotsChange)
             SwitchRow("Auto-center", settings.autoCenter, actions.onAutoCenterChange)
             Text(
-                "Tempo: ${settings.bpm.roundToInt()} BPM",
+                "Scroll speed: ${settings.bpm.roundToInt()} BPM",
                 style = MaterialTheme.typography.bodySmall
             )
             Slider(

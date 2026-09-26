@@ -103,16 +103,19 @@ class RecordingService : Service() {
         observeJob?.cancel()
 
         // Saves the WAV and the pitch trace, exactly like the in-app Stop button
-        engine.stopRecording()
+        val saveJob = engine.stopRecording()
         // With no screen open nothing else needs the microphone, so release it
         if (!PitchEngineProvider.uiAttached) engine.stop()
 
+        // The notification goes at once; the toast waits until the files are really on disk
         releaseWakeLock()
         stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
-
-        if (wasRecording) {
-            Toast.makeText(applicationContext, "Recording saved", Toast.LENGTH_LONG).show()
+        scope.launch {
+            saveJob?.join()
+            if (wasRecording) {
+                Toast.makeText(applicationContext, "Recording saved", Toast.LENGTH_LONG).show()
+            }
+            stopSelf()
         }
     }
 
@@ -156,12 +159,22 @@ class RecordingService : Service() {
             immutable
         )
 
+        val elapsedMs = PitchEngineProvider.get().recordingElapsedMs()
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_mic)
             .setContentTitle(if (paused) "Recording paused" else "Recording")
             .setContentText(
-                if (paused) "Tap Resume to keep recording" else "Your vocal session is being recorded"
+                if (paused) {
+                    "Paused at ${formatDuration(elapsedMs)}. Tap Resume to keep recording"
+                } else {
+                    "Your vocal session is being recorded"
+                }
             )
+            // A running timer while recording; a chronometer can't pause, so it's hidden when paused
+            .setShowWhen(!paused)
+            .setUsesChronometer(!paused)
+            .setWhen(System.currentTimeMillis() - elapsedMs)
             .setContentIntent(openApp)
             .setOngoing(true)
             .setOnlyAlertOnce(true)

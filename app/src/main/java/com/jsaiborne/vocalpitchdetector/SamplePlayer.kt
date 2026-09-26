@@ -24,15 +24,17 @@ object SamplePlayer {
         if (soundPool != null) return
 
         // Allow up to 8 sounds to play at once (polyphony)
-        soundPool = SoundPool.Builder().setMaxStreams(8).build()
+        val pool = SoundPool.Builder().setMaxStreams(8).build()
+        soundPool = pool
 
-        for ((midi, resId) in AVAILABLE_SAMPLES) {
-            val id = soundPool!!.load(context, resId, 1)
-            sampleMap[midi] = id
+        // Attach the listener before loading: a sample that finishes loading before the listener
+        // exists is never counted, and the piano would then fall back to the oscillator forever
+        pool.setOnLoadCompleteListener { _, _, status ->
+            if (status == 0) loadedSamplesCount++
         }
 
-        soundPool!!.setOnLoadCompleteListener { _, _, status ->
-            if (status == 0) loadedSamplesCount++
+        for ((midi, resId) in AVAILABLE_SAMPLES) {
+            sampleMap[midi] = pool.load(context, resId, 1)
         }
     }
 

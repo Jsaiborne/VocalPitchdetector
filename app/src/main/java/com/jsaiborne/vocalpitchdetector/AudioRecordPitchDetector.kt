@@ -22,7 +22,6 @@ import kotlin.math.roundToInt
 class AudioRecordPitchDetector(
     private val sampleRate: Int = 44100,
     private val bufferSize: Int = 2048,
-    private val hopSize: Int = 512,
     private val minFreq: Float = 60f,
     private val maxFreq: Float = 1200f,
     private val smoothingAlpha: Float = 0.45f,
@@ -62,9 +61,11 @@ class AudioRecordPitchDetector(
         threshold = 0.25f
     )
 
+    // Each loop reads a whole buffer, so frames arrive bufferSize samples apart; the tracker's
+    // hangover timing must use that spacing, or the note lingers ~4x too long after singing stops
     private val tracker = PitchTracker(
         sampleRate = sampleRate,
-        hopSize = hopSize,
+        hopSize = bufferSize,
         smoothingAlpha = smoothingAlpha.toDouble()
     )
 
@@ -75,13 +76,17 @@ class AudioRecordPitchDetector(
     private var stableCount: Int = 0
     private var lastStableMidi: Int = -1
 
+    /**
+     * Opens the microphone and starts analysing. Returns false if the microphone could not be
+     * opened (e.g. it is in use by a call or another app), so the caller can tell the user.
+     */
     @SuppressLint("MissingPermission")
     fun start(
         onPitchDetected: (Float, Float) -> Unit,
         onVolumeDetected: (Float) -> Unit,
         onStableNote: ((Int, Float) -> Unit)? = null
-    ) {
-        if (running.get()) return
+    ): Boolean {
+        if (running.get()) return true
 
         val minBufferSize = AudioRecord.getMinBufferSize(
             sampleRate,
@@ -90,20 +95,33 @@ class AudioRecordPitchDetector(
         )
         val actualBufferSize = maxOf(bufferSize * 2, minBufferSize)
 
-        audioRecord = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
-            sampleRate,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            actualBufferSize
-        )
-
-        if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
-            Log.e("AudioRecordPitch", "AudioRecord initialization failed")
-            return
+        val record = try {
+            AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                sampleRate,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                actualBufferSize
+            )
+        } catch (e: IllegalArgumentException) {
+            Log.e("AudioRecordPitch", "AudioRecord could not be created", e)
+            return false
         }
 
-        audioRecord?.startRecording()
+        if (record.state != AudioRecord.STATE_INITIALIZED) {
+            Log.e("AudioRecordPitch", "AudioRecord initialization failed")
+            record.release()
+            return false
+        }
+
+        try {
+            record.startRecording()
+        } catch (e: IllegalStateException) {
+            Log.e("AudioRecordPitch", "AudioRecord could not start", e)
+            record.release()
+            return false
+        }
+        audioRecord = record
         running.set(true)
         resetPitchState(onPitchDetected)
 
@@ -161,6 +179,7 @@ class AudioRecordPitchDetector(
         }
         workerThread?.priority = Thread.MAX_PRIORITY
         workerThread?.start()
+        return true
     }
 
     private fun writePcm(samples: ShortArray, count: Int) {
@@ -250,6 +269,8 @@ class AudioRecordPitchDetector(
         smoothedFreq = -1f
         framesWithPitch = 0
         stableCount = 0
+        // Silence ends the note, so singing the same note again gets its own stable marker
+        lastStableMidi = -1
         onPitchDetected(-1f, 0f)
     }
 

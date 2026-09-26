@@ -6,6 +6,7 @@ import java.io.File
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -48,7 +49,6 @@ class PitchEngine(
     companion object {
         private const val DEFAULT_SAMPLE_RATE = 44100
         private const val DEFAULT_BUFFER_SIZE = 2048
-        private const val DEFAULT_HOP_SIZE = 512
         private const val DEFAULT_MIN_FREQ = 60f
         private const val DEFAULT_MAX_FREQ = 1200f
         private const val DEFAULT_SMOOTHING_ALPHA = 0.18f
@@ -87,6 +87,10 @@ class PitchEngine(
     private val _isPaused = MutableStateFlow(false)
     val isPaused: StateFlow<Boolean> = _isPaused
 
+    /** True when the microphone couldn't be opened (in use elsewhere); the UI offers a retry. */
+    private val _micUnavailable = MutableStateFlow(false)
+    val micUnavailable: StateFlow<Boolean> = _micUnavailable
+
     private var detector: AudioRecordPitchDetector? = null
 
     @Volatile
@@ -113,21 +117,25 @@ class PitchEngine(
     // Track the audio file so we can delete it if discarded
     private var currentAudioFile: File? = null
 
-    fun start() {
-        if (running) return
+    /**
+     * Opens the microphone and starts detecting pitch. Returns false (and sets [micUnavailable])
+     * when the microphone can't be opened, e.g. during a phone call; calling it again retries.
+     */
+    fun start(): Boolean {
+        if (running) return true
 
-        detector = AudioRecordPitchDetector(
+        val newDetector = AudioRecordPitchDetector(
             sampleRate = DEFAULT_SAMPLE_RATE,
             bufferSize = DEFAULT_BUFFER_SIZE,
-            hopSize = DEFAULT_HOP_SIZE,
             minFreq = DEFAULT_MIN_FREQ,
             maxFreq = DEFAULT_MAX_FREQ,
             smoothingAlpha = DEFAULT_SMOOTHING_ALPHA,
             pitchConfidenceThreshold = pitchConfidenceThreshold,
             minContiguousFrames = minContiguousFrames
-        ).apply {
-            this.volumeThreshold = this@PitchEngine.volumeThreshold
+        )
+        newDetector.volumeThreshold = volumeThreshold
 
+        val started = newDetector.run {
             start(
                 onPitchDetected = { freqHz, confidence ->
                     _state.value = PitchState(
@@ -163,7 +171,18 @@ class PitchEngine(
             )
         }
 
+        _micUnavailable.value = !started
+        if (!started) return false
+        detector = newDetector
         running = true
+        return true
+    }
+
+    /** Recording length so far, excluding paused time (0 when not recording). */
+    fun recordingElapsedMs(): Long = synchronized(recordLock) {
+        if (!_isRecording.value) return@synchronized 0L
+        val end = if (_isPaused.value) pauseStartTimeMs else System.currentTimeMillis()
+        (end - recordingStartTimeMs - accumulatedPauseTimeMs).coerceAtLeast(0L)
     }
 
     /** Adds a point to [target] unless recording has stopped or is paused. */
@@ -195,9 +214,13 @@ class PitchEngine(
         _isRecording.value = true
     }
 
-    /** Finishes the WAV file and saves the pitch trace next to it. Safe to call when not recording. */
-    fun stopRecording() {
-        if (!_isRecording.value) return
+    /**
+     * Finishes the WAV file and saves the pitch trace next to it, off the main thread. Returns the
+     * save [Job] so callers can wait before telling the user it's saved or listing recordings; null
+     * when nothing was recording.
+     */
+    fun stopRecording(): Job? {
+        if (!_isRecording.value) return null
 
         val pitchFile: File?
         val pitchSnapshot: List<RecordedPitchPoint>
@@ -214,13 +237,14 @@ class PitchEngine(
             currentAudioFile = null
         }
 
-        detector?.stopDiskRecording()
-
-        if (pitchFile == null) return
+        // Captured now: stop() may clear the detector field while this save is still running
+        val activeDetector = detector
 
         // NonCancellable: the caller's scope may already be cancelled (e.g. the screen was left
-        // mid-recording), but the file must still be written.
-        scope.launch(Dispatchers.IO + NonCancellable) {
+        // mid-recording), but the files must still be written.
+        return scope.launch(Dispatchers.IO + NonCancellable) {
+            activeDetector?.stopDiskRecording()
+            if (pitchFile == null) return@launch
             try {
                 pitchFile.writeText(serializePitchSession(pitchSnapshot, stableSnapshot))
             } catch (e: java.io.IOException) {
