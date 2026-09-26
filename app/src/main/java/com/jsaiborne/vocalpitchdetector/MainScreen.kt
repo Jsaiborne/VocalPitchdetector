@@ -17,6 +17,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -81,6 +82,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -121,6 +123,10 @@ private const val PREF_GESTURE_TIP_SEEN = "GestureTipSeen"
 private const val LANDSCAPE_PIANO_WIDTH_FRACTION = 0.22f
 private const val LANDSCAPE_PIANO_MIN_WIDTH_DP = 160f
 private const val LANDSCAPE_PIANO_MAX_WIDTH_DP = 250f
+
+// Fixed widths of the landscape top bar's side columns, so the ad between them never moves
+private val LANDSCAPE_READOUT_WIDTH = 104.dp
+private val LANDSCAPE_CONTROLS_WIDTH = 128.dp
 private const val SETTINGS_SAVE_DELAY_MS = 400L
 private const val RECORDING_TIMER_TICK_MS = 250L
 
@@ -930,173 +936,186 @@ private fun TopAppBarLandscapeCompact(
     recordingElapsedMs: Long,
     callbacks: RecordingCallbacks
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth().wrapContentHeight(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+    // Measure the width really available (the screen minus system bars, cutouts and padding), so
+    // the ad never takes space the recording controls need
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val availableWidthDp = maxWidth.value.toInt()
+        Card(
+            modifier = Modifier.fillMaxWidth().wrapContentHeight(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            ),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
         ) {
-            // LEFT SIDE: Note, Freq, Conf
-            Column(verticalArrangement = Arrangement.Center) {
-                val noteText = if (activeMidi != null) midiToDisplayName(activeMidi) else "-"
-                val freqText = if (detectedFreq > 0f) {
-                    "%.1f Hz".format(Locale.US, detectedFreq)
-                } else {
-                    "--"
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(text = noteText, style = MaterialTheme.typography.titleSmall)
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(text = freqText, style = MaterialTheme.typography.bodySmall)
-                }
-                Spacer(modifier = Modifier.height(2.dp))
-                // While recording, the timer takes the confidence line's place so this column
-                // doesn't get wider and crowd the centred ad
-                if (isRecording) {
-                    RecordingTimer(elapsedMs = recordingElapsedMs, paused = isRecordingPaused, compact = true)
-                } else {
-                    Text(
-                        text = "Conf: %.2f".format(Locale.US, detectedConfidence),
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                }
-                if (showCentsMeter) {
-                    Spacer(modifier = Modifier.height(2.dp))
-                    // Fixed small width so this column never grows into the centred ad
-                    CentsMeter(
-                        frequency = detectedFreq,
-                        barWidth = 64.dp,
-                        labelWidth = 34.dp,
-                        height = 12.dp
-                    )
-                }
-            }
-
-            // CENTER: The Floating Landscape Ad
-            if (canShowAds) {
-                val config = LocalConfiguration.current
-                val screenWidth = config.screenWidthDp
-                // Reserve space for left and right columns
-                val reservedSpace = 320
-                val adWidth = screenWidth - reservedSpace
-                if (adWidth >= 320) {
-                    AdaptiveBannerAd(
-                        adUnitId = BuildConfig.BANNER_AD_UNIT_LANDSCAPE_ID,
-                        customWidth = adWidth,
-                        modifier = Modifier.padding(horizontal = 8.dp)
-                    )
-                }
-            }
-
-            // RIGHT SIDE: Controls
-            Column(
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                // LEFT SIDE: Note, Freq, Conf. Fixed width, so the ad beside it stays put whether
+                // "--" or "C#4 261.6 Hz" is showing
+                Column(
+                    modifier = Modifier.width(LANDSCAPE_READOUT_WIDTH),
+                    verticalArrangement = Arrangement.Center
                 ) {
-                    Button(
-                        onClick = onTogglePause,
-                        modifier = Modifier.height(32.dp),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                    ) {
+                    val noteText = if (activeMidi != null) midiToDisplayName(activeMidi) else "-"
+                    val freqText = if (detectedFreq > 0f) {
+                        "%.1f Hz".format(Locale.US, detectedFreq)
+                    } else {
+                        "--"
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(text = noteText, style = MaterialTheme.typography.titleSmall, maxLines = 1)
+                        Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = if (paused) "Resume" else "Freeze",
+                            text = freqText,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Clip
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
+                    // While recording, the timer takes the confidence line's place so this column
+                    // doesn't get wider and crowd the centred ad
+                    if (isRecording) {
+                        RecordingTimer(elapsedMs = recordingElapsedMs, paused = isRecordingPaused, compact = true)
+                    } else {
+                        Text(
+                            text = "Conf: %.2f".format(Locale.US, detectedConfidence),
                             style = MaterialTheme.typography.labelSmall
                         )
                     }
-                    var menuExpanded by remember { mutableStateOf(false) }
-                    Box {
-                        IconButton(
-                            onClick = { menuExpanded = true },
-                            modifier = Modifier.size(28.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Menu,
-                                contentDescription = "Open menu",
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                        SettingsMenu(
-                            expanded = menuExpanded,
-                            onDismiss = { menuExpanded = false },
-                            settings = menuSettings,
-                            actions = menuActions
+                    if (showCentsMeter) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        CentsMeter(
+                            frequency = detectedFreq,
+                            barWidth = 64.dp,
+                            labelWidth = 34.dp,
+                            height = 12.dp
                         )
                     }
                 }
 
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    IconButton(
-                        onClick = callbacks.onLibraryClick,
-                        modifier = Modifier.size(28.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.LibraryMusic,
-                            contentDescription = "View Saved Recordings",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
+                // CENTER: The Floating Landscape Ad
+                if (canShowAds) {
+                    // The two fixed-width side columns (104 + 128 dp) plus paddings, with some slack
+                    val reservedSpace = 290
+                    val adWidth = availableWidthDp - reservedSpace
+                    if (adWidth >= 320) {
+                        AdaptiveBannerAd(
+                            adUnitId = BuildConfig.BANNER_AD_UNIT_LANDSCAPE_ID,
+                            customWidth = adWidth,
+                            modifier = Modifier.padding(horizontal = 8.dp)
                         )
                     }
-                    if (!isRecording) {
+                }
+
+                // RIGHT SIDE: Controls. Fixed width too, so starting or stopping a recording
+                // (which swaps the buttons) doesn't move the ad either
+                Column(
+                    modifier = Modifier.width(LANDSCAPE_CONTROLS_WIDTH),
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Button(
-                            onClick = callbacks.onRecordStart,
-                            modifier = Modifier.height(28.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary
-                            )
+                            onClick = onTogglePause,
+                            modifier = Modifier.height(32.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
                         ) {
-                            Text("Record", style = MaterialTheme.typography.labelSmall)
+                            Text(
+                                text = if (paused) "Resume" else "Freeze",
+                                style = MaterialTheme.typography.labelSmall
+                            )
                         }
-                    } else {
+                        var menuExpanded by remember { mutableStateOf(false) }
+                        Box {
+                            IconButton(
+                                onClick = { menuExpanded = true },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Menu,
+                                    contentDescription = "Open menu",
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            SettingsMenu(
+                                expanded = menuExpanded,
+                                onDismiss = { menuExpanded = false },
+                                settings = menuSettings,
+                                actions = menuActions
+                            )
+                        }
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
                         IconButton(
-                            onClick = callbacks.onRecordDiscard,
+                            onClick = callbacks.onLibraryClick,
                             modifier = Modifier.size(28.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Delete,
-                                contentDescription = "Discard Recording",
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                        IconButton(
-                            onClick = callbacks.onRecordPauseResume,
-                            modifier = Modifier.size(28.dp)
-                        ) {
-                            Icon(
-                                imageVector = if (isRecordingPaused) {
-                                    Icons.Default.PlayArrow
-                                } else {
-                                    Icons.Default.Pause
-                                },
-                                contentDescription = if (isRecordingPaused) "Resume" else "Pause",
-                                tint = MaterialTheme.colorScheme.secondary,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                        IconButton(
-                            onClick = callbacks.onRecordStop,
-                            modifier = Modifier.size(28.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Stop,
-                                contentDescription = "Stop and Save",
+                                imageVector = Icons.Default.LibraryMusic,
+                                contentDescription = "View Saved Recordings",
                                 tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(20.dp)
                             )
+                        }
+                        if (!isRecording) {
+                            Button(
+                                onClick = callbacks.onRecordStart,
+                                modifier = Modifier.height(28.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary
+                                )
+                            ) {
+                                Text("Record", style = MaterialTheme.typography.labelSmall)
+                            }
+                        } else {
+                            IconButton(
+                                onClick = callbacks.onRecordDiscard,
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "Discard Recording",
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            IconButton(
+                                onClick = callbacks.onRecordPauseResume,
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (isRecordingPaused) {
+                                        Icons.Default.PlayArrow
+                                    } else {
+                                        Icons.Default.Pause
+                                    },
+                                    contentDescription = if (isRecordingPaused) "Resume" else "Pause",
+                                    tint = MaterialTheme.colorScheme.secondary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            IconButton(
+                                onClick = callbacks.onRecordStop,
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Stop,
+                                    contentDescription = "Stop and Save",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
                     }
                 }

@@ -47,6 +47,9 @@ import kotlinx.coroutines.launch
 private val VOCAL_RANGE_WHITE = Color(0xFFE3F4E6)
 private val VOCAL_RANGE_BLACK = Color(0xFF24422C)
 
+/** How far black keys reach across the keyboard in landscape (portrait uses 140dp of 220dp). */
+private const val BLACK_KEY_LENGTH_FRACTION = 0.64f
+
 @SuppressLint("UnusedBoxWithConstraintsScope")
 @Suppress("LongParameterList", "LongMethod", "CyclomaticComplexMethod")
 @Composable
@@ -268,8 +271,9 @@ fun Piano(
     } else {
         // ROTATED MODE
         BoxWithConstraints(modifier = modifier.fillMaxHeight()) {
-            val parentFullWidthDp = maxWidth
-            val visibleWidthDp = parentFullWidthDp * 0.80f
+            // The keyboard fills the whole box; black keys hang from the outer (left) edge and
+            // reach about 60% across, like portrait where they hang from the top edge
+            val keyboardWidthDp = maxWidth
             val containerHeightPx = with(density) { maxHeight.toPx() }
 
             val whiteCount = whiteKeys.size
@@ -303,26 +307,20 @@ fun Piano(
             val reversedWhite = whiteKeys.asReversed()
             val blackThicknessDp = whiteKeyWidthDp * 0.62f
             val blackThicknessPx = with(density) { blackThicknessDp.toPx() }
-            val blackKeyWidthDp = (parentFullWidthDp * 0.40f).coerceAtLeast(48.dp)
+            // Same length ratio as portrait (black 140dp of a 220dp white key)
+            val blackKeyWidthDp = keyboardWidthDp * BLACK_KEY_LENGTH_FRACTION
             val blackKeyWidthPx = with(density) { blackKeyWidthDp.toPx() }
-            val shiftLeftDp = parentFullWidthDp - visibleWidthDp
-
-            // The drawing X-offset for black keys
-            val blackDrawLeftDp = (parentFullWidthDp - blackKeyWidthDp) / 2f - (parentFullWidthDp - visibleWidthDp) / 2f
-            val blackDrawLeftPx = with(density) { blackDrawLeftDp.toPx() }
-            val blackDrawRightPx = blackDrawLeftPx + blackKeyWidthPx
 
             Box(
                 modifier = Modifier
                     .height(contentHeightDp)
-                    .width(visibleWidthDp)
+                    .width(keyboardWidthDp)
                     .verticalScroll(sState)
             ) {
                 Box(
                     modifier = Modifier
                         .fillMaxHeight()
-                        .width(parentFullWidthDp)
-                        .offset(x = -shiftLeftDp)
+                        .width(keyboardWidthDp)
                 ) {
                     // White keys column (rotated)
                     Column(
@@ -386,7 +384,7 @@ fun Piano(
 
                         Box(
                             modifier = Modifier
-                                .offset(x = blackDrawLeftDp, y = offsetTopDp)
+                                .offset(x = 0.dp, y = offsetTopDp)
                                 .width(blackKeyWidthDp)
                                 .height(blackThicknessDp)
                                 .shadow(elevation)
@@ -409,14 +407,9 @@ fun Piano(
 
                                         var hitMidi: Int? = null
 
-                                        // compute visible dims in px (same frame as overlay coordinates)
-                                        val visibleWidthPx = with(density) { visibleWidthDp.toPx() }
-                                        // center black keys horizontally within the visible area
-                                        val blackLeftPx = (visibleWidthPx - blackKeyWidthPx) / 2f
-                                        val blackRightPx = blackLeftPx + blackKeyWidthPx
-
-                                        // 1) Check black keys by Y-range (X must be inside the central black-key column)
-                                        if (localX in blackLeftPx..blackRightPx) {
+                                        // 1) Check black keys by Y-range (X must be within the black keys, which
+                                        // start at the left edge)
+                                        if (localX in 0f..blackKeyWidthPx) {
                                             for (bk in blackKeys) {
                                                 val revIdx = whiteCount - 1 - bk.leftWhiteIndex
                                                 val bCenterY =
@@ -468,11 +461,7 @@ fun Piano(
 
                                         var hitMidi: Int? = null
 
-                                        val visibleWidthPx = with(density) { visibleWidthDp.toPx() }
-                                        val blackLeftPx = (visibleWidthPx - blackKeyWidthPx) / 2f
-                                        val blackRightPx = blackLeftPx + blackKeyWidthPx
-
-                                        if (localX in blackLeftPx..blackRightPx) {
+                                        if (localX in 0f..blackKeyWidthPx) {
                                             for (bk in blackKeys) {
                                                 val revIdx = whiteCount - 1 - bk.leftWhiteIndex
                                                 val bCenterY =
