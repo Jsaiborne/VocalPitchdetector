@@ -1,19 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
+   Backup rules for Android 12 (API 31) and newer.
    See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
+
+   Recordings are large (~5 MB per minute of audio). Google's cloud backup stops backing up the
+   whole app once its data passes 25 MB, which would also lose settings and the saved vocal range,
+   so recordings are kept out of the cloud backup. With no device-transfer rules, everything
+   (recordings included) still moves to a new phone during a device-to-device transfer, which has
+   no such limit. The cache (CSV exports) is never backed up.
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <exclude domain="file" path="recordings/" />
     </cloud-backup>
-    <!--
-    <device-transfer>
-        <include .../>
-        <exclude .../>
-    </device-transfer>
-    -->
 </data-extraction-rules>
