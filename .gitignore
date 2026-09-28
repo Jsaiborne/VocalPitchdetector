@@ -48,3 +48,6 @@ app/build/reports/
 # Keystore secrets
 keystore.properties
 *.jks
+
+# Signed release bundles kept for Play Console uploads
+/Play console/
