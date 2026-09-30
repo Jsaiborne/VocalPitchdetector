@@ -81,6 +81,7 @@ android {
 
         getByName("debug") {
             manifestPlaceholders["adMobAppId"] = "ca-app-pub-3940256099942544~3347511713"
+            buildConfigField("boolean", "SHOW_ADS", "true")
 
             // Existing Portrait Ad Unit (Test ID)
             buildConfigField(
@@ -125,6 +126,7 @@ android {
             ) ?: ""
 
             manifestPlaceholders["adMobAppId"] = realAppId
+            buildConfigField("boolean", "SHOW_ADS", "true")
 
             buildConfigField(
                 "String",
@@ -160,6 +162,12 @@ android {
             if (releaseSignConfig != null) {
                 signingConfig = releaseSignConfig
             }
+        }
+
+        // Debug build with no ads or consent dialog, for taking store screenshots
+        create("screenshots") {
+            initWith(getByName("debug"))
+            buildConfigField("boolean", "SHOW_ADS", "false")
         }
     }
 

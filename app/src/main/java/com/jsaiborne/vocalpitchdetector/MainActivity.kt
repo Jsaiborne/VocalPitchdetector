@@ -40,21 +40,24 @@ class MainActivity : ComponentActivity() {
 
         consentManager = ConsentManager(this)
 
-        // 2. Gather consent flow
-        consentManager.gatherConsent { error ->
-            if (error != null) {
-                Log.e("UMP", "Consent error: $error")
+        // The screenshots build skips consent and ads entirely, so canShowAds stays false
+        if (BuildConfig.SHOW_ADS) {
+            // 2. Gather consent flow
+            consentManager.gatherConsent { error ->
+                if (error != null) {
+                    Log.e("UMP", "Consent error: $error")
+                }
+
+                // 3. Try to initialize ads if allowed by the user/region
+                if (consentManager.canRequestAds()) {
+                    initializeMobileAdsSdk()
+                }
             }
 
-            // 3. Try to initialize ads if allowed by the user/region
+            // 4. Fallback: even if form is skipped, check if we can still request ads
             if (consentManager.canRequestAds()) {
                 initializeMobileAdsSdk()
             }
-        }
-
-        // 4. Fallback: even if form is skipped, check if we can still request ads
-        if (consentManager.canRequestAds()) {
-            initializeMobileAdsSdk()
         }
 
         setContent {
