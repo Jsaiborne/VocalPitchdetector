@@ -70,7 +70,9 @@ fun Piano(
     // whether to use the SamplePlayer instead of the ToneGenerator
     useSamplePlayer: Boolean = false,
     // The user's saved vocal range (from the range test); those keys get a soft green tint
-    vocalRange: IntRange? = null
+    vocalRange: IntRange? = null,
+    // Shift for the scrolled keys while a pinch-zoom's scroll is catching up (see PitchAxisZoom)
+    scrollCorrectionPx: () -> Float = { 0f }
 ) {
     val scope = rememberCoroutineScope()
     val sState = scrollState ?: rememberScrollState()
@@ -197,6 +199,7 @@ fun Piano(
                 modifier = Modifier
                     .width(contentWidthDp)
                     .horizontalScroll(sState)
+                    .graphicsLayer { translationX = scrollCorrectionPx() }
             ) {
                 Row(modifier = Modifier.fillMaxSize(), verticalAlignment = Alignment.Top) {
                     for ((index, midi) in whiteKeys.withIndex()) {
@@ -316,6 +319,7 @@ fun Piano(
                     .height(contentHeightDp)
                     .width(keyboardWidthDp)
                     .verticalScroll(sState)
+                    .graphicsLayer { translationY = scrollCorrectionPx() }
             ) {
                 Box(
                     modifier = Modifier

@@ -18,6 +18,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -34,6 +35,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
@@ -56,7 +58,27 @@ private class TraceBuffer {
     val markers = ArrayDeque<StableMarker>()
     private var version by mutableLongStateOf(0L)
 
+    // The graph runs on its own clock that stands still while frozen, so Freeze stops the curve
+    // where it is and Resume carries on from the same spot
+    private var pausedAtMs: Long? = null
+    private var pausedTotalMs = 0L
+
     fun observeChanges(): Long = version
+
+    /** Graph time: wall-clock time minus the time spent frozen. */
+    fun now(): Long = (pausedAtMs ?: System.currentTimeMillis()) - pausedTotalMs
+
+    fun setPaused(paused: Boolean) {
+        val wallMs = System.currentTimeMillis()
+        val pausedAt = pausedAtMs
+        if (paused && pausedAt == null) {
+            pausedAtMs = wallMs
+        } else if (!paused && pausedAt != null) {
+            pausedTotalMs += wallMs - pausedAt
+            pausedAtMs = null
+            version++
+        }
+    }
 
     fun addSample(sample: PitchSample, cutoffMs: Long) {
         samples.addLast(sample)
@@ -100,11 +122,13 @@ private const val SCROLL_EXIT_MARGIN_MS = 500L
 @Composable
 private fun rememberTraceBuffer(engine: PitchEngine, paused: Boolean, windowMs: Long): TraceBuffer {
     val buffer = remember { TraceBuffer() }
+    // Applied before the frame is drawn, so the clock stops on the same frame as the button
+    SideEffect { buffer.setPaused(paused) }
 
     LaunchedEffect(engine, paused, windowMs) {
         engine.state.collectLatest { s ->
             if (!paused) {
-                val t = System.currentTimeMillis()
+                val t = buffer.now()
                 val midi = if (s.frequency > 0f) freqToMidi(s.frequency.toDouble()).toFloat() else Float.NaN
                 buffer.addSample(PitchSample(tMs = t, freq = s.frequency, midi = midi), cutoffMs = t - windowMs)
             }
@@ -116,7 +140,7 @@ private fun rememberTraceBuffer(engine: PitchEngine, paused: Boolean, windowMs: 
     // away, so an idle screen costs almost nothing
     LaunchedEffect(buffer, paused, windowMs) {
         while (true) {
-            val now = System.currentTimeMillis()
+            val now = buffer.now()
             if (!paused && buffer.hasContentSince(now - windowMs - SCROLL_EXIT_MARGIN_MS)) {
                 buffer.tick(cutoffMs = now - windowMs)
                 delay(SCROLL_FRAME_MS)
@@ -126,10 +150,12 @@ private fun rememberTraceBuffer(engine: PitchEngine, paused: Boolean, windowMs: 
         }
     }
 
-    LaunchedEffect(engine, windowMs) {
+    LaunchedEffect(engine, paused, windowMs) {
         engine.stableNotes.collectLatest { sn ->
-            val now = System.currentTimeMillis()
-            buffer.addMarker(StableMarker(now, sn.midi), cutoffMs = now - windowMs)
+            if (!paused) {
+                val now = buffer.now()
+                buffer.addMarker(StableMarker(now, sn.midi), cutoffMs = now - windowMs)
+            }
         }
     }
 
@@ -156,7 +182,9 @@ fun PitchGraphCard(
     showCurve: Boolean = true,
     showWhiteTrace: Boolean = true,
     showBars: Boolean = false,
-    showWhiteDots: Boolean = true // <-- NEW
+    showWhiteDots: Boolean = true, // <-- NEW
+    // Shift for the scrolled graph while a pinch-zoom's scroll is catching up (see PitchAxisZoom)
+    scrollCorrectionPx: () -> Float = { 0f }
 ) {
     Card(modifier = modifier, shape = RoundedCornerShape(12.dp)) {
         Box(
@@ -183,7 +211,8 @@ fun PitchGraphCard(
                     showWhiteTrace = showWhiteTrace,
                     bpm = bpm,
                     showBars = showBars,
-                    showWhiteDots = showWhiteDots // forwarded
+                    showWhiteDots = showWhiteDots, // forwarded
+                    scrollCorrectionPx = scrollCorrectionPx
                 )
             } else {
                 PitchGraphVertical(
@@ -203,7 +232,8 @@ fun PitchGraphCard(
                     showWhiteTrace = showWhiteTrace,
                     bpm = bpm,
                     showBars = showBars,
-                    showWhiteDots = showWhiteDots // forwarded
+                    showWhiteDots = showWhiteDots, // forwarded
+                    scrollCorrectionPx = scrollCorrectionPx
                 )
             }
         }
@@ -233,8 +263,8 @@ fun PitchGraphHorizontal(
     showWhiteTrace: Boolean = true,
     bpm: Float = 120f,
     showBars: Boolean = false,
-    showWhiteDots: Boolean = true
-
+    showWhiteDots: Boolean = true,
+    scrollCorrectionPx: () -> Float = { 0f }
 ) {
     val density = LocalDensity.current
 
@@ -308,6 +338,7 @@ fun PitchGraphHorizontal(
             modifier = Modifier
                 .fillMaxSize()
                 .horizontalScroll(sState)
+                .graphicsLayer { translationX = scrollCorrectionPx() }
         ) {
             Canvas(
                 modifier = Modifier
@@ -399,8 +430,8 @@ fun PitchGraphHorizontal(
 
                 if (samples.isEmpty()) return@Canvas
 
-                // --- FIX 1: Time Anchoring ---
-                val nowTime = if (paused) samples.last().tMs else System.currentTimeMillis()
+                // Graph time, which stands still while frozen
+                val nowTime = buffer.now()
                 val windowStart = nowTime - windowMsEffective
 
                 // build path (time -> y, midi -> x)
@@ -669,7 +700,8 @@ fun PitchGraphVertical(
     showWhiteTrace: Boolean = true,
     bpm: Float = 120f,
     showBars: Boolean = false,
-    showWhiteDots: Boolean = true // <-- NEW
+    showWhiteDots: Boolean = true, // <-- NEW
+    scrollCorrectionPx: () -> Float = { 0f }
 ) {
     val density = LocalDensity.current
 
@@ -743,6 +775,7 @@ fun PitchGraphVertical(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(sState)
+                .graphicsLayer { translationY = scrollCorrectionPx() }
         ) {
             Canvas(
                 modifier = Modifier
@@ -822,7 +855,8 @@ fun PitchGraphVertical(
 
                 if (samples.isEmpty()) return@Canvas
 
-                val nowTime = if (paused) samples.last().tMs else System.currentTimeMillis()
+                // Graph time, which stands still while frozen
+                val nowTime = buffer.now()
                 val windowStart = nowTime - windowMsEffective
 
                 // time -> x

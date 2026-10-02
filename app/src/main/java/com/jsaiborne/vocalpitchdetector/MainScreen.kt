@@ -570,7 +570,8 @@ fun MainScreen(navController: NavHostController? = null) {
                         rotated = true,
                         blackKeyShiftFraction = 0.5f,
                         useSamplePlayer = useSamplePlayer,
-                        vocalRange = pianoVocalRange
+                        vocalRange = pianoVocalRange,
+                        scrollCorrectionPx = { pitchZoom.visualCorrectionPx() }
                     )
                 }
 
@@ -600,7 +601,8 @@ fun MainScreen(navController: NavHostController? = null) {
                         blackKeyShiftFraction = 0.5f,
                         showWhiteTrace = showWhiteTrace,
                         showWhiteDots = showWhiteDots,
-                        bpm = bpm
+                        bpm = bpm,
+                        scrollCorrectionPx = { pitchZoom.visualCorrectionPx() }
                     )
                     // Bottom of the graph, away from the ad in the top bar
                     if (showGestureTip) {
@@ -672,7 +674,8 @@ fun MainScreen(navController: NavHostController? = null) {
                 activeMidi = activeMidi, autoCenter = autoCenter, stableMidi = stableMidi,
                 whiteKeyWidthDp = whiteKeyWidthDpFloat.dp, scrollState = sharedScroll,
                 rotated = false, blackKeyShiftFraction = 0.5f, useSamplePlayer = useSamplePlayer,
-                vocalRange = pianoVocalRange
+                vocalRange = pianoVocalRange,
+                scrollCorrectionPx = { pitchZoom.visualCorrectionPx() }
             )
 
             HorizontalDivider(
@@ -692,7 +695,8 @@ fun MainScreen(navController: NavHostController? = null) {
                     showCurve = showCurve, rotated = false, blackKeyShiftFraction = 0.5f,
                     showWhiteTrace = showWhiteTrace,
                     showWhiteDots = showWhiteDots,
-                    bpm = bpm
+                    bpm = bpm,
+                    scrollCorrectionPx = { pitchZoom.visualCorrectionPx() }
                 )
                 // Top of the graph, away from the banner ad at the bottom of the screen
                 if (showGestureTip) {

@@ -34,8 +34,8 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.unit.dp
+import kotlin.math.abs
 import kotlin.math.hypot
-import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -189,20 +189,72 @@ internal class PitchAxisZoom(
 ) {
     /**
      * Scroll position to apply once the content has been re-laid out at the new size;
-     * [ScrollState.scrollTo] would otherwise clamp to the old, smaller maximum.
+     * scrolling now would otherwise clamp to the old, smaller maximum. Snapshot state, so the
+     * content's [visualCorrectionPx] layer follows it.
      */
-    var pendingScroll: Float? = null
+    var pendingScroll by mutableStateOf<Float?>(null)
+        private set
 
-    fun zoomBy(zoomChange: Float, focalPx: Float) {
+    // Content length the pending scroll is meant for, and whether to give up on reaching it
+    private var pendingContentPx: Float? = null
+    private var settleOnNextLayout = false
+
+    private val currentContentPx: Float
+        get() = (scroll.maxValue + scroll.viewportSize).toFloat()
+
+    /**
+     * How far to shift the scrolled content so it draws where [pendingScroll] would put it. A
+     * resize is laid out a frame before the scroll can follow; without this that frame would jump.
+     */
+    fun visualCorrectionPx(): Float = pendingScroll?.let { scroll.value - it } ?: 0f
+
+    /** Zooms around [focalPx] (keeping that point under the fingers) and slides by [panPx]. */
+    fun zoomBy(zoomChange: Float, focalPx: Float, panPx: Float) {
+        settleOnNextLayout = false
         val oldSize = keySizeDp()
         val newSize = (oldSize * zoomChange).coerceIn(MIN_KEY_SIZE_DP, MAX_KEY_SIZE_DP)
-        if (newSize == oldSize) return
+        if (newSize == oldSize) {
+            // At the zoom limits (or a plain two-finger slide) only the pan is left to apply
+            if (panPx == 0f) return
+            val pending = pendingScroll
+            if (pending != null) {
+                pendingScroll = clampToContent(pending - panPx, pendingContentPx ?: currentContentPx)
+            } else {
+                scroll.dispatchRawDelta(-panPx)
+            }
+            return
+        }
 
         val ratio = newSize / oldSize
         val base = pendingScroll ?: scroll.value.toFloat()
-        pendingScroll = ((base + focalPx) * ratio - focalPx).coerceAtLeast(0f)
+        val contentPx = (pendingContentPx ?: currentContentPx) * ratio
+        pendingContentPx = contentPx
+        pendingScroll = clampToContent((base + focalPx) * ratio - focalPx - panPx, contentPx)
         setKeySizeDp(newSize)
     }
+
+    /** All fingers are up: finish the correction now if the layout has caught up, else next layout. */
+    fun endGesture() {
+        val expected = pendingContentPx ?: return applyPending(force = true)
+        if (abs(currentContentPx - expected) <= 1f) applyPending(force = true) else settleOnNextLayout = true
+    }
+
+    /**
+     * Moves the scroll to [pendingScroll]. The correction is kept (and retried on the next layout)
+     * until it has really been reached, unless [force]d once the gesture is over.
+     */
+    fun applyPending(force: Boolean = false) {
+        val target = pendingScroll ?: return
+        scroll.dispatchRawDelta(target - scroll.value)
+        if (force || settleOnNextLayout || abs(scroll.value - target) <= 1f) {
+            pendingScroll = null
+            pendingContentPx = null
+            settleOnNextLayout = false
+        }
+    }
+
+    private fun clampToContent(target: Float, contentPx: Float): Float =
+        target.coerceIn(0f, (contentPx - scroll.viewportSize).coerceAtLeast(0f))
 }
 
 @Composable
@@ -214,34 +266,41 @@ internal fun rememberPitchAxisZoom(
     val zoom = remember(scroll) { PitchAxisZoom(keySizeDp, setKeySizeDp, scroll) }
     LaunchedEffect(zoom) {
         // The scroll range changes exactly when the content re-lays out at the new key size.
-        snapshotFlow { scroll.maxValue }.collect {
-            zoom.pendingScroll?.let { target ->
-                zoom.pendingScroll = null
-                scroll.scrollTo(target.roundToInt())
-            }
-        }
+        // Applied with dispatchRawDelta, not scrollTo: scrollTo waits for the scroll lock and is
+        // refused (ending this collector for good) while a drag or fling holds it
+        snapshotFlow { scroll.maxValue }.collect { zoom.applyPending() }
     }
     return zoom
 }
 
 /**
- * Two-finger pinch on the pitch axis ([vertical] in landscape, horizontal in portrait). Events are
- * only observed, never consumed, so scrolling and key presses keep working.
+ * Two-finger pinch on the pitch axis ([vertical] in landscape, horizontal in portrait). One-finger
+ * events are only observed, so scrolling and key presses keep working; once a second finger lands
+ * the gesture is consumed until all fingers lift, so the scrollers don't also drag the view.
  */
 internal fun Modifier.pitchAxisZoom(zoom: PitchAxisZoom, vertical: Boolean): Modifier =
     pointerInput(zoom, vertical) {
         awaitEachGesture {
             awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            var pinching = false
             do {
                 val event = awaitPointerEvent(PointerEventPass.Initial)
-                if (event.changes.count { it.pressed } >= 2) {
+                if (event.changes.count { it.pressed } >= 2) pinching = true
+                if (pinching) {
                     val zoomChange = event.calculateZoom()
+                    val pan = event.calculatePan()
                     val centroid = event.calculateCentroid(useCurrent = false)
-                    if (zoomChange != 1f && centroid != Offset.Unspecified) {
-                        zoom.zoomBy(zoomChange, if (vertical) centroid.y else centroid.x)
+                    if (centroid != Offset.Unspecified) {
+                        zoom.zoomBy(
+                            zoomChange,
+                            focalPx = if (vertical) centroid.y else centroid.x,
+                            panPx = if (vertical) pan.y else pan.x
+                        )
                     }
+                    event.changes.forEach { it.consume() }
                 }
             } while (event.changes.any { it.pressed })
+            if (pinching) zoom.endGesture()
         }
     }
 
