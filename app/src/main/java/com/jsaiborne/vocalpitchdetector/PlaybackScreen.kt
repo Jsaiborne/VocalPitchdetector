@@ -4,7 +4,12 @@ package com.jsaiborne.vocalpitchdetector
 
 import android.content.Context
 import android.content.res.Configuration
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.media.MediaPlayer
+import android.os.Build
+import android.os.PowerManager
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,7 +47,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -55,10 +59,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import java.io.File
@@ -90,10 +91,26 @@ internal val RecordedPitchPoint.midiFloat: Float
 
 private const val MIN_LOOP_MS = 300L
 private val PLAYBACK_SPEEDS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f)
+private const val POSITION_TICK_MS = 16L
+
+private val MEDIA_AUDIO_ATTRIBUTES: AudioAttributes = AudioAttributes.Builder()
+    .setUsage(AudioAttributes.USAGE_MEDIA)
+    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+    .build()
 
 @Suppress("TooManyFunctions")
-class PlaybackViewModel : ViewModel() {
+class PlaybackViewModel : ViewModel(), PlaybackControls {
     private var mediaPlayer: MediaPlayer? = null
+    private var appContext: Context? = null
+    private var positionJob: Job? = null
+    private var focusRequest: AudioFocusRequest? = null
+
+    // Another app taking the audio (a call, a music app) pauses playback
+    private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
+        if (change == AudioManager.AUDIOFOCUS_LOSS || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
+            pause()
+        }
+    }
 
     var isPlaying by mutableStateOf(false)
         private set
@@ -138,15 +155,17 @@ class PlaybackViewModel : ViewModel() {
         loadJob?.cancel()
         mediaPlayer?.release()
         mediaPlayer = null
-        isPlaying = false
+        updatePlaying(false)
         currentPositionMs = 0L
         totalDurationMs = 0L
         clearLoop()
 
         val appContext = context.applicationContext
+        this.appContext = appContext
+        PlaybackSession.controls = this
         loadJob = viewModelScope.launch {
             // MediaPlayer.prepare() blocks on file IO, so keep it off the main thread
-            val player = withContext(Dispatchers.IO) { createPlayer(audioFile) }
+            val player = withContext(Dispatchers.IO) { createPlayer(appContext, audioFile) }
             if (!isActive) {
                 player?.release()
                 return@launch
@@ -162,15 +181,19 @@ class PlaybackViewModel : ViewModel() {
             val (title, date) = calculateMetadata(appContext, audioFile)
             sessionTitle = title
             sessionDate = date
+            publishStatus()
 
             val sessionId = audioFile.name.substringAfter("session_").substringBefore("_audio.wav")
             sessionNote = withContext(Dispatchers.IO) { readRecordingNote(appContext, sessionId) }
         }
     }
 
-    private fun createPlayer(audioFile: File): MediaPlayer? {
+    private fun createPlayer(context: Context, audioFile: File): MediaPlayer? {
         val player = MediaPlayer()
         return try {
+            // Keeps the CPU awake while playing so playback carries on with the screen off
+            player.setWakeMode(context, PowerManager.PARTIAL_WAKE_LOCK)
+            player.setAudioAttributes(MEDIA_AUDIO_ATTRIBUTES)
             player.setDataSource(audioFile.absolutePath)
             player.prepare()
             player.setOnCompletionListener {
@@ -182,7 +205,8 @@ class PlaybackViewModel : ViewModel() {
                     applySpeed(it)
                     it.start()
                 } else {
-                    isPlaying = false
+                    updatePlaying(false)
+                    abandonAudioFocus()
                     currentPositionMs = 0L
                     it.seekTo(0)
                 }
@@ -233,25 +257,88 @@ class PlaybackViewModel : ViewModel() {
         parsePitchFile(pitchFile)
     }
 
-    fun togglePlayPause() {
-        mediaPlayer?.let { player ->
-            if (player.isPlaying) {
-                player.pause()
-                isPlaying = false
-            } else {
-                applySpeed(player)
-                player.start()
-                isPlaying = true
-            }
+    override fun togglePlayPause() {
+        val player = mediaPlayer ?: return
+        if (player.isPlaying) {
+            pause()
+        } else {
+            if (!requestAudioFocus()) return
+            applySpeed(player)
+            player.start()
+            updatePlaying(true)
+            // Keeps playback alive (with a notification) when the screen goes off or the app is left
+            appContext?.let { PlaybackService.start(it) }
         }
     }
 
-    fun pause() {
+    override fun pause() {
         mediaPlayer?.let { player ->
             if (player.isPlaying) {
                 player.pause()
-                isPlaying = false
+                updatePlaying(false)
             }
+        }
+        abandonAudioFocus()
+    }
+
+    /** The notification's Stop: back to the start, and the notification goes away. */
+    override fun stopPlayback() {
+        pause()
+        mediaPlayer?.seekTo(0)
+        currentPositionMs = 0L
+        PlaybackSession.status.value = null
+    }
+
+    /**
+     * Updates [isPlaying], tells the notification, and runs the position updates from here rather
+     * than from the screen, so the A-B loop keeps working while the app is in the background.
+     */
+    private fun updatePlaying(playing: Boolean) {
+        isPlaying = playing
+        positionJob?.cancel()
+        positionJob = if (playing) {
+            viewModelScope.launch {
+                while (isActive) {
+                    updatePositionFromPlayer()
+                    delay(POSITION_TICK_MS)
+                }
+            }
+        } else {
+            null
+        }
+        publishStatus()
+    }
+
+    private fun publishStatus() {
+        if (PlaybackSession.controls !== this) return
+        // Before the first play (or after Stop) there is no notification to update
+        if (PlaybackSession.status.value == null && !isPlaying) return
+        PlaybackSession.status.value = PlaybackStatus(sessionTitle, isPlaying)
+    }
+
+    private fun requestAudioFocus(): Boolean {
+        val audioManager = appContext?.getSystemService(AudioManager::class.java) ?: return true
+        val result = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val request = focusRequest ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(MEDIA_AUDIO_ATTRIBUTES)
+                .setOnAudioFocusChangeListener(focusListener)
+                .build()
+                .also { focusRequest = it }
+            audioManager.requestAudioFocus(request)
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.requestAudioFocus(focusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN)
+        }
+        return result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+    }
+
+    private fun abandonAudioFocus() {
+        val audioManager = appContext?.getSystemService(AudioManager::class.java) ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.abandonAudioFocus(focusListener)
         }
     }
 
@@ -324,8 +411,15 @@ class PlaybackViewModel : ViewModel() {
 
     override fun onCleared() {
         super.onCleared()
+        positionJob?.cancel()
+        abandonAudioFocus()
         mediaPlayer?.release()
         mediaPlayer = null
+        // Closing the playback screen ends the notification and the service with it
+        if (PlaybackSession.controls === this) {
+            PlaybackSession.controls = null
+            PlaybackSession.status.value = null
+        }
     }
 }
 
@@ -343,26 +437,6 @@ fun PlaybackScreen(
         viewModel.loadSession(context, audioFile, pitchFile)
         onDispose {
             if (viewModel.isPlaying) viewModel.pause()
-        }
-    }
-
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_PAUSE) {
-                viewModel.pause()
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-        }
-    }
-
-    LaunchedEffect(viewModel.isPlaying) {
-        while (viewModel.isPlaying) {
-            viewModel.updatePositionFromPlayer()
-            delay(16L)
         }
     }
 
