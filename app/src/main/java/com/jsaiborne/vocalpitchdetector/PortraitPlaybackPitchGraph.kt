@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.dp
 import kotlin.math.abs
+import kotlinx.coroutines.launch
 
 /** Playback graph for portrait: time runs top to bottom, pitch runs left to right. */
 @Suppress("LongParameterList", "LongMethod", "CyclomaticComplexMethod")
@@ -32,19 +33,40 @@ import kotlin.math.abs
 fun PortraitPlaybackPitchGraph(
     pitchData: List<RecordedPitchPoint>,
     currentPositionMs: Long,
+    totalDurationMs: Long = 0L,
+    isPlaying: Boolean = false,
+    onSeek: (Long) -> Unit = {},
     stableMarkers: List<RecordedPitchPoint> = emptyList(),
     showCurve: Boolean = true,
     showBars: Boolean = false,
     showWhiteDots: Boolean = false,
     showNoteLabels: Boolean = true,
-    autoCenter: Boolean = true
+    autoCenter: Boolean = true,
+    colors: GraphColors = GraphColors.Default
 ) {
     val playheadColor = MaterialTheme.colorScheme.error
-    val camera = rememberPlaybackCamera()
-    val paints = rememberGraphPaints()
+    val camera = rememberPlaybackCamera(timeAxisVertical = true)
+    val paints = rememberGraphPaints(colors.noteLabels)
 
     val pixelsPerSecond = PLAYBACK_PIXELS_PER_SECOND * camera.zoomScale
     val pixelsPerMidi = PLAYBACK_PIXELS_PER_MIDI * camera.zoomScale
+
+    // Tapping the graph moves the playhead to that time
+    camera.update(currentPositionMs, totalDurationMs, isPlaying) { tap ->
+        val canvasH = camera.canvasSize.height
+        val baseY = (currentPositionMs / 1000f) * pixelsPerSecond - canvasH * PLAYHEAD_SCREEN_FRACTION
+        val viewportY = if (autoCenter) baseY - camera.panAnimY.value else camera.manualViewportY
+        val tapMs = (((viewportY + tap.y) / pixelsPerSecond) * 1000f).toLong().coerceIn(0L, totalDurationMs)
+        onSeek(tapMs)
+        if (autoCenter) {
+            // Keep the view where it is; the playhead just moves to the tapped point
+            val newBaseY = (tapMs / 1000f) * pixelsPerSecond - canvasH * PLAYHEAD_SCREEN_FRACTION
+            camera.scope.launch { camera.panAnimY.snapTo(newBaseY - viewportY) }
+        }
+    }
+    LaunchedEffect(isPlaying) {
+        if (isPlaying) camera.timePan.animateTo(0f, spring())
+    }
 
     val currentPoint = remember(currentPositionMs, pitchData) { pitchData.nearestTo(currentPositionMs) }
 
@@ -141,7 +163,7 @@ fun PortraitPlaybackPitchGraph(
 
                         if (m == activeMarker) {
                             drawLine(
-                                color = GraphStyle.stableMarker,
+                                color = colors.noteLabels,
                                 start = Offset(x, viewportY),
                                 end = Offset(x, viewportY + canvasH),
                                 strokeWidth = 2f
@@ -153,7 +175,7 @@ fun PortraitPlaybackPitchGraph(
                                 midiToDisplayName(m.midiNote),
                                 x + 6f,
                                 y - 10f,
-                                paints.yellow
+                                paints.noteLabel
                             )
                         }
                     }
@@ -170,7 +192,7 @@ fun PortraitPlaybackPitchGraph(
                 ) { point ->
                     Offset(point.midiFloat * pixelsPerMidi, (point.timestampMs / 1000f) * pixelsPerSecond)
                 }
-                drawTraceSegments(segments, showBars, showWhiteDots, showCurve)
+                drawTraceSegments(segments, showBars, showWhiteDots, showCurve, colors)
 
                 // 4. Draw Playhead
                 drawLine(

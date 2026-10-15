@@ -15,6 +15,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -36,10 +37,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
@@ -95,12 +98,14 @@ import com.google.android.gms.ads.AdSize
 import com.google.android.gms.ads.AdView
 import java.io.File
 import java.util.Locale
+import kotlin.math.ln
+import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
-private const val PREFS_NAME = "AppPreferences"
+private const val PREFS_NAME = APP_PREFS_NAME
 private const val PREF_SOLFEGE = "UseSolfege"
 private const val PREF_ASKED_NOTIFICATIONS = "AskedNotificationPermission"
 
@@ -110,7 +115,6 @@ private const val PREF_KEY_WIDTH = "KeyWidthDp"
 private const val PREF_NOTE_LABELS = "ShowNoteLabels"
 private const val PREF_GRID = "ShowGrid"
 private const val PREF_CURVE = "ShowCurve"
-private const val PREF_WHITE_TRACE = "ShowWhiteTrace"
 private const val PREF_THRESHOLD_DB = "ThresholdDb"
 private const val PREF_BPM = "ScrollBpm"
 private const val PREF_WHITE_DOTS = "ShowWhiteDots"
@@ -128,6 +132,13 @@ private const val LANDSCAPE_PIANO_MAX_WIDTH_DP = 250f
 private val LANDSCAPE_READOUT_WIDTH = 104.dp
 private val LANDSCAPE_CONTROLS_WIDTH = 128.dp
 private const val SETTINGS_SAVE_DELAY_MS = 400L
+
+// Live graph scroll speed: at 60 BPM the graph shows LIVE_GRAPH_WINDOW_MS of history, and
+// proportionally more or less at other tempos
+private const val LIVE_GRAPH_WINDOW_MS = 8000L
+private const val MIN_SCROLL_BPM = 15f
+private const val MAX_SCROLL_BPM = 240f
+private const val DEFAULT_SCROLL_BPM = 60f
 private const val RECORDING_TIMER_TICK_MS = 250L
 
 /** Notifications only need a runtime permission from Android 13 (Tiramisu) on. */
@@ -165,21 +176,25 @@ fun MainScreen(navController: NavHostController? = null) {
     var showNoteLabels by rememberSaveable { mutableStateOf(appPrefs.getBoolean(PREF_NOTE_LABELS, true)) }
     var showHorizontalGrid by rememberSaveable { mutableStateOf(appPrefs.getBoolean(PREF_GRID, true)) }
     var showCurve by rememberSaveable { mutableStateOf(appPrefs.getBoolean(PREF_CURVE, true)) }
-    var showWhiteTrace by rememberSaveable { mutableStateOf(appPrefs.getBoolean(PREF_WHITE_TRACE, true)) }
     var thresholdDb by rememberSaveable { mutableFloatStateOf(appPrefs.getFloat(PREF_THRESHOLD_DB, -34f)) }
-    var bpm by rememberSaveable { mutableFloatStateOf(appPrefs.getFloat(PREF_BPM, 60f)) }
+    var bpm by rememberSaveable {
+        mutableFloatStateOf(appPrefs.getFloat(PREF_BPM, DEFAULT_SCROLL_BPM).coerceIn(MIN_SCROLL_BPM, MAX_SCROLL_BPM))
+    }
     var showWhiteDots by rememberSaveable { mutableStateOf(appPrefs.getBoolean(PREF_WHITE_DOTS, true)) }
 
     var useSamplePlayer by rememberSaveable { mutableStateOf(appPrefs.getBoolean(PREF_SAMPLE_PLAYER, false)) }
     var showCentsMeter by rememberSaveable { mutableStateOf(appPrefs.getBoolean(PREF_CENTS_METER, true)) }
     var showRangeOnPiano by rememberSaveable { mutableStateOf(appPrefs.getBoolean(PREF_RANGE_ON_PIANO, true)) }
     var showGestureTip by remember { mutableStateOf(!appPrefs.getBoolean(PREF_GESTURE_TIP_SEEN, false)) }
+    // Not saveable in a Bundle, but rotation keeps this screen alive and a restart re-reads prefs
+    var graphColors by remember { mutableStateOf(readGraphColors(appPrefs)) }
+    var showGraphAppearance by rememberSaveable { mutableStateOf(false) }
 
     // Save settings shortly after they change (the delay coalesces slider drags into one write)
     LaunchedEffect(
         autoCenter, whiteKeyWidthDpFloat, showNoteLabels, showHorizontalGrid, showCurve,
-        showWhiteTrace, thresholdDb, bpm, showWhiteDots, useSamplePlayer, showCentsMeter,
-        showRangeOnPiano
+        thresholdDb, bpm, showWhiteDots, useSamplePlayer, showCentsMeter,
+        showRangeOnPiano, graphColors
     ) {
         delay(SETTINGS_SAVE_DELAY_MS)
         appPrefs.edit()
@@ -188,13 +203,13 @@ fun MainScreen(navController: NavHostController? = null) {
             .putBoolean(PREF_NOTE_LABELS, showNoteLabels)
             .putBoolean(PREF_GRID, showHorizontalGrid)
             .putBoolean(PREF_CURVE, showCurve)
-            .putBoolean(PREF_WHITE_TRACE, showWhiteTrace)
             .putFloat(PREF_THRESHOLD_DB, thresholdDb)
             .putFloat(PREF_BPM, bpm)
             .putBoolean(PREF_WHITE_DOTS, showWhiteDots)
             .putBoolean(PREF_SAMPLE_PLAYER, useSamplePlayer)
             .putBoolean(PREF_CENTS_METER, showCentsMeter)
             .putBoolean(PREF_RANGE_ON_PIANO, showRangeOnPiano)
+            .putGraphColors(graphColors)
             .apply()
     }
     var rangeTestActive by rememberSaveable { mutableStateOf(false) }
@@ -428,7 +443,7 @@ fun MainScreen(navController: NavHostController? = null) {
     }
 
     val resetToDefaults = {
-        bpm = 60f
+        bpm = DEFAULT_SCROLL_BPM
         thresholdDb = -34f
         engine.setVolumeThreshold(dbToRms(-34f))
         whiteKeyWidthDpFloat = 56f
@@ -436,8 +451,8 @@ fun MainScreen(navController: NavHostController? = null) {
         showNoteLabels = true
         showHorizontalGrid = true
         showCurve = true
-        showWhiteTrace = true
         showWhiteDots = true
+        graphColors = GraphColors.Default
         useSamplePlayer = false
         showCentsMeter = true
         showRangeOnPiano = true
@@ -445,12 +460,27 @@ fun MainScreen(navController: NavHostController? = null) {
         appPrefs.edit().putBoolean(PREF_SOLFEGE, false).apply()
     }
 
+    if (showGraphAppearance) {
+        GraphAppearanceDialog(
+            state = GraphAppearanceState(
+                showGrid = showHorizontalGrid,
+                showNoteLabels = showNoteLabels,
+                showCurve = showCurve,
+                showDots = showWhiteDots,
+                colors = graphColors
+            ),
+            actions = GraphAppearanceActions(
+                onShowGridChange = { showHorizontalGrid = it },
+                onShowNoteLabelsChange = { showNoteLabels = it },
+                onShowCurveChange = { showCurve = it },
+                onShowDotsChange = { showWhiteDots = it },
+                onColorsChange = { graphColors = it },
+                onDismiss = { showGraphAppearance = false }
+            )
+        )
+    }
+
     val menuSettings = MenuSettings(
-        showNoteLabels = showNoteLabels,
-        showHorizontalGrid = showHorizontalGrid,
-        showCurve = showCurve,
-        showWhiteTrace = showWhiteTrace,
-        showWhiteDots = showWhiteDots,
         autoCenter = autoCenter,
         useSamplePlayer = useSamplePlayer,
         showCentsMeter = showCentsMeter,
@@ -471,13 +501,7 @@ fun MainScreen(navController: NavHostController? = null) {
     )
 
     val menuActions = MenuActions(
-        onShowNoteLabelsChange = { showNoteLabels = it },
-        onShowHorizontalGridChange = { showHorizontalGrid = it },
-        onShowCurveAndTraceChange = { checked ->
-            showCurve = checked
-            showWhiteTrace = checked
-        },
-        onShowWhiteDotsChange = { showWhiteDots = it },
+        onOpenGraphAppearance = { showGraphAppearance = true },
         onAutoCenterChange = { autoCenter = it },
         onUseSamplePlayerChange = { useSamplePlayer = it },
         onShowCentsMeterChange = { showCentsMeter = it },
@@ -593,16 +617,16 @@ fun MainScreen(navController: NavHostController? = null) {
                         whiteKeyWidthDp = whiteKeyWidthDpFloat.dp,
                         scrollState = sharedScroll,
                         alignmentOffsetDp = graphAlignmentDp.dp,
-                        timeWindowMs = 8000L,
+                        timeWindowMs = LIVE_GRAPH_WINDOW_MS,
                         showNoteLabels = showNoteLabels,
                         showHorizontalGrid = showHorizontalGrid,
                         showCurve = showCurve,
                         rotated = true,
                         blackKeyShiftFraction = 0.5f,
-                        showWhiteTrace = showWhiteTrace,
                         showWhiteDots = showWhiteDots,
                         bpm = bpm,
-                        scrollCorrectionPx = { pitchZoom.visualCorrectionPx() }
+                        scrollCorrectionPx = { pitchZoom.visualCorrectionPx() },
+                        colors = graphColors
                     )
                     // Bottom of the graph, away from the ad in the top bar
                     if (showGestureTip) {
@@ -690,13 +714,13 @@ fun MainScreen(navController: NavHostController? = null) {
                     paused = graphPaused,
                     startMidi = 24, endMidi = 84, whiteKeyWidthDp = whiteKeyWidthDpFloat.dp,
                     scrollState = sharedScroll, alignmentOffsetDp = graphAlignmentDp.dp,
-                    timeWindowMs = 8000L,
+                    timeWindowMs = LIVE_GRAPH_WINDOW_MS,
                     showNoteLabels = showNoteLabels, showHorizontalGrid = showHorizontalGrid,
                     showCurve = showCurve, rotated = false, blackKeyShiftFraction = 0.5f,
-                    showWhiteTrace = showWhiteTrace,
                     showWhiteDots = showWhiteDots,
                     bpm = bpm,
-                    scrollCorrectionPx = { pitchZoom.visualCorrectionPx() }
+                    scrollCorrectionPx = { pitchZoom.visualCorrectionPx() },
+                    colors = graphColors
                 )
                 // Top of the graph, away from the banner ad at the bottom of the screen
                 if (showGestureTip) {
@@ -1130,11 +1154,6 @@ private fun TopAppBarLandscapeCompact(
 
 /** Current values shown in the settings dropdown (shared by the portrait and landscape layouts). */
 private data class MenuSettings(
-    val showNoteLabels: Boolean,
-    val showHorizontalGrid: Boolean,
-    val showCurve: Boolean,
-    val showWhiteTrace: Boolean,
-    val showWhiteDots: Boolean,
     val autoCenter: Boolean,
     val useSamplePlayer: Boolean,
     val showCentsMeter: Boolean,
@@ -1151,10 +1170,7 @@ private data class MenuSettings(
 
 /** What the settings dropdown can change. */
 private data class MenuActions(
-    val onShowNoteLabelsChange: (Boolean) -> Unit,
-    val onShowHorizontalGridChange: (Boolean) -> Unit,
-    val onShowCurveAndTraceChange: (Boolean) -> Unit,
-    val onShowWhiteDotsChange: (Boolean) -> Unit,
+    val onOpenGraphAppearance: () -> Unit,
     val onAutoCenterChange: (Boolean) -> Unit,
     val onUseSamplePlayerChange: (Boolean) -> Unit,
     val onShowCentsMeterChange: (Boolean) -> Unit,
@@ -1168,7 +1184,7 @@ private data class MenuActions(
 )
 
 @Composable
-private fun SwitchRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+internal fun SwitchRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth()
@@ -1179,6 +1195,40 @@ private fun SwitchRow(label: String, checked: Boolean, onCheckedChange: (Boolean
             style = MaterialTheme.typography.bodyMedium
         )
         Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+/**
+ * The scroll-speed slider is logarithmic, so each doubling of tempo (15→30, 30→60, ...) gets the
+ * same share of the track and the slow end isn't squeezed into a sliver.
+ */
+private fun bpmToSliderPos(bpm: Float): Float =
+    (ln(bpm / MIN_SCROLL_BPM) / ln(MAX_SCROLL_BPM / MIN_SCROLL_BPM)).coerceIn(0f, 1f)
+
+private fun sliderPosToBpm(pos: Float): Float =
+    (MIN_SCROLL_BPM * (MAX_SCROLL_BPM / MIN_SCROLL_BPM).pow(pos)).roundToInt().toFloat()
+
+/** Settings entry that opens the Graph appearance dialog. */
+@Composable
+private fun GraphAppearanceMenuRow(onClick: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.small)
+            .clickable(onClick = onClick)
+            .padding(vertical = 6.dp)
+    ) {
+        Icon(Icons.Filled.Palette, contentDescription = null, modifier = Modifier.padding(end = 12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text("Graph appearance", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "Show, hide and color labels, curve and dots",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
     }
 }
 
@@ -1329,24 +1379,21 @@ private fun SettingsMenu(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             MenuSectionHeader("Graph")
-            SwitchRow("Show note labels", settings.showNoteLabels, actions.onShowNoteLabelsChange)
-            SwitchRow("Show grid lines", settings.showHorizontalGrid, actions.onShowHorizontalGridChange)
-            SwitchRow(
-                "Show curve & trace",
-                settings.showCurve && settings.showWhiteTrace,
-                actions.onShowCurveAndTraceChange
+            GraphAppearanceMenuRow(
+                onClick = {
+                    onDismiss()
+                    actions.onOpenGraphAppearance()
+                }
             )
-            SwitchRow("Show white dots", settings.showWhiteDots, actions.onShowWhiteDotsChange)
             SwitchRow("Auto-center", settings.autoCenter, actions.onAutoCenterChange)
+            val secondsOnScreen = LIVE_GRAPH_WINDOW_MS / 1000f * (DEFAULT_SCROLL_BPM / settings.bpm)
             Text(
-                "Scroll speed: ${settings.bpm.roundToInt()} BPM",
+                "Scroll speed: ${settings.bpm.roundToInt()} BPM · ${secondsOnScreen.roundToInt()} s on screen",
                 style = MaterialTheme.typography.bodySmall
             )
             Slider(
-                value = settings.bpm,
-                onValueChange = actions.onBpmChange,
-                valueRange = 60f..240f,
-                steps = 180,
+                value = bpmToSliderPos(settings.bpm),
+                onValueChange = { actions.onBpmChange(sliderPosToBpm(it)) },
                 modifier = Modifier.fillMaxWidth()
             )
 

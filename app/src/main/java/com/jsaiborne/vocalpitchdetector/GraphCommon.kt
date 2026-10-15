@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
@@ -39,16 +40,15 @@ import kotlin.math.hypot
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
-/** Colours shared by the live and playback pitch graphs. */
+/**
+ * Fixed colours shared by the live and playback pitch graphs. The curve, dots and note
+ * labels are the user's choice instead (see [GraphColors]).
+ */
 internal object GraphStyle {
     val backgroundTop = Color(0xFF081226)
     val backgroundBottom = Color(0xFF0F2A3F)
     val dotHalo = Color(0x88000000)
-    val dot = Color.White
     val bar = Color(0xCCEF9A9A)
-    val curve = Color(0xFF7AD3FF)
-    val whiteTrace = Color(0xCCFFFFFF)
-    val stableMarker = Color(0xFFFFD54F)
     val pitchGrid = Color(0x2233AAFF)
     val timeGrid = Color(0x22FFFFFF)
 }
@@ -57,11 +57,14 @@ internal object GraphStyle {
 internal class GraphPaints(
     val label: Paint,
     val small: Paint,
-    val yellow: Paint
+    /** Note names of the stable-note markers, in the user's note label colour. */
+    val noteLabel: Paint
 )
 
 @Composable
-internal fun rememberGraphPaints(): GraphPaints = remember {
+internal fun rememberGraphPaints(noteLabelColor: Color = GraphColors.Default.noteLabels): GraphPaints = remember(
+    noteLabelColor
+) {
     GraphPaints(
         label = Paint().apply {
             color = android.graphics.Color.WHITE
@@ -74,8 +77,8 @@ internal fun rememberGraphPaints(): GraphPaints = remember {
             textSize = 18f
             isAntiAlias = true
         },
-        yellow = Paint().apply {
-            color = android.graphics.Color.YELLOW
+        noteLabel = Paint().apply {
+            color = noteLabelColor.toArgb()
             textSize = 18f
             isAntiAlias = true
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
@@ -94,16 +97,45 @@ internal const val PLAYHEAD_SCREEN_FRACTION = 0.2f
 
 /**
  * Pan/zoom state for the playback graphs. In auto-center mode the camera follows the playhead
- * and the user's drag is a temporary offset that springs back; otherwise the drag moves a
- * manual viewport.
+ * and the user's drag is an offset from it: along the pitch axis it springs back, along the time
+ * axis it stays where it was left while paused (so the whole recording can be browsed, within its
+ * length) and glides back once playback starts. Otherwise the drag moves a manual viewport.
+ * A tap hands its position to [onTap], which seeks there.
  */
-internal class PlaybackCamera(val scope: CoroutineScope) {
+internal class PlaybackCamera(val scope: CoroutineScope, private val timeAxisVertical: Boolean) {
     var zoomScale by mutableFloatStateOf(1f)
     var canvasSize by mutableStateOf(Size.Zero)
     var manualViewportX by mutableFloatStateOf(0f)
     var manualViewportY by mutableFloatStateOf(0f)
     val panAnimX = Animatable(0f)
     val panAnimY = Animatable(0f)
+
+    // Latest playback state and tap handler, refreshed by the graph on every composition
+    var positionMs = 0L
+    var durationMs = 0L
+    var isPlaying = false
+    var onTap: (Offset) -> Unit = {}
+
+    val timePan: Animatable<Float, *> get() = if (timeAxisVertical) panAnimY else panAnimX
+    val pitchPan: Animatable<Float, *> get() = if (timeAxisVertical) panAnimX else panAnimY
+
+    fun update(positionMs: Long, durationMs: Long, isPlaying: Boolean, onTap: (Offset) -> Unit) {
+        this.positionMs = positionMs
+        this.durationMs = durationMs
+        this.isPlaying = isPlaying
+        this.onTap = onTap
+    }
+
+    /**
+     * Keeps the time-axis offset inside the recording: the playhead line (see
+     * [PLAYHEAD_SCREEN_FRACTION]) can be moved to any time between 0 and the end.
+     */
+    fun clampTimePan(pan: Float): Float {
+        val pixelsPerSecond = PLAYBACK_PIXELS_PER_SECOND * zoomScale
+        val min = (positionMs - durationMs) / 1000f * pixelsPerSecond
+        val max = positionMs / 1000f * pixelsPerSecond
+        return pan.coerceIn(minOf(min, max), max)
+    }
 
     /** Turns the current auto-centred view into the manual viewport (when auto-center is switched off). */
     suspend fun freezeAt(baseViewportX: Float, baseViewportY: Float) {
@@ -115,21 +147,24 @@ internal class PlaybackCamera(val scope: CoroutineScope) {
 }
 
 @Composable
-internal fun rememberPlaybackCamera(): PlaybackCamera {
+internal fun rememberPlaybackCamera(timeAxisVertical: Boolean): PlaybackCamera {
     val scope = rememberCoroutineScope()
-    return remember { PlaybackCamera(scope) }
+    return remember { PlaybackCamera(scope, timeAxisVertical) }
 }
 
 internal fun Modifier.playbackCameraGestures(camera: PlaybackCamera, autoCenter: Boolean): Modifier =
     pointerInput(autoCenter) {
         awaitEachGesture {
-            awaitFirstDown(requireUnconsumed = false)
+            val down = awaitFirstDown(requireUnconsumed = false)
             if (autoCenter) {
                 camera.scope.launch {
                     camera.panAnimX.stop()
                     camera.panAnimY.stop()
                 }
             }
+
+            var totalMove = Offset.Zero
+            var isTap = true
 
             do {
                 val event = awaitPointerEvent()
@@ -139,6 +174,11 @@ internal fun Modifier.playbackCameraGestures(camera: PlaybackCamera, autoCenter:
                     val panChange = event.calculatePan()
                     val centroid = event.calculateCentroid(useCurrent = false)
 
+                    totalMove += panChange
+                    if (event.changes.size > 1 || totalMove.getDistance() > viewConfiguration.touchSlop) {
+                        isTap = false
+                    }
+
                     val newScale = (camera.zoomScale * zoomChange).coerceIn(0.3f, 4f)
                     val actualZoom = newScale / camera.zoomScale
                     camera.zoomScale = newScale
@@ -147,6 +187,7 @@ internal fun Modifier.playbackCameraGestures(camera: PlaybackCamera, autoCenter:
                         camera.scope.launch {
                             camera.panAnimX.snapTo(camera.panAnimX.value + panChange.x)
                             camera.panAnimY.snapTo(camera.panAnimY.value + panChange.y)
+                            camera.timePan.snapTo(camera.clampTimePan(camera.timePan.value))
                         }
                     } else {
                         camera.manualViewportX -= panChange.x
@@ -165,9 +206,12 @@ internal fun Modifier.playbackCameraGestures(camera: PlaybackCamera, autoCenter:
                 }
             } while (!canceled && event.changes.any { it.pressed })
 
+            if (isTap) camera.onTap(down.position)
+
             if (autoCenter) {
-                camera.scope.launch { camera.panAnimX.animateTo(0f, spring()) }
-                camera.scope.launch { camera.panAnimY.animateTo(0f, spring()) }
+                camera.scope.launch { camera.pitchPan.animateTo(0f, spring()) }
+                // Browsing while paused stays put; while playing the view returns to the playhead
+                if (camera.isPlaying) camera.scope.launch { camera.timePan.animateTo(0f, spring()) }
             }
         }
     }
@@ -352,6 +396,7 @@ internal fun DrawScope.drawTraceSegments(
     showBars: Boolean,
     showWhiteDots: Boolean,
     showCurve: Boolean,
+    colors: GraphColors,
     smoothing: Float = PLAYBACK_CURVE_SMOOTHING
 ) {
     val barSize = 8.dp.toPx()
@@ -373,13 +418,13 @@ internal fun DrawScope.drawTraceSegments(
         if (showWhiteDots) {
             for (p in seg) {
                 drawCircle(color = GraphStyle.dotHalo, radius = haloRadius, center = p)
-                drawCircle(color = GraphStyle.dot, radius = dotRadius, center = p)
+                drawCircle(color = colors.dots, radius = dotRadius, center = p)
             }
         }
         if (showCurve && seg.size >= 2) {
             drawPath(
                 path = buildSmoothedPath(seg, smoothing),
-                color = GraphStyle.curve,
+                color = colors.curve,
                 style = Stroke(width = 4.5f, cap = StrokeCap.Round, join = StrokeJoin.Round)
             )
         }

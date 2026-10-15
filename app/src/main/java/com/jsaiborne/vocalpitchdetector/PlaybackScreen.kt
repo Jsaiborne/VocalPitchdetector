@@ -446,6 +446,10 @@ fun PlaybackScreen(
     var showDots by remember { mutableStateOf(false) }
     var showBars by remember { mutableStateOf(false) }
     var showNoteLabels by remember { mutableStateOf(true) }
+    // The colours chosen under Graph appearance on the live screen
+    val graphColors = remember {
+        readGraphColors(context.getSharedPreferences(APP_PREFS_NAME, Context.MODE_PRIVATE))
+    }
     var autoCenter by remember { mutableStateOf(true) }
     var showSettingsMenu by remember { mutableStateOf(false) }
 
@@ -568,23 +572,31 @@ fun PlaybackScreen(
                     PortraitPlaybackPitchGraph(
                         pitchData = viewModel.pitchData,
                         currentPositionMs = viewModel.currentPositionMs,
+                        totalDurationMs = viewModel.totalDurationMs,
+                        isPlaying = viewModel.isPlaying,
+                        onSeek = viewModel::seekTo,
                         stableMarkers = viewModel.stableMarkers,
                         showCurve = showCurve,
                         showWhiteDots = showDots,
                         showBars = showBars,
                         showNoteLabels = showNoteLabels,
-                        autoCenter = autoCenter
+                        autoCenter = autoCenter,
+                        colors = graphColors
                     )
                 } else {
                     LandscapePlaybackPitchGraph(
                         pitchData = viewModel.pitchData,
                         currentPositionMs = viewModel.currentPositionMs,
+                        totalDurationMs = viewModel.totalDurationMs,
+                        isPlaying = viewModel.isPlaying,
+                        onSeek = viewModel::seekTo,
                         stableMarkers = viewModel.stableMarkers,
                         showCurve = showCurve,
                         showWhiteDots = showDots,
                         showBars = showBars,
                         showNoteLabels = showNoteLabels,
-                        autoCenter = autoCenter
+                        autoCenter = autoCenter,
+                        colors = graphColors
                     )
                 }
             }

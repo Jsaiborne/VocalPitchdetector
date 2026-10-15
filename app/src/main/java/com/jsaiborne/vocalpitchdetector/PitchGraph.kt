@@ -180,11 +180,11 @@ fun PitchGraphCard(
     showNoteLabels: Boolean = true,
     showHorizontalGrid: Boolean = true,
     showCurve: Boolean = true,
-    showWhiteTrace: Boolean = true,
     showBars: Boolean = false,
     showWhiteDots: Boolean = true, // <-- NEW
     // Shift for the scrolled graph while a pinch-zoom's scroll is catching up (see PitchAxisZoom)
-    scrollCorrectionPx: () -> Float = { 0f }
+    scrollCorrectionPx: () -> Float = { 0f },
+    colors: GraphColors = GraphColors.Default
 ) {
     Card(modifier = modifier, shape = RoundedCornerShape(12.dp)) {
         Box(
@@ -208,11 +208,11 @@ fun PitchGraphCard(
                     showNoteLabels = showNoteLabels,
                     showHorizontalGrid = showHorizontalGrid,
                     showCurve = showCurve,
-                    showWhiteTrace = showWhiteTrace,
                     bpm = bpm,
                     showBars = showBars,
                     showWhiteDots = showWhiteDots, // forwarded
-                    scrollCorrectionPx = scrollCorrectionPx
+                    scrollCorrectionPx = scrollCorrectionPx,
+                    colors = colors
                 )
             } else {
                 PitchGraphVertical(
@@ -229,11 +229,11 @@ fun PitchGraphCard(
                     showNoteLabels = showNoteLabels,
                     showHorizontalGrid = showHorizontalGrid,
                     showCurve = showCurve,
-                    showWhiteTrace = showWhiteTrace,
                     bpm = bpm,
                     showBars = showBars,
                     showWhiteDots = showWhiteDots, // forwarded
-                    scrollCorrectionPx = scrollCorrectionPx
+                    scrollCorrectionPx = scrollCorrectionPx,
+                    colors = colors
                 )
             }
         }
@@ -260,11 +260,11 @@ fun PitchGraphHorizontal(
     showNoteLabels: Boolean = true,
     showHorizontalGrid: Boolean = true,
     showCurve: Boolean = true,
-    showWhiteTrace: Boolean = true,
     bpm: Float = 120f,
     showBars: Boolean = false,
     showWhiteDots: Boolean = true,
-    scrollCorrectionPx: () -> Float = { 0f }
+    scrollCorrectionPx: () -> Float = { 0f },
+    colors: GraphColors = GraphColors.Default
 ) {
     val density = LocalDensity.current
 
@@ -275,7 +275,7 @@ fun PitchGraphHorizontal(
     val buffer = rememberTraceBuffer(engine, paused, windowMsEffective)
     val samples = buffer.samples
     val stableMarkers = buffer.markers
-    val paints = rememberGraphPaints()
+    val paints = rememberGraphPaints(colors.noteLabels)
 
     val whiteCount = (startMidi..endMidi).count { !midiToNoteName(it).contains("#") }
     val whiteKeyWidthPx = with(density) { whiteKeyWidthDp.toPx() }
@@ -329,7 +329,7 @@ fun PitchGraphHorizontal(
 
     // Halo color for dots (semi-transparent dark)
     val haloColor = GraphStyle.dotHalo
-    val dotWhite = GraphStyle.dot
+    val dotWhite = colors.dots
     // Horizontal bar color: soft translucent blue (matches curve)
     val horizontalBarColor = GraphStyle.bar
 
@@ -506,7 +506,7 @@ fun PitchGraphHorizontal(
                         for (segPath in smoothedPaths) {
                             drawPath(
                                 path = segPath,
-                                color = GraphStyle.curve,
+                                color = colors.curve,
                                 style = Stroke(width = 3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
                             )
                         }
@@ -514,19 +514,8 @@ fun PitchGraphHorizontal(
                         // fallback: draw the raw polyline stroke only
                         drawPath(
                             path = bluePath,
-                            color = GraphStyle.curve,
+                            color = colors.curve,
                             style = Stroke(width = 3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-                        )
-                    }
-                }
-
-                if (showWhiteTrace && smoothedPaths.isNotEmpty()) {
-                    // draw white trace segments on top of the blue stroke
-                    for (segPath in smoothedPaths) {
-                        drawPath(
-                            path = segPath,
-                            color = GraphStyle.whiteTrace,
-                            style = Stroke(width = 2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
                         )
                     }
                 }
@@ -614,7 +603,7 @@ fun PitchGraphHorizontal(
                     val x = midiX[targetIndex]
                     val y = padTop + innerH * ((m.tMs - windowStart).toFloat() / windowMsEffective.toFloat())
                     drawLine(
-                        color = GraphStyle.stableMarker,
+                        color = colors.noteLabels,
                         start = Offset(x, padTop),
                         end = Offset(x, padTop + innerH),
                         strokeWidth = 2f
@@ -628,18 +617,18 @@ fun PitchGraphHorizontal(
                         if (fade > 0f) {
                             drawIntoCanvas { canvas ->
                                 val nativeCanvas = canvas.nativeCanvas
-                                val originalAlpha = paints.yellow.alpha
-                                paints.yellow.alpha = (originalAlpha * fade).toInt()
+                                val originalAlpha = paints.noteLabel.alpha
+                                paints.noteLabel.alpha = (originalAlpha * fade).toInt()
                                 nativeCanvas.save()
                                 nativeCanvas.clipRect(padLeft, padTop, padLeft + innerW, padTop + innerH)
                                 nativeCanvas.drawText(
                                     midiToDisplayName(m.midi),
                                     x + 6f,
                                     labelY,
-                                    paints.yellow
+                                    paints.noteLabel
                                 )
                                 nativeCanvas.restore()
-                                paints.yellow.alpha = originalAlpha
+                                paints.noteLabel.alpha = originalAlpha
                             }
                         }
                     }
@@ -697,11 +686,11 @@ fun PitchGraphVertical(
     showNoteLabels: Boolean = true,
     showHorizontalGrid: Boolean = true,
     showCurve: Boolean = true,
-    showWhiteTrace: Boolean = true,
     bpm: Float = 120f,
     showBars: Boolean = false,
     showWhiteDots: Boolean = true, // <-- NEW
-    scrollCorrectionPx: () -> Float = { 0f }
+    scrollCorrectionPx: () -> Float = { 0f },
+    colors: GraphColors = GraphColors.Default
 ) {
     val density = LocalDensity.current
 
@@ -712,7 +701,7 @@ fun PitchGraphVertical(
     val buffer = rememberTraceBuffer(engine, paused, windowMsEffective)
     val samples = buffer.samples
     val stableMarkers = buffer.markers
-    val paints = rememberGraphPaints()
+    val paints = rememberGraphPaints(colors.noteLabels)
 
     val whiteCount = (startMidi..endMidi).count { !midiToNoteName(it).contains("#") }
     val keyThicknessPx = with(density) { whiteKeyWidthDp.toPx() }
@@ -766,7 +755,7 @@ fun PitchGraphVertical(
 
     // Halo color and white dot color
     val haloColor = GraphStyle.dotHalo
-    val dotWhite = GraphStyle.dot
+    val dotWhite = colors.dots
     // Vertical bar color
     val verticalBarColor = GraphStyle.bar
 
@@ -935,7 +924,7 @@ fun PitchGraphVertical(
                         for (segPath in smoothedPaths) {
                             drawPath(
                                 path = segPath,
-                                color = GraphStyle.curve,
+                                color = colors.curve,
                                 style = Stroke(width = 3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
                             )
                         }
@@ -943,19 +932,8 @@ fun PitchGraphVertical(
                         // fallback: draw the raw polyline stroke only
                         drawPath(
                             path = bluePath,
-                            color = GraphStyle.curve,
+                            color = colors.curve,
                             style = Stroke(width = 3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-                        )
-                    }
-                }
-
-                if (showWhiteTrace && smoothedPaths.isNotEmpty()) {
-                    // draw white trace segments on top of the blue stroke
-                    for (segPath in smoothedPaths) {
-                        drawPath(
-                            path = segPath,
-                            color = GraphStyle.whiteTrace,
-                            style = Stroke(width = 2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
                         )
                     }
                 }
@@ -1040,7 +1018,7 @@ fun PitchGraphVertical(
                     val y = midiY[targetIndex]
                     val x = xForTime(m.tMs)
                     drawLine(
-                        color = GraphStyle.stableMarker,
+                        color = colors.noteLabels,
                         start = Offset(padLeft, y),
                         end = Offset(padLeft + innerW, y),
                         strokeWidth = 2f
@@ -1048,7 +1026,7 @@ fun PitchGraphVertical(
                     if (showNoteLabels) {
                         drawIntoCanvas { canvas ->
                             val noteName = midiToDisplayName(m.midi)
-                            val textWidth = paints.yellow.measureText(noteName)
+                            val textWidth = paints.noteLabel.measureText(noteName)
                             var labelX = x + 8f
                             val labelY = y - 10f
                             val rightEdge = padLeft + innerW
@@ -1059,13 +1037,13 @@ fun PitchGraphVertical(
                             val fade = ((labelX - padLeft) / fadeWidthPx).coerceIn(0f, 1f)
                             if (fade > 0f) {
                                 val nativeCanvas = canvas.nativeCanvas
-                                val originalAlpha = paints.yellow.alpha
-                                paints.yellow.alpha = (originalAlpha * fade).toInt()
+                                val originalAlpha = paints.noteLabel.alpha
+                                paints.noteLabel.alpha = (originalAlpha * fade).toInt()
                                 nativeCanvas.save()
                                 nativeCanvas.clipRect(padLeft, padTop, padLeft + innerW, padTop + innerH)
-                                nativeCanvas.drawText(noteName, labelX, labelY, paints.yellow)
+                                nativeCanvas.drawText(noteName, labelX, labelY, paints.noteLabel)
                                 nativeCanvas.restore()
-                                paints.yellow.alpha = originalAlpha
+                                paints.noteLabel.alpha = originalAlpha
                             }
                         }
                     }
