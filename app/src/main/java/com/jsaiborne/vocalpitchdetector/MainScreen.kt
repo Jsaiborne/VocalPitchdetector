@@ -39,6 +39,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
@@ -213,6 +214,7 @@ fun MainScreen(navController: NavHostController? = null) {
             .apply()
     }
     var rangeTestActive by rememberSaveable { mutableStateOf(false) }
+    var exerciseActive by rememberSaveable { mutableStateOf(false) }
 
     // The last saved range-test result; re-read whenever the test closes, in case it was retaken
     var savedRange by remember { mutableStateOf(readSavedRange(context)) }
@@ -510,6 +512,7 @@ fun MainScreen(navController: NavHostController? = null) {
             appPrefs.edit().putBoolean(PREF_SOLFEGE, checked).apply()
         },
         onOpenRangeTest = { rangeTestActive = true },
+        onOpenExercises = { exerciseActive = true },
         onShowRangeOnPianoChange = { showRangeOnPiano = it },
         onBpmChange = { bpm = it },
         onThresholdChange = { newDb ->
@@ -530,6 +533,21 @@ fun MainScreen(navController: NavHostController? = null) {
             thresholdDb = thresholdDb,
             onThresholdChange = menuActions.onThresholdChange,
             onExit = { rangeTestActive = false },
+            modifier = Modifier.padding(outerPadding)
+        )
+        return
+    }
+
+    // Exercises take over the screen the same way; the range test can be opened from them
+    if (exerciseActive) {
+        ExerciseScreen(
+            engine = engine,
+            isLandscape = isLandscape,
+            keyWidthDp = whiteKeyWidthDpFloat,
+            graphColors = graphColors,
+            useSamplePlayer = useSamplePlayer,
+            onOpenRangeTest = { rangeTestActive = true },
+            onExit = { exerciseActive = false },
             modifier = Modifier.padding(outerPadding)
         )
         return
@@ -1176,6 +1194,7 @@ private data class MenuActions(
     val onShowCentsMeterChange: (Boolean) -> Unit,
     val onUseSolfegeChange: (Boolean) -> Unit,
     val onOpenRangeTest: () -> Unit,
+    val onOpenExercises: () -> Unit,
     val onShowRangeOnPianoChange: (Boolean) -> Unit,
     val onBpmChange: (Float) -> Unit,
     val onThresholdChange: (Float) -> Unit,
@@ -1368,6 +1387,25 @@ private fun SettingsMenu(
             onClick = {
                 onDismiss()
                 actions.onOpenRangeTest()
+            }
+        )
+        // Exercises need the mic just like the range test, so they're unavailable for the same reasons
+        DropdownMenuItem(
+            text = {
+                Column {
+                    Text("Exercises", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        rangeTestReason ?: "Sing warm-ups against target notes and get a score",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            leadingIcon = { Icon(Icons.Filled.FitnessCenter, contentDescription = null) },
+            enabled = rangeTestReason == null,
+            onClick = {
+                onDismiss()
+                actions.onOpenExercises()
             }
         )
         HorizontalDivider()
