@@ -120,7 +120,13 @@ private const val SCROLL_IDLE_POLL_MS = 150L
 private const val SCROLL_EXIT_MARGIN_MS = 500L
 
 @Composable
-private fun rememberTraceBuffer(engine: PitchEngine, paused: Boolean, windowMs: Long): TraceBuffer {
+private fun rememberTraceBuffer(
+    engine: PitchEngine,
+    paused: Boolean,
+    windowMs: Long,
+    // Keeps the graph scrolling even with nothing sung, e.g. while exercise targets move across it
+    keepAlive: Boolean = false
+): TraceBuffer {
     val buffer = remember { TraceBuffer() }
     // Applied before the frame is drawn, so the clock stops on the same frame as the button
     SideEffect { buffer.setPaused(paused) }
@@ -138,10 +144,10 @@ private fun rememberTraceBuffer(engine: PitchEngine, paused: Boolean, windowMs: 
     // The engine reports silence only once, so the graph drives its own scrolling: it redraws at
     // ~30 fps while a trace or marker is still on screen, and stops redrawing once it has scrolled
     // away, so an idle screen costs almost nothing
-    LaunchedEffect(buffer, paused, windowMs) {
+    LaunchedEffect(buffer, paused, windowMs, keepAlive) {
         while (true) {
             val now = buffer.now()
-            if (!paused && buffer.hasContentSince(now - windowMs - SCROLL_EXIT_MARGIN_MS)) {
+            if (!paused && (keepAlive || buffer.hasContentSince(now - windowMs - SCROLL_EXIT_MARGIN_MS))) {
                 buffer.tick(cutoffMs = now - windowMs)
                 delay(SCROLL_FRAME_MS)
             } else {
@@ -184,7 +190,11 @@ fun PitchGraphCard(
     showWhiteDots: Boolean = true, // <-- NEW
     // Shift for the scrolled graph while a pinch-zoom's scroll is catching up (see PitchAxisZoom)
     scrollCorrectionPx: () -> Float = { 0f },
-    colors: GraphColors = GraphColors.Default
+    colors: GraphColors = GraphColors.Default,
+    // Exercise notes to sing, drawn as bars under the live curve
+    targets: List<TargetEvent> = emptyList(),
+    // Share of the time window shown ahead of "now", so upcoming targets scroll into view
+    lookaheadFraction: Float = 0f
 ) {
     Card(modifier = modifier, shape = RoundedCornerShape(12.dp)) {
         Box(
@@ -212,7 +222,9 @@ fun PitchGraphCard(
                     showBars = showBars,
                     showWhiteDots = showWhiteDots, // forwarded
                     scrollCorrectionPx = scrollCorrectionPx,
-                    colors = colors
+                    colors = colors,
+                    targets = targets,
+                    lookaheadFraction = lookaheadFraction
                 )
             } else {
                 PitchGraphVertical(
@@ -233,7 +245,9 @@ fun PitchGraphCard(
                     showBars = showBars,
                     showWhiteDots = showWhiteDots, // forwarded
                     scrollCorrectionPx = scrollCorrectionPx,
-                    colors = colors
+                    colors = colors,
+                    targets = targets,
+                    lookaheadFraction = lookaheadFraction
                 )
             }
         }
@@ -264,15 +278,19 @@ fun PitchGraphHorizontal(
     showBars: Boolean = false,
     showWhiteDots: Boolean = true,
     scrollCorrectionPx: () -> Float = { 0f },
-    colors: GraphColors = GraphColors.Default
+    colors: GraphColors = GraphColors.Default,
+    targets: List<TargetEvent> = emptyList(),
+    lookaheadFraction: Float = 0f
 ) {
     val density = LocalDensity.current
 
     val windowMsEffective = remember(windowMs, bpm) {
         (windowMs.toFloat() * (60f / bpm)).toLong()
     }
+    // How much of the window lies in the past; "now" sits at that fraction down the graph
+    val pastFraction = 1f - lookaheadFraction.coerceIn(0f, MAX_LOOKAHEAD_FRACTION)
 
-    val buffer = rememberTraceBuffer(engine, paused, windowMsEffective)
+    val buffer = rememberTraceBuffer(engine, paused, windowMsEffective, keepAlive = targets.isNotEmpty())
     val samples = buffer.samples
     val stableMarkers = buffer.markers
     val paints = rememberGraphPaints(colors.noteLabels)
@@ -428,11 +446,33 @@ fun PitchGraphHorizontal(
                     strokeWidth = 1f
                 )
 
-                if (samples.isEmpty()) return@Canvas
-
                 // Graph time, which stands still while frozen
                 val nowTime = buffer.now()
-                val windowStart = nowTime - windowMsEffective
+                val windowStart = nowTime - (windowMsEffective * pastFraction).toLong()
+
+                if (targets.isNotEmpty()) {
+                    drawExerciseTargets(
+                        targets = targets,
+                        nowMs = nowTime,
+                        windowStartMs = windowStart,
+                        windowEndMs = windowStart + windowMsEffective,
+                        timeToPx = { t -> padTop + innerH * ((t - windowStart).toFloat() / windowMsEffective) },
+                        pitchToPx = { m -> xForMidiFloat(m.toFloat()) },
+                        thicknessPx = whiteKeyWidthPx * TARGET_THICKNESS_FRACTION,
+                        timeRunsDown = true
+                    )
+                }
+                if (pastFraction < 1f) {
+                    val nowY = padTop + innerH * pastFraction
+                    drawLine(
+                        color = GraphStyle.nowLine,
+                        start = Offset(padLeft, nowY),
+                        end = Offset(padLeft + innerW, nowY),
+                        strokeWidth = 2f
+                    )
+                }
+
+                if (samples.isEmpty()) return@Canvas
 
                 // build path (time -> y, midi -> x)
                 val bluePath = Path()
@@ -644,9 +684,9 @@ fun PitchGraphHorizontal(
                     val targetIndex = (nearest - minMidi).coerceIn(0, midiX.lastIndex)
                     val x = midiX[targetIndex]
 
-                    // FIX 3: Lock the Y position to the physical bottom of the graph to stop the shaking
-                    // (padTop + innerH represents the newest/bottom edge of your horizontal scrolling view)
-                    val y = padTop + innerH
+                    // FIX 3: Lock the Y position to the "now" edge of the graph to stop the shaking
+                    // (the bottom edge, or the now line when upcoming targets are shown below it)
+                    val y = padTop + innerH * pastFraction
 
                     if (showNoteLabels) {
                         drawIntoCanvas { canvas ->
@@ -690,15 +730,19 @@ fun PitchGraphVertical(
     showBars: Boolean = false,
     showWhiteDots: Boolean = true, // <-- NEW
     scrollCorrectionPx: () -> Float = { 0f },
-    colors: GraphColors = GraphColors.Default
+    colors: GraphColors = GraphColors.Default,
+    targets: List<TargetEvent> = emptyList(),
+    lookaheadFraction: Float = 0f
 ) {
     val density = LocalDensity.current
 
     val windowMsEffective = remember(windowMs, bpm) {
         (windowMs.toFloat() * (60f / bpm)).toLong()
     }
+    // How much of the window lies in the past; "now" sits at that fraction across the graph
+    val pastFraction = 1f - lookaheadFraction.coerceIn(0f, MAX_LOOKAHEAD_FRACTION)
 
-    val buffer = rememberTraceBuffer(engine, paused, windowMsEffective)
+    val buffer = rememberTraceBuffer(engine, paused, windowMsEffective, keepAlive = targets.isNotEmpty())
     val samples = buffer.samples
     val stableMarkers = buffer.markers
     val paints = rememberGraphPaints(colors.noteLabels)
@@ -842,17 +886,39 @@ fun PitchGraphVertical(
                     }
                 }
 
-                if (samples.isEmpty()) return@Canvas
-
                 // Graph time, which stands still while frozen
                 val nowTime = buffer.now()
-                val windowStart = nowTime - windowMsEffective
+                val windowStart = nowTime - (windowMsEffective * pastFraction).toLong()
 
                 // time -> x
                 fun xForTime(tMs: Long): Float {
                     val rel = (tMs - windowStart).toFloat() / windowMsEffective.toFloat()
                     return padLeft + rel * innerW
                 }
+
+                if (targets.isNotEmpty()) {
+                    drawExerciseTargets(
+                        targets = targets,
+                        nowMs = nowTime,
+                        windowStartMs = windowStart,
+                        windowEndMs = windowStart + windowMsEffective,
+                        timeToPx = ::xForTime,
+                        pitchToPx = { m -> yForMidiFloat(m.toFloat()) },
+                        thicknessPx = keyThicknessPx * TARGET_THICKNESS_FRACTION,
+                        timeRunsDown = false
+                    )
+                }
+                if (pastFraction < 1f) {
+                    val nowX = padLeft + innerW * pastFraction
+                    drawLine(
+                        color = GraphStyle.nowLine,
+                        start = Offset(nowX, padTop),
+                        end = Offset(nowX, padTop + innerH),
+                        strokeWidth = 2f
+                    )
+                }
+
+                if (samples.isEmpty()) return@Canvas
 
                 // build path
                 val bluePath = Path()
@@ -1058,7 +1124,8 @@ fun PitchGraphVertical(
                         val y = midiY[targetIndex]
                         val noteName = midiToDisplayName(nearest)
                         val textWidth = paints.label.measureText(noteName)
-                        val rightEdge = padLeft + innerW
+                        // The "now" edge: the right edge, or the now line when targets are shown ahead
+                        val rightEdge = padLeft + innerW * pastFraction
                         var labelX = rightEdge - textWidth - 8f
                         labelX = labelX.coerceAtLeast(padLeft + 6f)
                         val labelY = y - 8f // Positioned slightly above the snapped horizontal line

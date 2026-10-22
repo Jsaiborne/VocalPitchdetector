@@ -51,6 +51,13 @@ internal object GraphStyle {
     val bar = Color(0xCCEF9A9A)
     val pitchGrid = Color(0x2233AAFF)
     val timeGrid = Color(0x22FFFFFF)
+
+    // Exercise targets: notes the app plays are outlined, notes to sing are filled
+    val targetGuide = Color(0x88FFFFFF)
+    val targetUpcoming = Color(0x5581C784)
+    val targetActive = Color(0xCC81C784)
+    val targetPast = Color(0x2881C784)
+    val nowLine = Color(0x66FFFFFF)
 }
 
 /** Text paints shared by the pitch graphs. */
