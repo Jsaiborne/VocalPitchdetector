@@ -70,7 +70,7 @@ fun ExerciseScreen(
     var exercise by remember { mutableStateOf<Exercise?>(null) }
     var settings by remember { mutableStateOf(readExerciseSettings(prefs, savedRange)) }
     var bpm by remember { mutableFloatStateOf(100f) }
-    var result by remember { mutableStateOf<ExerciseResult?>(null) }
+    var outcome by remember { mutableStateOf<RunOutcome?>(null) }
     var newBest by remember { mutableStateOf(false) }
     // Bumped on every start, so "Sing it again" builds a fresh schedule
     var runKey by remember { mutableIntStateOf(0) }
@@ -137,17 +137,20 @@ fun ExerciseScreen(
                         graphColors = graphColors,
                         onStop = { step = ExerciseStep.SETUP },
                         onFinished = { finished ->
-                            result = finished
-                            newBest = finished.frames > 0 && saveBestScore(prefs, current.id, finished.percent)
+                            outcome = finished
+                            // A run stopped early could score high on a single repetition, so only full
+                            // runs set a best
+                            newBest = finished.completed && finished.result.frames > 0 &&
+                                saveBestScore(prefs, current.id, finished.result.percent)
                             step = ExerciseStep.RESULT
                         }
                     )
                 }
                 else -> {
                     ExerciseHeader(title = current.name, subtitle = "Your result", onClose = onExit)
-                    result?.let {
+                    outcome?.let {
                         ExerciseResultView(
-                            result = it,
+                            outcome = it,
                             newBest = newBest,
                             onReplay = {
                                 runKey++

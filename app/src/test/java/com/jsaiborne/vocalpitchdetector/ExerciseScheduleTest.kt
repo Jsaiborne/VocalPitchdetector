@@ -124,6 +124,58 @@ class ExerciseScheduleTest {
     }
 
     @Test
+    fun restartingARepetitionMovesItAndEverythingAfterIt() {
+        val s = buildSchedule(twoNotes, 60, 65, Direction.UP, GuideMode.CALL_AND_RESPONSE, startMs = 0L)
+        // Paused during the second repetition's demonstration, resumed so it starts again at 20 s
+        val restarted = s.restartFrom(1, 20_000L)
+        assertEquals(s.events.filter { it.repIndex == 0 }, restarted.events.filter { it.repIndex == 0 })
+        assertEquals(
+            listOf(20_000L, 21_000L, 23_000L, 24_000L),
+            restarted.events.filter { it.repIndex == 1 }.map { it.startMs }
+        )
+        assertEquals(RepSpan(1, 61, 20_000, 23_000, 25_000), restarted.reps[1])
+        assertEquals(s.reps[0], restarted.reps[0])
+        assertEquals(25_000L, restarted.endMs)
+    }
+
+    @Test
+    fun restartingTheFirstRepetitionRepeatsTheCountIn() {
+        val s = buildSchedule(twoNotes, 60, 65, Direction.UP, GuideMode.SING_ALONG, startMs = 0L)
+        val restarted = s.restartFrom(0, 10_000L)
+        // The count-in comes two beats before the repetition, as it did at the start
+        assertEquals(TargetEvent(8_000, 9_000, 60, 0, TargetKind.CUE), restarted.events.first())
+        assertEquals(10_000L, restarted.reps[0].singStartMs)
+    }
+
+    @Test
+    fun truncatingKeepsOnlyWhatHadHappened() {
+        val s = buildSchedule(twoNotes, 60, 65, Direction.UP, GuideMode.CALL_AND_RESPONSE, startMs = 0L)
+        // Stopped halfway through the second note of the first sung repetition
+        val cut = s.truncatedAt(6_500L)
+        assertEquals(listOf(RepSpan(0, 60, 2000, 5000, 6500)), cut.reps)
+        assertEquals(TargetEvent(6000, 6500, 64, 0, TargetKind.SING), cut.events.last())
+        assertEquals(6_500L, cut.endMs)
+        // Stopped during the demonstration: nothing sung yet, so no repetition to score
+        assertTrue(s.truncatedAt(3_000L).reps.isEmpty())
+    }
+
+    @Test
+    fun clockStandsStillWhilePaused() {
+        var wall = 1_000L
+        val clock = ExerciseClock { wall }
+        wall = 2_000L
+        assertEquals(2_000L, clock.now())
+        clock.pause()
+        wall = 5_000L
+        assertEquals(2_000L, clock.now())
+        assertTrue(clock.isPaused)
+        clock.resume()
+        wall = 6_000L
+        // Carries on from where it stopped, three seconds of pause later
+        assertEquals(3_000L, clock.now())
+    }
+
+    @Test
     fun builtInExercisesAreUsable() {
         assertEquals(BUILT_IN_EXERCISES.size, BUILT_IN_EXERCISES.map { it.id }.toSet().size)
         for (exercise in BUILT_IN_EXERCISES) {

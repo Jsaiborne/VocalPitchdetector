@@ -12,15 +12,19 @@ import kotlinx.coroutines.withContext
 /** A pitch older than this is out of date (the engine only reports when something changes). */
 private const val STALE_PITCH_MS = 400L
 
+/** A note due this recently is still played when playback (re)starts; anything older was missed. */
+private const val LATE_NOTE_MS = 50L
+
 /**
- * Plays the audible notes of [schedule] (guide notes and cues) at their scheduled times. Each wait
- * is measured against the wall clock rather than summed, so playback never drifts from the
- * targets on the graph. Cancel the calling coroutine to stop.
+ * Plays the audible notes of [schedule] (guide notes and cues) that are still to come, at their
+ * scheduled times on [clock]. Each wait is measured against the clock rather than summed, so
+ * playback never drifts from the targets on the graph. Cancel the calling coroutine to stop.
  */
-internal suspend fun playSchedule(schedule: ExerciseSchedule) = withContext(Dispatchers.Default) {
-    val audible = schedule.events.filter { it.kind.audible }.sortedBy { it.startMs }
+internal suspend fun playSchedule(schedule: ExerciseSchedule, clock: ExerciseClock) = withContext(Dispatchers.Default) {
+    val from = clock.now() - LATE_NOTE_MS
+    val audible = schedule.events.filter { it.kind.audible && it.startMs >= from }.sortedBy { it.startMs }
     for (event in audible) {
-        val waitMs = event.startMs - System.currentTimeMillis()
+        val waitMs = event.startMs - clock.now()
         if (waitMs > 0) delay(waitMs)
         playGuideNote(event.midi, (event.endMs - event.startMs).toInt())
     }
@@ -37,23 +41,28 @@ private fun playGuideNote(midi: Int, durationMs: Int) {
 }
 
 /**
- * Samples the sung pitch every [SCORE_FRAME_MS] until the schedule ends. Sampling on a clock
- * (instead of collecting the engine's updates) is what lets silence count against the score: the
- * engine reports silence only once.
+ * Samples the sung pitch into [frames] every [SCORE_FRAME_MS] until the schedule ends on [clock].
+ * Sampling on a clock (instead of collecting the engine's updates) is what lets silence count
+ * against the score: the engine reports silence only once. Frames are added to the caller's list
+ * so they survive a pause, which cancels this and starts it again.
  */
-internal suspend fun recordFrames(engine: PitchEngine, schedule: ExerciseSchedule): List<PitchFrame> {
-    val frames = ArrayList<PitchFrame>()
-    var now = System.currentTimeMillis()
+internal suspend fun recordFrames(
+    engine: PitchEngine,
+    schedule: ExerciseSchedule,
+    clock: ExerciseClock,
+    frames: MutableList<PitchFrame>
+) {
+    var now = clock.now()
     while (now < schedule.endMs) {
         if (now >= schedule.startMs) {
             val state = engine.state.value
-            val fresh = now - state.timestampMs <= STALE_PITCH_MS
+            // The engine stamps its updates with wall-clock time
+            val fresh = System.currentTimeMillis() - state.timestampMs <= STALE_PITCH_MS
             frames += PitchFrame(now, if (fresh) state.frequency else -1f)
         }
         delay(SCORE_FRAME_MS)
-        now = System.currentTimeMillis()
+        now = clock.now()
     }
-    return frames
 }
 
 /**

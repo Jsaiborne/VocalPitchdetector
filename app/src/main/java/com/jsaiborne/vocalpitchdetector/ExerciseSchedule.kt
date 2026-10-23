@@ -80,6 +80,65 @@ data class ExerciseSchedule(
 
     /** The repetition in progress at [tMs], or the next one during a pause; null once all are done. */
     fun repAt(tMs: Long): RepSpan? = reps.firstOrNull { it.singEndMs > tMs }
+
+    /**
+     * Moves repetition [repIndex] and everything after it so that it starts again at [startMs], cues
+     * and count-in included. Earlier repetitions stay where they were. Used to resume after a pause.
+     */
+    fun restartFrom(repIndex: Int, startMs: Long): ExerciseSchedule {
+        val rep = reps.getOrNull(repIndex) ?: return this
+        val shift = startMs - (rep.listenStartMs ?: rep.singStartMs)
+        return copy(
+            events = events.map {
+                if (it.repIndex < repIndex) it else it.copy(startMs = it.startMs + shift, endMs = it.endMs + shift)
+            },
+            reps = reps.map {
+                if (it.index < repIndex) {
+                    it
+                } else {
+                    it.copy(
+                        listenStartMs = it.listenStartMs?.plus(shift),
+                        singStartMs = it.singStartMs + shift,
+                        singEndMs = it.singEndMs + shift
+                    )
+                }
+            },
+            endMs = endMs + shift
+        )
+    }
+
+    /** Only what had happened by [tMs], for scoring an exercise stopped early. */
+    fun truncatedAt(tMs: Long): ExerciseSchedule = copy(
+        events = events.filter { it.startMs < tMs }.map { it.copy(endMs = minOf(it.endMs, tMs)) },
+        reps = reps.filter { it.singStartMs < tMs }.map { it.copy(singEndMs = minOf(it.singEndMs, tMs)) },
+        endMs = minOf(endMs, tMs)
+    )
+}
+
+/**
+ * The exercise's time: wall-clock time minus the time spent paused, so the schedule simply waits
+ * while paused. Matches the pitch graph's own clock, which freezes the same way.
+ */
+internal class ExerciseClock(private val wallClock: () -> Long = System::currentTimeMillis) {
+    @Volatile
+    private var pausedAtMs: Long? = null
+
+    @Volatile
+    private var pausedTotalMs = 0L
+
+    val isPaused: Boolean get() = pausedAtMs != null
+
+    fun now(): Long = (pausedAtMs ?: wallClock()) - pausedTotalMs
+
+    fun pause() {
+        if (pausedAtMs == null) pausedAtMs = wallClock()
+    }
+
+    fun resume() {
+        val pausedAt = pausedAtMs ?: return
+        pausedTotalMs += wallClock() - pausedAt
+        pausedAtMs = null
+    }
 }
 
 /**
