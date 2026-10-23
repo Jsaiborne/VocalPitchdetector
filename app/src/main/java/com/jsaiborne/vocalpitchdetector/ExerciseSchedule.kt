@@ -81,32 +81,6 @@ data class ExerciseSchedule(
     /** The repetition in progress at [tMs], or the next one during a pause; null once all are done. */
     fun repAt(tMs: Long): RepSpan? = reps.firstOrNull { it.singEndMs > tMs }
 
-    /**
-     * Moves repetition [repIndex] and everything after it so that it starts again at [startMs], cues
-     * and count-in included. Earlier repetitions stay where they were. Used to resume after a pause.
-     */
-    fun restartFrom(repIndex: Int, startMs: Long): ExerciseSchedule {
-        val rep = reps.getOrNull(repIndex) ?: return this
-        val shift = startMs - (rep.listenStartMs ?: rep.singStartMs)
-        return copy(
-            events = events.map {
-                if (it.repIndex < repIndex) it else it.copy(startMs = it.startMs + shift, endMs = it.endMs + shift)
-            },
-            reps = reps.map {
-                if (it.index < repIndex) {
-                    it
-                } else {
-                    it.copy(
-                        listenStartMs = it.listenStartMs?.plus(shift),
-                        singStartMs = it.singStartMs + shift,
-                        singEndMs = it.singEndMs + shift
-                    )
-                }
-            },
-            endMs = endMs + shift
-        )
-    }
-
     /** Only what had happened by [tMs], for scoring an exercise stopped early. */
     fun truncatedAt(tMs: Long): ExerciseSchedule = copy(
         events = events.filter { it.startMs < tMs }.map { it.copy(endMs = minOf(it.endMs, tMs)) },
@@ -142,6 +116,30 @@ internal class ExerciseClock(private val wallClock: () -> Long = System::current
 }
 
 /**
+ * One repetition to sing: its root, and which key of the exercise it is. Repeats of a key, added
+ * with "repeat this key", share its [keyIndex].
+ */
+data class RepPlan(val rootMidi: Int, val keyIndex: Int, val isRepeat: Boolean = false)
+
+internal fun initialPlan(roots: List<Int>): List<RepPlan> = roots.mapIndexed { i, root -> RepPlan(root, i) }
+
+/** Adds another go at repetition [index] straight after it, unless one is already lined up. */
+internal fun List<RepPlan>.withRepeatAfter(index: Int): List<RepPlan> {
+    val current = getOrNull(index) ?: return this
+    val next = getOrNull(index + 1)
+    if (next != null && next.isRepeat && next.keyIndex == current.keyIndex) return this
+    return take(index + 1) + current.copy(isRepeat = true) + drop(index + 1)
+}
+
+/** Takes back the repeat lined up after repetition [index], if there is one, so the exercise moves on. */
+internal fun List<RepPlan>.withoutRepeatAfter(index: Int): List<RepPlan> {
+    val current = getOrNull(index) ?: return this
+    val next = getOrNull(index + 1)
+    if (next == null || !next.isRepeat || next.keyIndex != current.keyIndex) return this
+    return take(index + 1) + drop(index + 2)
+}
+
+/**
  * The roots the pattern is sung from, one semitone apart, so that every note stays inside
  * [lowMidi]..[highMidi]. When the range is narrower than the pattern, it is sung once from the root
  * that centres it in the range.
@@ -163,7 +161,7 @@ internal fun exerciseRoots(exercise: Exercise, lowMidi: Int, highMidi: Int, dire
 
 /**
  * Lays the exercise out on the clock, starting at [startMs]: a count-in, then every repetition
- * with a breath between them.
+ * across the range with a breath between them.
  */
 internal fun buildSchedule(
     exercise: Exercise,
@@ -172,8 +170,21 @@ internal fun buildSchedule(
     direction: Direction,
     mode: GuideMode,
     startMs: Long
+): ExerciseSchedule =
+    buildScheduleForRoots(exercise, exerciseRoots(exercise, lowMidi, highMidi, direction), mode, startMs)
+
+/**
+ * Lays out one repetition per entry of [roots], in order, starting at [startMs]. The timing only
+ * depends on what comes before, so adding or removing a repetition later on never moves the
+ * earlier ones: that is how "repeat this key" works.
+ */
+internal fun buildScheduleForRoots(
+    exercise: Exercise,
+    roots: List<Int>,
+    mode: GuideMode,
+    startMs: Long
 ): ExerciseSchedule {
-    val roots = exerciseRoots(exercise, lowMidi, highMidi, direction)
+    if (roots.isEmpty()) return ExerciseSchedule(emptyList(), emptyList(), startMs, startMs)
     val beatMs = exercise.beatMs.toDouble()
     val events = mutableListOf<TargetEvent>()
     val reps = mutableListOf<RepSpan>()

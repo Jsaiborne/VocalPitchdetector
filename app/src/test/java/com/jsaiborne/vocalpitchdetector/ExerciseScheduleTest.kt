@@ -124,27 +124,41 @@ class ExerciseScheduleTest {
     }
 
     @Test
-    fun restartingARepetitionMovesItAndEverythingAfterIt() {
-        val s = buildSchedule(twoNotes, 60, 65, Direction.UP, GuideMode.CALL_AND_RESPONSE, startMs = 0L)
-        // Paused during the second repetition's demonstration, resumed so it starts again at 20 s
-        val restarted = s.restartFrom(1, 20_000L)
-        assertEquals(s.events.filter { it.repIndex == 0 }, restarted.events.filter { it.repIndex == 0 })
-        assertEquals(
-            listOf(20_000L, 21_000L, 23_000L, 24_000L),
-            restarted.events.filter { it.repIndex == 1 }.map { it.startMs }
-        )
-        assertEquals(RepSpan(1, 61, 20_000, 23_000, 25_000), restarted.reps[1])
-        assertEquals(s.reps[0], restarted.reps[0])
-        assertEquals(25_000L, restarted.endMs)
+    fun repeatingAKeyLinesUpOneMoreGoRightAfterIt() {
+        val plan = initialPlan(listOf(48, 49, 50))
+        val repeated = plan.withRepeatAfter(1)
+        assertEquals(listOf(48, 49, 49, 50), repeated.map { it.rootMidi })
+        assertEquals(RepPlan(49, 1, isRepeat = true), repeated[2])
+        // Asking again while one is already lined up changes nothing
+        assertEquals(repeated, repeated.withRepeatAfter(1))
+        // Once the repeat is being sung, the next one goes after it
+        assertEquals(listOf(48, 49, 49, 49, 50), repeated.withRepeatAfter(2).map { it.rootMidi })
     }
 
     @Test
-    fun restartingTheFirstRepetitionRepeatsTheCountIn() {
-        val s = buildSchedule(twoNotes, 60, 65, Direction.UP, GuideMode.SING_ALONG, startMs = 0L)
-        val restarted = s.restartFrom(0, 10_000L)
-        // The count-in comes two beats before the repetition, as it did at the start
-        assertEquals(TargetEvent(8_000, 9_000, 60, 0, TargetKind.CUE), restarted.events.first())
-        assertEquals(10_000L, restarted.reps[0].singStartMs)
+    fun stoppingTheRepeatTakesBackOnlyTheGoLinedUp() {
+        val repeated = initialPlan(listOf(48, 49, 50)).withRepeatAfter(1).withRepeatAfter(2)
+        // Singing the second go at key 2: the third go is dropped, the second stays
+        assertEquals(listOf(48, 49, 49, 50), repeated.withoutRepeatAfter(2).map { it.rootMidi })
+        // Nothing lined up after an ordinary key: unchanged
+        val plain = initialPlan(listOf(48, 49, 50))
+        assertEquals(plain, plain.withoutRepeatAfter(0))
+    }
+
+    @Test
+    fun addingARepetitionNeverMovesTheEarlierOnes() {
+        val plan = initialPlan(listOf(60, 61, 62))
+        val before = buildScheduleForRoots(twoNotes, plan.map { it.rootMidi }, GuideMode.SING_ALONG, startMs = 0L)
+        val after = buildScheduleForRoots(
+            twoNotes,
+            plan.withRepeatAfter(1).map { it.rootMidi },
+            GuideMode.SING_ALONG,
+            startMs = 0L
+        )
+        assertEquals(before.reps.take(2), after.reps.take(2))
+        assertEquals(before.events.filter { it.repIndex <= 1 }, after.events.filter { it.repIndex <= 1 })
+        assertEquals(61, after.reps[2].rootMidi)
+        assertTrue(after.endMs > before.endMs)
     }
 
     @Test

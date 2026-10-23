@@ -7,6 +7,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -21,10 +23,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -66,8 +70,25 @@ private const val EXERCISE_LOOKAHEAD = 0.4f
 private const val UI_TICK_MS = 50L
 private const val LANDSCAPE_EXERCISE_PIANO_WIDTH_DP = 96
 
-/** How a run ended: its score, and whether every repetition was sung or it was stopped early. */
-internal data class RunOutcome(val result: ExerciseResult, val totalReps: Int, val completed: Boolean)
+/**
+ * How a run ended: its score, how far through the keys it got ([keysReached] of [totalKeys]), and
+ * whether it ran to the end or was stopped early.
+ */
+internal data class RunOutcome(
+    val result: ExerciseResult,
+    val keysReached: Int,
+    val totalKeys: Int,
+    val completed: Boolean
+)
+
+/** The run's buttons and their state, handed to the status card as one. */
+private data class RunControls(
+    val paused: Boolean,
+    val repeating: Boolean,
+    val onTogglePause: () -> Unit,
+    val onToggleRepeat: () -> Unit,
+    val onStop: () -> Unit
+)
 
 /**
  * Plays the exercise and shows the live pitch over its target bars. Reports the score when the
@@ -89,21 +110,19 @@ internal fun ExerciseRun(
 ) {
     // Everything runs on this clock, which stands still while paused, like the graph's own clock
     val clock = remember(runKey) { ExerciseClock() }
-    var schedule by remember(runKey) {
-        mutableStateOf(
-            buildSchedule(
-                exercise = exercise,
-                lowMidi = settings.lowMidi,
-                highMidi = settings.highMidi,
-                direction = settings.direction,
-                mode = settings.mode,
-                startMs = clock.now() + RUN_LEAD_IN_MS
-            )
-        )
+    val startMs = remember(runKey) { clock.now() + RUN_LEAD_IN_MS }
+    val keyRoots = remember(runKey) {
+        exerciseRoots(exercise, settings.lowMidi, settings.highMidi, settings.direction)
     }
-    // Kept across pauses, which cancel and restart the playback and sampling
+    // The repetitions to sing; "repeat this key" adds to it as the run goes
+    var plan by remember(runKey) { mutableStateOf(initialPlan(keyRoots)) }
+    val schedule = remember(plan, startMs) {
+        buildScheduleForRoots(exercise, plan.map { it.rootMidi }, settings.mode, startMs)
+    }
+    // Kept across pauses and plan changes, which cancel and restart the playback and sampling
     val frames = remember(runKey) { mutableListOf<PitchFrame>() }
     var paused by remember(runKey) { mutableStateOf(false) }
+    var repeating by remember(runKey) { mutableStateOf(false) }
     val latestOnFinished by rememberUpdatedState(onFinished)
 
     // Playback and scoring run side by side; pausing or leaving the screen cancels both
@@ -112,7 +131,7 @@ internal fun ExerciseRun(
         launch { playSchedule(schedule, clock) }
         recordFrames(engine, schedule, clock, frames)
         val result = scoreFrames(frames, schedule, settings.toleranceCents)
-        latestOnFinished(RunOutcome(result, schedule.reps.size, completed = true))
+        latestOnFinished(RunOutcome(result, keyRoots.size, keyRoots.size, completed = true))
     }
     DisposableEffect(Unit) {
         onDispose { ToneGenerator.stop() }
@@ -122,34 +141,6 @@ internal fun ExerciseRun(
     DisposableEffect(view) {
         view.keepScreenOn = true
         onDispose { view.keepScreenOn = false }
-    }
-
-    val togglePause: () -> Unit = {
-        if (!paused) {
-            clock.pause()
-            ToneGenerator.stop()
-            paused = true
-        } else {
-            clock.resume()
-            val resumeAt = clock.now()
-            // The interrupted repetition starts again after a short count-in, so the singer doesn't
-            // come back in mid-pattern; what was sung of it is dropped
-            schedule.repAt(resumeAt)?.let { rep ->
-                val repStart = rep.listenStartMs ?: rep.singStartMs
-                frames.removeAll { it.tMs >= repStart }
-                schedule = schedule.restartFrom(rep.index, resumeAt + (COUNT_IN_BEATS * exercise.beatMs).toLong())
-            }
-            paused = false
-        }
-    }
-    val stop: () -> Unit = {
-        // Score whatever has been sung so far, the current repetition included
-        val result = scoreFrames(frames, schedule.truncatedAt(clock.now()), settings.toleranceCents)
-        if (result.frames == 0) {
-            onStop()
-        } else {
-            latestOnFinished(RunOutcome(result, schedule.reps.size, completed = false))
-        }
     }
 
     var now by remember { mutableLongStateOf(clock.now()) }
@@ -162,6 +153,45 @@ internal fun ExerciseRun(
     // Derived so the screen only recomposes when the phase or repetition actually changes
     val phase by remember(schedule) { derivedStateOf { schedule.phaseAt(now) } }
     val rep by remember(schedule) { derivedStateOf { schedule.repAt(now) } }
+    val repIndex = rep?.index
+
+    // While repeating, there is always another go at the current repetition lined up after it
+    LaunchedEffect(repeating, repIndex) {
+        if (repeating && repIndex != null) plan = plan.withRepeatAfter(repIndex)
+    }
+
+    val controls = RunControls(
+        paused = paused,
+        repeating = repeating,
+        onTogglePause = {
+            // Freezes on the spot, piano notes included, and carries on from the same moment
+            if (paused) {
+                clock.resume()
+                SamplePlayer.resumeAll()
+            } else {
+                clock.pause()
+                SamplePlayer.pauseAll()
+                ToneGenerator.stop()
+            }
+            paused = !paused
+        },
+        onToggleRepeat = {
+            // Turning it off takes back the go lined up next, so the exercise moves on after this one
+            if (repeating && repIndex != null) plan = plan.withoutRepeatAfter(repIndex)
+            repeating = !repeating
+        },
+        onStop = {
+            // Score whatever has been sung so far, the current repetition included
+            val sung = schedule.truncatedAt(clock.now())
+            val result = scoreFrames(frames, sung, settings.toleranceCents)
+            val keysReached = plan.getOrNull(sung.reps.lastIndex)?.let { it.keyIndex + 1 } ?: 0
+            if (result.frames == 0) {
+                onStop()
+            } else {
+                latestOnFinished(RunOutcome(result, keysReached, keyRoots.size, completed = false))
+            }
+        }
+    )
 
     val pitch by engine.state.collectAsState()
     val sungMidi = if (pitch.frequency > 0f) freqToMidi(pitch.frequency.toDouble()).roundToInt() else null
@@ -209,16 +239,22 @@ internal fun ExerciseRun(
         )
     }
 
+    val current = repIndex?.let { plan.getOrNull(it) }
+    // Which go at this key it is: 1 for the first time through, then counting the repeats
+    val attempt = if (current == null || repIndex == null) {
+        0
+    } else {
+        plan.take(repIndex + 1).count { it.keyIndex == current.keyIndex }
+    }
     Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         RunStatus(
             exercise = exercise,
             phase = phase,
             mode = settings.mode,
-            rep = rep,
-            repCount = schedule.reps.size,
-            paused = paused,
-            onTogglePause = togglePause,
-            onStop = stop
+            current = current,
+            attempt = attempt,
+            keyCount = keyRoots.size,
+            controls = controls
         )
         if (isLandscape) {
             Row(modifier = Modifier.fillMaxWidth().weight(1f)) {
@@ -232,24 +268,23 @@ internal fun ExerciseRun(
     }
 }
 
-/** What to do right now ("Listen…", "Sing!"), which repetition this is, and pause/stop buttons. */
+/** What to do right now ("Listen…", "Sing!"), which key this is, and the pause, repeat and stop buttons. */
+@OptIn(ExperimentalLayoutApi::class)
 @Suppress("LongParameterList", "LongMethod")
 @Composable
 private fun RunStatus(
     exercise: Exercise,
     phase: ExercisePhase,
     mode: GuideMode,
-    rep: RepSpan?,
-    repCount: Int,
-    paused: Boolean,
-    onTogglePause: () -> Unit,
-    onStop: () -> Unit
+    current: RepPlan?,
+    attempt: Int,
+    keyCount: Int,
+    controls: RunControls
 ) {
-    // Between repetitions, rep is already the next one
-    val nextHint = rep?.let { "Next one starts on ${midiToDisplayName(it.rootMidi)}" }.orEmpty()
-    val pausedHint = if (rep != null) "Resume to sing this repetition from the top" else ""
+    // Between repetitions, current is already the next one
+    val nextHint = current?.let { "Next one starts on ${midiToDisplayName(it.rootMidi)}" }.orEmpty()
     val (headline, hint) = when {
-        paused -> "Paused" to pausedHint
+        controls.paused -> "Paused" to "Resume to carry on from here"
         phase == ExercisePhase.COUNT_IN -> "Get ready…" to "Here's your starting note"
         phase == ExercisePhase.LISTEN -> "Listen…" to "Then sing it back"
         phase == ExercisePhase.SING && mode == GuideMode.SING_ALONG -> "Sing along!" to "Follow the green bars"
@@ -257,7 +292,8 @@ private fun RunStatus(
         phase == ExercisePhase.BREATH -> "Breathe" to nextHint
         else -> "Nice work!" to "Working out your score…"
     }
-    val singing = phase == ExercisePhase.SING && !paused
+    val singing = phase == ExercisePhase.SING && !controls.paused
+    val running = phase != ExercisePhase.DONE
     Card(
         colors = CardDefaults.cardColors(
             containerColor = if (singing) {
@@ -268,32 +304,42 @@ private fun RunStatus(
         ),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(headline, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                Text(hint, style = MaterialTheme.typography.bodySmall)
-                Text(
-                    buildString {
-                        append(exercise.name)
-                        if (rep != null) {
-                            append(" · repetition ${rep.index + 1} of $repCount")
-                            append(" · from ${midiToDisplayName(rep.rootMidi)}")
-                        }
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                FilledTonalButton(onClick = onTogglePause, enabled = phase != ExercisePhase.DONE) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(headline, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text(hint, style = MaterialTheme.typography.bodySmall)
+            Text(
+                buildString {
+                    append(exercise.name)
+                    if (current != null) {
+                        append(" · key ${current.keyIndex + 1} of $keyCount")
+                        append(" · from ${midiToDisplayName(current.rootMidi)}")
+                        if (attempt > 1) append(" · go $attempt")
+                    }
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            // Wraps onto a second line on narrow screens
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilledTonalButton(onClick = controls.onTogglePause, enabled = running) {
                     Icon(
-                        if (paused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
+                        if (controls.paused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
                         contentDescription = null,
                         modifier = Modifier.size(18.dp)
                     )
-                    Text(if (paused) " Resume" else " Pause")
+                    Text(if (controls.paused) " Resume" else " Pause")
                 }
-                OutlinedButton(onClick = onStop) { Text("Stop") }
+                // Riyaz-style: keep singing the same key until it's switched off again
+                FilterChip(
+                    selected = controls.repeating,
+                    onClick = controls.onToggleRepeat,
+                    enabled = running,
+                    label = { Text(if (controls.repeating) "Repeating key" else "Repeat key") },
+                    leadingIcon = {
+                        Icon(Icons.Filled.RepeatOne, contentDescription = null, modifier = Modifier.size(18.dp))
+                    }
+                )
+                OutlinedButton(onClick = controls.onStop) { Text("Stop") }
             }
         }
     }
@@ -334,7 +380,7 @@ internal fun ExerciseResultView(
             Text("on pitch", style = MaterialTheme.typography.titleMedium)
             if (!outcome.completed) {
                 Text(
-                    "Stopped early, after ${result.reps.size} of ${outcome.totalReps} repetitions. " +
+                    "Stopped early, at key ${outcome.keysReached} of ${outcome.totalKeys}. " +
                         "Only full runs count towards your best.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

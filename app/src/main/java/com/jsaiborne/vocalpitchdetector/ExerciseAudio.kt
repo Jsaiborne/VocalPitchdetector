@@ -12,17 +12,17 @@ import kotlinx.coroutines.withContext
 /** A pitch older than this is out of date (the engine only reports when something changes). */
 private const val STALE_PITCH_MS = 400L
 
-/** A note due this recently is still played when playback (re)starts; anything older was missed. */
-private const val LATE_NOTE_MS = 50L
-
 /**
  * Plays the audible notes of [schedule] (guide notes and cues) that are still to come, at their
  * scheduled times on [clock]. Each wait is measured against the clock rather than summed, so
  * playback never drifts from the targets on the graph. Cancel the calling coroutine to stop.
+ *
+ * Playback restarts whenever the schedule changes or a pause ends; notes already started are left
+ * alone (a paused piano note carries on by itself), so none is played twice.
  */
 internal suspend fun playSchedule(schedule: ExerciseSchedule, clock: ExerciseClock) = withContext(Dispatchers.Default) {
-    val from = clock.now() - LATE_NOTE_MS
-    val audible = schedule.events.filter { it.kind.audible && it.startMs >= from }.sortedBy { it.startMs }
+    val from = clock.now()
+    val audible = schedule.events.filter { it.kind.audible && it.startMs > from }.sortedBy { it.startMs }
     for (event in audible) {
         val waitMs = event.startMs - clock.now()
         if (waitMs > 0) delay(waitMs)

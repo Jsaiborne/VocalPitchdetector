@@ -54,6 +54,16 @@ object SamplePlayer {
         return true // Successfully played
     }
 
+    /** Pauses every note still sounding, mid-note, until [resumeAll]. */
+    fun pauseAll() {
+        soundPool?.autoPause()
+    }
+
+    /** Carries on the notes stopped by [pauseAll] from where they were. */
+    fun resumeAll() {
+        soundPool?.autoResume()
+    }
+
     // This function must exist for MainScreen.kt to compile
     fun release() {
         soundPool?.release()
