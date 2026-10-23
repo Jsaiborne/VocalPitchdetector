@@ -92,7 +92,13 @@ fun ExerciseScreen(
         }
     }
 
-    Column(modifier = modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
+    // A run uses nearly the whole screen so the piano and graph get as much room as possible
+    val running = step == ExerciseStep.RUN
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = if (running) 6.dp else 16.dp, vertical = if (running) 2.dp else 8.dp)
+    ) {
         if (step == ExerciseStep.LIBRARY || current == null) {
             ExerciseHeader(title = "Exercises", subtitle = "Warm-ups that follow your range", onClose = onExit)
             ExerciseLibrary(

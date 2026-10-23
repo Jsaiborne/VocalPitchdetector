@@ -7,8 +7,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,14 +22,16 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RepeatOne
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilledIconToggleButton
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -53,8 +53,12 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import kotlin.math.ceil
 import kotlin.math.roundToInt
@@ -69,6 +73,8 @@ private const val EXERCISE_LOOKAHEAD = 0.4f
 
 private const val UI_TICK_MS = 50L
 private const val LANDSCAPE_EXERCISE_PIANO_WIDTH_DP = 96
+private const val STATUS_BUTTON_DP = 36
+private const val STATUS_ICON_DP = 20
 
 /**
  * How a run ended: its score, how far through the keys it got ([keysReached] of [totalKeys]), and
@@ -246,7 +252,7 @@ internal fun ExerciseRun(
     } else {
         plan.take(repIndex + 1).count { it.keyIndex == current.keyIndex }
     }
-    Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         RunStatus(
             exercise = exercise,
             phase = phase,
@@ -268,8 +274,10 @@ internal fun ExerciseRun(
     }
 }
 
-/** What to do right now ("Listen…", "Sing!"), which key this is, and the pause, repeat and stop buttons. */
-@OptIn(ExperimentalLayoutApi::class)
+/**
+ * One compact row: what to do right now ("Listen…", "Sing!") with a short hint, which key this is,
+ * and icon buttons to pause, repeat the key and stop. Kept slim so the piano and graph get the room.
+ */
 @Suppress("LongParameterList", "LongMethod")
 @Composable
 private fun RunStatus(
@@ -282,18 +290,20 @@ private fun RunStatus(
     controls: RunControls
 ) {
     // Between repetitions, current is already the next one
-    val nextHint = current?.let { "Next one starts on ${midiToDisplayName(it.rootMidi)}" }.orEmpty()
+    val nextHint = current?.let { "next: ${midiToDisplayName(it.rootMidi)}" }.orEmpty()
     val (headline, hint) = when {
-        controls.paused -> "Paused" to "Resume to carry on from here"
-        phase == ExercisePhase.COUNT_IN -> "Get ready…" to "Here's your starting note"
-        phase == ExercisePhase.LISTEN -> "Listen…" to "Then sing it back"
-        phase == ExercisePhase.SING && mode == GuideMode.SING_ALONG -> "Sing along!" to "Follow the green bars"
-        phase == ExercisePhase.SING -> "Your turn: sing!" to "Follow the green bars"
+        controls.paused -> "Paused" to "resume carries on from here"
+        phase == ExercisePhase.COUNT_IN -> "Get ready" to "starting note"
+        phase == ExercisePhase.LISTEN -> "Listen…" to "then sing it back"
+        phase == ExercisePhase.SING && mode == GuideMode.SING_ALONG -> "Sing along!" to "follow the bars"
+        phase == ExercisePhase.SING -> "Sing!" to "follow the bars"
         phase == ExercisePhase.BREATH -> "Breathe" to nextHint
-        else -> "Nice work!" to "Working out your score…"
+        else -> "Nice work!" to "scoring…"
     }
     val singing = phase == ExercisePhase.SING && !controls.paused
     val running = phase != ExercisePhase.DONE
+    val buttonModifier = Modifier.size(STATUS_BUTTON_DP.dp)
+    val iconModifier = Modifier.size(STATUS_ICON_DP.dp)
     Card(
         colors = CardDefaults.cardColors(
             containerColor = if (singing) {
@@ -304,42 +314,58 @@ private fun RunStatus(
         ),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(headline, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            Text(hint, style = MaterialTheme.typography.bodySmall)
-            Text(
-                buildString {
-                    append(exercise.name)
-                    if (current != null) {
-                        append(" · key ${current.keyIndex + 1} of $keyCount")
-                        append(" · from ${midiToDisplayName(current.rootMidi)}")
-                        if (attempt > 1) append(" · go $attempt")
-                    }
-                },
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            // Wraps onto a second line on narrow screens
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilledTonalButton(onClick = controls.onTogglePause, enabled = running) {
-                    Icon(
-                        if (controls.paused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Text(if (controls.paused) " Resume" else " Pause")
-                }
-                // Riyaz-style: keep singing the same key until it's switched off again
-                FilterChip(
-                    selected = controls.repeating,
-                    onClick = controls.onToggleRepeat,
-                    enabled = running,
-                    label = { Text(if (controls.repeating) "Repeating key" else "Repeat key") },
-                    leadingIcon = {
-                        Icon(Icons.Filled.RepeatOne, contentDescription = null, modifier = Modifier.size(18.dp))
-                    }
+        Row(
+            modifier = Modifier.padding(start = 10.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    buildAnnotatedString {
+                        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(headline) }
+                        if (hint.isNotEmpty()) append("  ·  $hint")
+                    },
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
-                OutlinedButton(onClick = controls.onStop) { Text("Stop") }
+                Text(
+                    buildString {
+                        append(exercise.name)
+                        if (current != null) {
+                            append(" · key ${current.keyIndex + 1}/$keyCount")
+                            append(" · ${midiToDisplayName(current.rootMidi)}")
+                            if (attempt > 1) append(" · go $attempt")
+                        }
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            FilledTonalIconButton(onClick = controls.onTogglePause, enabled = running, modifier = buttonModifier) {
+                Icon(
+                    if (controls.paused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
+                    contentDescription = if (controls.paused) "Resume" else "Pause",
+                    modifier = iconModifier
+                )
+            }
+            // Riyaz-style: keep singing the same key until it's switched off again
+            FilledIconToggleButton(
+                checked = controls.repeating,
+                onCheckedChange = { controls.onToggleRepeat() },
+                enabled = running,
+                modifier = buttonModifier
+            ) {
+                Icon(
+                    Icons.Filled.RepeatOne,
+                    contentDescription = if (controls.repeating) "Stop repeating this key" else "Repeat this key",
+                    modifier = iconModifier
+                )
+            }
+            OutlinedIconButton(onClick = controls.onStop, modifier = buttonModifier) {
+                Icon(Icons.Filled.Stop, contentDescription = "Stop and see the score", modifier = iconModifier)
             }
         }
     }
