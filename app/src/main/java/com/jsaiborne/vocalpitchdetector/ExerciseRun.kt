@@ -73,8 +73,12 @@ private const val EXERCISE_LOOKAHEAD = 0.4f
 
 private const val UI_TICK_MS = 50L
 private const val LANDSCAPE_EXERCISE_PIANO_WIDTH_DP = 96
+
+// The status bar is a little roomier in portrait, where height is easier to spare than in landscape
 private const val STATUS_BUTTON_DP = 36
 private const val STATUS_ICON_DP = 20
+private const val PORTRAIT_STATUS_BUTTON_DP = 44
+private const val PORTRAIT_STATUS_ICON_DP = 24
 
 /**
  * How a run ended: its score, how far through the keys it got ([keysReached] of [totalKeys]), and
@@ -260,7 +264,8 @@ internal fun ExerciseRun(
             current = current,
             attempt = attempt,
             keyCount = keyRoots.size,
-            controls = controls
+            controls = controls,
+            compact = isLandscape
         )
         if (isLandscape) {
             Row(modifier = Modifier.fillMaxWidth().weight(1f)) {
@@ -287,7 +292,8 @@ private fun RunStatus(
     current: RepPlan?,
     attempt: Int,
     keyCount: Int,
-    controls: RunControls
+    controls: RunControls,
+    compact: Boolean
 ) {
     // Between repetitions, current is already the next one
     val nextHint = current?.let { "next: ${midiToDisplayName(it.rootMidi)}" }.orEmpty()
@@ -302,8 +308,8 @@ private fun RunStatus(
     }
     val singing = phase == ExercisePhase.SING && !controls.paused
     val running = phase != ExercisePhase.DONE
-    val buttonModifier = Modifier.size(STATUS_BUTTON_DP.dp)
-    val iconModifier = Modifier.size(STATUS_ICON_DP.dp)
+    val buttonModifier = Modifier.size((if (compact) STATUS_BUTTON_DP else PORTRAIT_STATUS_BUTTON_DP).dp)
+    val iconModifier = Modifier.size((if (compact) STATUS_ICON_DP else PORTRAIT_STATUS_ICON_DP).dp)
     Card(
         colors = CardDefaults.cardColors(
             containerColor = if (singing) {
@@ -315,9 +321,13 @@ private fun RunStatus(
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
-            modifier = Modifier.padding(start = 10.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+            modifier = if (compact) {
+                Modifier.padding(start = 10.dp, end = 4.dp, top = 2.dp, bottom = 2.dp)
+            } else {
+                Modifier.padding(start = 12.dp, end = 6.dp, top = 6.dp, bottom = 6.dp)
+            },
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+            horizontalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 6.dp)
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -325,7 +335,7 @@ private fun RunStatus(
                         withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(headline) }
                         if (hint.isNotEmpty()) append("  ·  $hint")
                     },
-                    style = MaterialTheme.typography.titleSmall,
+                    style = if (compact) MaterialTheme.typography.titleSmall else MaterialTheme.typography.titleMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -338,7 +348,7 @@ private fun RunStatus(
                             if (attempt > 1) append(" · go $attempt")
                         }
                     },
-                    style = MaterialTheme.typography.labelSmall,
+                    style = if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
