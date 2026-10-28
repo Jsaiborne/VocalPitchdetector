@@ -4,7 +4,8 @@
 
    Recordings are large (~5 MB per minute of audio). Auto Backup stops backing up the whole app
    once its data passes 25 MB, which would also lose settings and the saved vocal range, so
-   recordings are left out. Settings, names, notes and stars (shared preferences) are backed up.
+   recordings are left out. Settings, names, notes and stars (shared preferences) are backed up,
+   and so are the exercises the user makes (one small JSON file each, in exercises/).
 -->
 <full-backup-content>
     <exclude domain="file" path="recordings/" />

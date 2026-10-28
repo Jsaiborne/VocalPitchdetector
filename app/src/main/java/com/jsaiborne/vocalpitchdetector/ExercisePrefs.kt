@@ -9,6 +9,7 @@ private const val PREF_EXERCISE_DIRECTION = "ExerciseDirection"
 private const val PREF_EXERCISE_MODE = "ExerciseMode"
 private const val PREF_EXERCISE_STRICT = "ExerciseStrict"
 private const val PREF_EXERCISE_BEST_PREFIX = "ExerciseBest_"
+private const val PREF_EXERCISE_PLAYED_PREFIX = "ExercisePlayed_"
 
 /** Exercises stay inside the notes the pitch detector can hear (about B1 to D6). */
 internal const val EXERCISE_MIN_MIDI = 36
@@ -89,6 +90,19 @@ internal fun saveBestScore(prefs: SharedPreferences, exerciseId: String, percent
     if (best != null && best >= percent) return false
     prefs.edit().putInt(PREF_EXERCISE_BEST_PREFIX + exerciseId, percent).apply()
     return true
+}
+
+/** Forgets the best score, for when an exercise's notes change and the old score no longer applies. */
+internal fun clearBestScore(prefs: SharedPreferences, exerciseId: String) {
+    prefs.edit().remove(PREF_EXERCISE_BEST_PREFIX + exerciseId).apply()
+}
+
+/** When the exercise was last started, or 0 if never. */
+internal fun readLastPlayed(prefs: SharedPreferences, exerciseId: String): Long =
+    prefs.getLong(PREF_EXERCISE_PLAYED_PREFIX + exerciseId, 0L)
+
+internal fun saveLastPlayed(prefs: SharedPreferences, exerciseId: String) {
+    prefs.edit().putLong(PREF_EXERCISE_PLAYED_PREFIX + exerciseId, System.currentTimeMillis()).apply()
 }
 
 private inline fun <reified T : Enum<T>> enumPref(name: String?, default: T): T =

@@ -32,7 +32,7 @@ internal suspend fun playSchedule(schedule: ExerciseSchedule, clock: ExerciseClo
 
 /** A piano sample when one is loaded, otherwise a synthesised tone of the note's length. */
 @Suppress("TooGenericExceptionCaught")
-private fun playGuideNote(midi: Int, durationMs: Int) {
+internal fun playGuideNote(midi: Int, durationMs: Int) {
     try {
         if (!SamplePlayer.play(midi)) ToneGenerator.playTone(midiToFreq(midi), durationMs)
     } catch (e: RuntimeException) {

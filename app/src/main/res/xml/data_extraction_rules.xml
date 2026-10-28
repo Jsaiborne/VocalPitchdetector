@@ -6,7 +6,8 @@
    whole app once its data passes 25 MB, which would also lose settings and the saved vocal range,
    so recordings are kept out of the cloud backup. With no device-transfer rules, everything
    (recordings included) still moves to a new phone during a device-to-device transfer, which has
-   no such limit. The cache (CSV exports) is never backed up.
+   no such limit. The user's exercises (small JSON files in exercises/) are always backed up. The
+   cache (CSV exports) is never backed up.
 -->
 <data-extraction-rules>
     <cloud-backup>
