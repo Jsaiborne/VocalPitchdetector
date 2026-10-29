@@ -251,11 +251,9 @@ internal fun ExerciseRun(
 
     val current = repIndex?.let { plan.getOrNull(it) }
     // Which go at this key it is: 1 for the first time through, then counting the repeats
-    val attempt = if (current == null || repIndex == null) {
-        0
-    } else {
-        plan.take(repIndex + 1).count { it.keyIndex == current.keyIndex }
-    }
+    val attempt = repIndex?.let { index ->
+        current?.let { rep -> plan.take(index + 1).count { it.keyIndex == rep.keyIndex } }
+    } ?: 0
     Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         RunStatus(
             exercise = exercise,

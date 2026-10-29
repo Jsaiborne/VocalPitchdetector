@@ -37,7 +37,9 @@ internal class ExerciseStore(private val dir: File) {
         if (!dir.isDirectory && !dir.mkdirs()) throw IOException("Can't create $dir")
         val temp = File(dir, target.name + ".tmp")
         temp.writeText(exercise.toJson().toString(2))
-        if (!temp.renameTo(target)) {
+        // On Android a rename replaces the old file in one step. Some file systems (Windows, where
+        // the unit tests run) won't rename over an existing file, so clear it out of the way there
+        if (!temp.renameTo(target) && !(target.delete() && temp.renameTo(target))) {
             temp.delete()
             throw IOException("Can't replace ${target.name}")
         }
