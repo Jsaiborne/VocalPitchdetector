@@ -15,7 +15,8 @@ class ExerciseJsonTest {
             notes = listOf(ExerciseNote(0, 0.5f), ExerciseNote(null, 0.5f), ExerciseNote(-3, 2f)),
             description = "With a rest",
             bpm = 84f,
-            breathBeats = 3f
+            breathBeats = 3f,
+            editorRootMidi = 55
         )
         assertEquals(exercise, exerciseFromJson(JSONObject(exercise.toJson().toString())))
     }
@@ -44,6 +45,7 @@ class ExerciseJsonTest {
         assertEquals(100f, exercise.bpm)
         assertEquals(2f, exercise.breathBeats)
         assertEquals("", exercise.description)
+        assertEquals(DEFAULT_EDITOR_ROOT_MIDI, exercise.editorRootMidi)
     }
 
     @Test

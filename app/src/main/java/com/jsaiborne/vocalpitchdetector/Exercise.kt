@@ -7,6 +7,13 @@ import org.json.JSONObject
 internal const val EXERCISE_FORMAT_VERSION = 1
 
 /**
+ * The key the editor shows a pattern in (its root note). It only changes how the pattern looks
+ * and sounds while editing; the player still transposes it to the singer's range.
+ */
+internal const val DEFAULT_EDITOR_ROOT_MIDI = 60
+internal val EDITOR_ROOT_RANGE = 48..60
+
+/**
  * One step of an exercise pattern. [offset] is in semitones from the root (0 = the root, 4 = a
  * major third up), or null for a rest. [beats] is how long it lasts at the exercise tempo.
  */
@@ -26,7 +33,8 @@ data class Exercise(
     val bpm: Float = 100f,
     /** Silence between repetitions, so the singer can breathe. */
     val breathBeats: Float = 2f,
-    val builtIn: Boolean = false
+    val builtIn: Boolean = false,
+    val editorRootMidi: Int = DEFAULT_EDITOR_ROOT_MIDI
 ) {
     val minOffset: Int get() = notes.mapNotNull { it.offset }.minOrNull() ?: 0
     val maxOffset: Int get() = notes.mapNotNull { it.offset }.maxOrNull() ?: 0
@@ -57,6 +65,7 @@ internal fun Exercise.toJson(): JSONObject {
         put("description", description)
         put("bpm", bpm.toDouble())
         put("breathBeats", breathBeats.toDouble())
+        put("editorRoot", editorRootMidi)
         put("notes", notesJson)
     }
 }
@@ -80,6 +89,7 @@ internal fun exerciseFromJson(json: JSONObject): Exercise {
         notes = notes,
         description = json.optString("description", ""),
         bpm = json.optDouble("bpm", 100.0).toFloat(),
-        breathBeats = json.optDouble("breathBeats", 2.0).toFloat()
+        breathBeats = json.optDouble("breathBeats", 2.0).toFloat(),
+        editorRootMidi = json.optInt("editorRoot", DEFAULT_EDITOR_ROOT_MIDI).coerceIn(EDITOR_ROOT_RANGE)
     )
 }

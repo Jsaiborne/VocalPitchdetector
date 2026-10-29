@@ -59,6 +59,7 @@ private const val TAP_NOTE_MS = 400
 private const val MAX_BREATH_BEATS = 8f
 private const val BREATH_STEP = 0.5f
 private const val TOOL_BUTTON_DP = 40
+private const val STEPPER_BUTTON_DP = 36
 
 private val LENGTH_LABELS = listOf("¼", "½", "1", "2", "3", "4")
 
@@ -92,6 +93,7 @@ internal fun ExerciseEditor(
     var description by remember { mutableStateOf(exercise.description) }
     var bpm by remember { mutableFloatStateOf(exercise.bpm) }
     var breathBeats by remember { mutableFloatStateOf(exercise.breathBeats) }
+    var rootMidi by remember { mutableIntStateOf(exercise.editorRootMidi) }
     var roll by remember { mutableStateOf(originalRoll) }
     val undo = remember { mutableStateListOf<List<RollNote>>() }
     var selected by remember { mutableStateOf<RollNote?>(null) }
@@ -109,7 +111,8 @@ internal fun ExerciseEditor(
         notes = exerciseNotesOf(roll),
         bpm = bpm,
         breathBeats = breathBeats,
-        builtIn = false
+        builtIn = false,
+        editorRootMidi = rootMidi
     )
     val dirty = edited != unchanged
     val canSave = roll.isNotEmpty() && edited.name.isNotEmpty() && (dirty || isNew)
@@ -147,7 +150,7 @@ internal fun ExerciseEditor(
         while (elapsed < totalMs) {
             while (next < notes.size && notes[next].start * stepMs <= elapsed) {
                 val note = notes[next]
-                playGuideNote(EDITOR_ROOT_MIDI + note.offset, (note.length * stepMs).toInt())
+                playGuideNote(rootMidi + note.offset, (note.length * stepMs).toInt())
                 next++
             }
             playhead = elapsed / stepMs
@@ -168,7 +171,7 @@ internal fun ExerciseEditor(
                 val note = roll.placing(start, offset, pen)
                 commit(roll.withNote(note), note)
             }
-            playGuideNote(EDITOR_ROOT_MIDI + offset, TAP_NOTE_MS)
+            playGuideNote(rootMidi + offset, TAP_NOTE_MS)
         },
         onDragStart = { note ->
             dragBase = roll
@@ -176,7 +179,7 @@ internal fun ExerciseEditor(
         },
         onMove = { note, start, offset ->
             val (next, moved) = (dragBase ?: roll).moving(note, start, offset)
-            if (moved.offset != selected?.offset) playGuideNote(EDITOR_ROOT_MIDI + moved.offset, TAP_NOTE_MS)
+            if (moved.offset != selected?.offset) playGuideNote(rootMidi + moved.offset, TAP_NOTE_MS)
             roll = next
             selected = moved
         },
@@ -209,6 +212,11 @@ internal fun ExerciseEditor(
             breathBeats = breathBeats,
             onBpmChange = { bpm = it },
             onBreathChange = { breathBeats = it },
+            rootMidi = rootMidi,
+            onRootChange = {
+                rootMidi = it
+                playGuideNote(it, TAP_NOTE_MS)
+            },
             modifier = timingModifier
         )
     }
@@ -273,7 +281,13 @@ internal fun ExerciseEditor(
         )
 
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            PianoRoll(notes = roll, selected = selected, playheadStep = playhead, actions = rollActions)
+            PianoRoll(
+                notes = roll,
+                selected = selected,
+                rootMidi = rootMidi,
+                playheadStep = playhead,
+                actions = rollActions
+            )
             if (roll.isEmpty()) {
                 Text(
                     "Tap the grid to add notes.\nDrag a note to move it; drag its end to change its length.",
@@ -379,21 +393,24 @@ private fun LengthChip(label: String, description: String, selected: Boolean, on
 }
 
 /**
- * Tempo and the breath between repetitions, the two timings saved with the exercise. Each gets
- * half of [modifier]'s width, so the + buttons always stay on screen.
+ * Tempo, the breath between repetitions, and the key the pattern is written in, all saved with
+ * the exercise. Each takes a third of [modifier]'s width, so the + buttons always stay on screen.
  */
+@Suppress("LongParameterList")
 @Composable
 private fun TimingControls(
     bpm: Float,
     breathBeats: Float,
     onBpmChange: (Float) -> Unit,
     onBreathChange: (Float) -> Unit,
+    rootMidi: Int,
+    onRootChange: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
         MiniStepper(
             label = "Tempo",
-            value = "${bpm.roundToInt()} BPM",
+            value = "${bpm.roundToInt()}",
             onMinus = { onBpmChange((bpm - BPM_STEP).coerceAtLeast(MIN_EXERCISE_BPM)) }
                 .takeIf { bpm > MIN_EXERCISE_BPM },
             onPlus = { onBpmChange((bpm + BPM_STEP).coerceAtMost(MAX_EXERCISE_BPM)) }
@@ -402,11 +419,18 @@ private fun TimingControls(
         )
         MiniStepper(
             label = "Breath",
-            value = "${beatsText(breathBeats)} beats",
+            value = beatsText(breathBeats),
             onMinus = { onBreathChange((breathBeats - BREATH_STEP).coerceAtLeast(0f)) }
                 .takeIf { breathBeats > 0f },
             onPlus = { onBreathChange((breathBeats + BREATH_STEP).coerceAtMost(MAX_BREATH_BEATS)) }
                 .takeIf { breathBeats < MAX_BREATH_BEATS },
+            modifier = Modifier.weight(1f)
+        )
+        MiniStepper(
+            label = "Key",
+            value = midiToDisplayName(rootMidi),
+            onMinus = { onRootChange(rootMidi - 1) }.takeIf { rootMidi > EDITOR_ROOT_RANGE.first },
+            onPlus = { onRootChange(rootMidi + 1) }.takeIf { rootMidi < EDITOR_ROOT_RANGE.last },
             modifier = Modifier.weight(1f)
         )
     }
@@ -425,7 +449,7 @@ private fun MiniStepper(
         IconButton(
             onClick = { onMinus?.invoke() },
             enabled = onMinus != null,
-            modifier = Modifier.size(TOOL_BUTTON_DP.dp)
+            modifier = Modifier.size(STEPPER_BUTTON_DP.dp)
         ) {
             Icon(Icons.Filled.Remove, contentDescription = "Less $label")
         }
@@ -434,7 +458,8 @@ private fun MiniStepper(
                 label,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
             Text(
                 value,
@@ -447,7 +472,7 @@ private fun MiniStepper(
         IconButton(
             onClick = { onPlus?.invoke() },
             enabled = onPlus != null,
-            modifier = Modifier.size(TOOL_BUTTON_DP.dp)
+            modifier = Modifier.size(STEPPER_BUTTON_DP.dp)
         ) {
             Icon(Icons.Filled.Add, contentDescription = "More $label")
         }
