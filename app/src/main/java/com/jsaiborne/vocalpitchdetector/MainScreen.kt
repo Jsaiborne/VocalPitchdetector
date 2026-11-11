@@ -1236,7 +1236,7 @@ private fun GraphAppearanceMenuRow(onClick: () -> Unit) {
             .fillMaxWidth()
             .clip(MaterialTheme.shapes.small)
             .clickable(onClick = onClick)
-            .padding(vertical = 6.dp)
+            .padding(vertical = 8.dp)
     ) {
         Icon(Icons.Filled.Palette, contentDescription = null, modifier = Modifier.padding(end = 12.dp))
         Column(modifier = Modifier.weight(1f)) {
@@ -1255,6 +1255,7 @@ private fun GraphAppearanceMenuRow(onClick: () -> Unit) {
 private fun MenuSectionHeader(title: String) {
     Text(
         text = title.uppercase(Locale.getDefault()),
+        modifier = Modifier.padding(top = 4.dp),
         style = MaterialTheme.typography.labelMedium,
         color = MaterialTheme.colorScheme.primary
     )
@@ -1377,6 +1378,7 @@ private fun SettingsMenu(
                         rangeTestReason
                             ?: settings.savedRangeText?.let { "Your range: $it · tap to retake" }
                             ?: "Find your lowest and highest notes, guided step by step",
+                        modifier = Modifier.padding(top = 2.dp),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1384,6 +1386,7 @@ private fun SettingsMenu(
             },
             leadingIcon = { Icon(Icons.Filled.Mic, contentDescription = null) },
             enabled = rangeTestReason == null,
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
             onClick = {
                 onDismiss()
                 actions.onOpenRangeTest()
@@ -1396,6 +1399,7 @@ private fun SettingsMenu(
                     Text("Exercises", style = MaterialTheme.typography.titleSmall)
                     Text(
                         rangeTestReason ?: "Sing warm-ups against target notes and get a score",
+                        modifier = Modifier.padding(top = 2.dp),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1403,6 +1407,7 @@ private fun SettingsMenu(
             },
             leadingIcon = { Icon(Icons.Filled.FitnessCenter, contentDescription = null) },
             enabled = rangeTestReason == null,
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
             onClick = {
                 onDismiss()
                 actions.onOpenExercises()
@@ -1411,10 +1416,10 @@ private fun SettingsMenu(
         HorizontalDivider()
         Column(
             modifier = Modifier
-                .padding(12.dp)
-                .heightIn(max = 360.dp)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .heightIn(max = 400.dp)
                 .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             MenuSectionHeader("Graph")
             GraphAppearanceMenuRow(
@@ -1425,15 +1430,18 @@ private fun SettingsMenu(
             )
             SwitchRow("Auto-center", settings.autoCenter, actions.onAutoCenterChange)
             val secondsOnScreen = LIVE_GRAPH_WINDOW_MS / 1000f * (DEFAULT_SCROLL_BPM / settings.bpm)
-            Text(
-                "Scroll speed: ${settings.bpm.roundToInt()} BPM · ${secondsOnScreen.roundToInt()} s on screen",
-                style = MaterialTheme.typography.bodySmall
-            )
-            Slider(
-                value = bpmToSliderPos(settings.bpm),
-                onValueChange = { actions.onBpmChange(sliderPosToBpm(it)) },
-                modifier = Modifier.fillMaxWidth()
-            )
+            // One column so the label stays attached to its slider instead of picking up the row spacing
+            Column {
+                Text(
+                    "Scroll speed: ${settings.bpm.roundToInt()} BPM · ${secondsOnScreen.roundToInt()} s on screen",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Slider(
+                    value = bpmToSliderPos(settings.bpm),
+                    onValueChange = { actions.onBpmChange(sliderPosToBpm(it)) },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
 
             HorizontalDivider()
             MenuSectionHeader("Notes & piano")
