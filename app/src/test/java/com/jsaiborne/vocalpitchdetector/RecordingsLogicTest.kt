@@ -2,6 +2,7 @@ package com.jsaiborne.vocalpitchdetector
 
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -92,5 +93,121 @@ class RecordingsLogicTest {
         assertEquals(setOf("1"), sessions.keys)
         assertTrue(sessions.getValue("1").first.name.endsWith("_audio.wav"))
         assertTrue(sessions.getValue("1").second.name.endsWith("_pitch.json"))
+    }
+
+    // --- Sorting, filtering and searching ---
+
+    private fun session(
+        id: String,
+        number: Int = 0,
+        name: String? = null,
+        starred: Boolean = false,
+        durationMs: Long = 0L,
+        note: String? = null
+    ) = RecordingSession(
+        sessionId = id,
+        timestampMs = id.toLong(),
+        audioFile = File("session_${id}_audio.wav"),
+        pitchFile = File("session_${id}_pitch.json"),
+        sessionNumber = number,
+        customName = name,
+        isStarred = starred,
+        durationMs = durationMs,
+        note = note
+    )
+
+    private fun ids(sessions: List<RecordingSession>) = sessions.map { it.sessionId }
+
+    @Test
+    fun filterAndSort_ordersByTheChosenSort() {
+        val sessions = listOf(
+            session("200", name = "Bravo", durationMs = 5_000),
+            session("100", name = "alpha", durationMs = 30_000),
+            session("300", name = "Charlie", durationMs = 10_000)
+        )
+
+        fun sorted(sort: RecordingSort) = ids(filterAndSortSessions(sessions, "", false, sort))
+
+        assertEquals(listOf("300", "200", "100"), sorted(RecordingSort.NEWEST))
+        assertEquals(listOf("100", "200", "300"), sorted(RecordingSort.OLDEST))
+        assertEquals(listOf("100", "300", "200"), sorted(RecordingSort.LONGEST))
+        assertEquals(listOf("100", "200", "300"), sorted(RecordingSort.NAME)) // alpha, Bravo, Charlie
+    }
+
+    @Test
+    fun filterAndSort_keepsStarredOnTopWhateverTheSort() {
+        val sessions = listOf(
+            session("100", name = "A"),
+            session("200", name = "B", starred = true),
+            session("300", name = "C")
+        )
+
+        assertEquals("200", ids(filterAndSortSessions(sessions, "", false, RecordingSort.NEWEST)).first())
+        assertEquals("200", ids(filterAndSortSessions(sessions, "", false, RecordingSort.OLDEST)).first())
+        assertEquals("200", ids(filterAndSortSessions(sessions, "", false, RecordingSort.NAME)).first())
+    }
+
+    @Test
+    fun filterAndSort_searchMatchesNameNoteAndDefaultTitleIgnoringCase() {
+        val sessions = listOf(
+            session("100", name = "Chorus take"),
+            session("200", number = 7, note = "Watch the HIGH notes"),
+            session("300", number = 3)
+        )
+
+        fun search(text: String) = ids(filterAndSortSessions(sessions, text, false, RecordingSort.OLDEST))
+
+        assertEquals(listOf("100"), search("chorus"))
+        assertEquals(listOf("200"), search("high"))
+        assertEquals(listOf("200"), search("  session 7  ")) // "Vocal Session 7", surrounding spaces ignored
+        assertEquals(listOf("200", "300"), search("vocal"))
+        assertEquals(emptyList<String>(), search("nothing like this"))
+    }
+
+    @Test
+    fun filterAndSort_starredOnlyHidesTheRest() {
+        val sessions = listOf(session("100"), session("200", starred = true), session("300", starred = true))
+
+        val shown = filterAndSortSessions(sessions, "", true, RecordingSort.NEWEST)
+
+        assertEquals(listOf("300", "200"), ids(shown))
+    }
+
+    @Test
+    fun starTargetFor_unstarsOnlyWhenEverythingIsAlreadyStarred() {
+        assertFalse(starTargetFor(listOf(session("1", starred = true), session("2", starred = true))))
+        assertTrue(starTargetFor(listOf(session("1", starred = true), session("2"))))
+        assertTrue(starTargetFor(listOf(session("1"), session("2"))))
+    }
+
+    // --- Leftover files ---
+
+    @Test
+    fun findOrphanFiles_returnsOnlyOldFilesWhosePartnerIsMissing() {
+        val dir: File = tmp.newFolder("orphans")
+        val now = 10_000_000L
+        val old = now - 5 * 60_000L
+
+        fun create(name: String, modifiedAt: Long) {
+            File(dir, name).apply {
+                writeText("x")
+                setLastModified(modifiedAt)
+            }
+        }
+        create("session_1_audio.wav", old) // complete pair
+        create("session_1_pitch.json", old)
+        create("session_2_audio.wav", old) // audio only
+        create("session_3_pitch.json", old) // pitch only
+        create("session_4_audio.wav", now - 10_000L) // audio only, but just written: may still be saving
+        create("notes.txt", old) // not a session file
+
+        val orphans = findOrphanFiles(dir, now).map { it.name }
+
+        assertEquals(listOf("session_2_audio.wav", "session_3_pitch.json"), orphans)
+    }
+
+    @Test
+    fun findOrphanFiles_isEmptyWhenTheFolderDoesNotExist() {
+        assertTrue(findOrphanFiles(File(tmp.root, "missing"), nowMs = 1L).isEmpty())
     }
 }
