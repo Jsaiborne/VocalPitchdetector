@@ -25,18 +25,12 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -44,18 +38,17 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 
-private data class PitchSample(val tMs: Long, val freq: Float, val midi: Float)
-private data class StableMarker(val tMs: Long, val midi: Int)
+/** A detected pitch as a fractional MIDI note, or NaN for silence. */
+private data class PitchSample(val tMs: Long, val midi: Float)
 
 /**
- * Rolling window of recent pitch samples and stable-note markers. Backed by ArrayDeques so
- * trimming the oldest entries is O(1). [version] changes whenever the contents do; a Canvas that
- * calls [observeChanges] therefore redraws when new data arrives.
+ * Rolling window of recent pitch samples. Backed by an ArrayDeque so trimming the oldest entries is
+ * O(1). [version] changes whenever the contents do; a Canvas that calls [observeChanges] therefore
+ * redraws when new data arrives.
  */
 @Stable
 private class TraceBuffer {
     val samples = ArrayDeque<PitchSample>()
-    val markers = ArrayDeque<StableMarker>()
     private var version by mutableLongStateOf(0L)
 
     // The graph runs on its own clock that stands still while frozen, so Freeze stops the curve
@@ -82,35 +75,31 @@ private class TraceBuffer {
 
     fun addSample(sample: PitchSample, cutoffMs: Long) {
         samples.addLast(sample)
-        while (samples.isNotEmpty() && samples.first().tMs < cutoffMs) samples.removeFirst()
-        version++
-    }
-
-    fun addMarker(marker: StableMarker, cutoffMs: Long) {
-        markers.addLast(marker)
-        while (markers.isNotEmpty() && markers.first().tMs < cutoffMs) markers.removeFirst()
+        trim(cutoffMs)
         version++
     }
 
     /**
      * Drops data older than [cutoffMs] and asks the graph to redraw, so the trace keeps scrolling
-     * (and old markers leave the screen) even when no new pitch data arrives.
+     * even when no new pitch data arrives.
      */
     fun tick(cutoffMs: Long) {
-        while (samples.isNotEmpty() && samples.first().tMs < cutoffMs) samples.removeFirst()
-        while (markers.isNotEmpty() && markers.first().tMs < cutoffMs) markers.removeFirst()
+        trim(cutoffMs)
         version++
     }
 
-    /** True while any sung pitch or note marker newer than [sinceMs] is still in the buffer. */
+    /** True while any sung pitch newer than [sinceMs] is still in the buffer. */
     fun hasContentSince(sinceMs: Long): Boolean {
-        if (markers.isNotEmpty() && markers.last().tMs >= sinceMs) return true
         for (i in samples.indices.reversed()) {
             val s = samples[i]
             if (s.tMs < sinceMs) break
             if (!s.midi.isNaN()) return true
         }
         return false
+    }
+
+    private fun trim(cutoffMs: Long) {
+        while (samples.isNotEmpty() && samples.first().tMs < cutoffMs) samples.removeFirst()
     }
 }
 
@@ -136,14 +125,14 @@ private fun rememberTraceBuffer(
             if (!paused) {
                 val t = buffer.now()
                 val midi = if (s.frequency > 0f) freqToMidi(s.frequency.toDouble()).toFloat() else Float.NaN
-                buffer.addSample(PitchSample(tMs = t, freq = s.frequency, midi = midi), cutoffMs = t - windowMs)
+                buffer.addSample(PitchSample(tMs = t, midi = midi), cutoffMs = t - windowMs)
             }
         }
     }
 
     // The engine reports silence only once, so the graph drives its own scrolling: it redraws at
-    // ~30 fps while a trace or marker is still on screen, and stops redrawing once it has scrolled
-    // away, so an idle screen costs almost nothing
+    // ~30 fps while a trace is still on screen, and stops redrawing once it has scrolled away, so an
+    // idle screen costs almost nothing
     LaunchedEffect(buffer, paused, windowMs, keepAlive) {
         while (true) {
             val now = buffer.now()
@@ -156,19 +145,58 @@ private fun rememberTraceBuffer(
         }
     }
 
-    LaunchedEffect(engine, paused, windowMs) {
-        engine.stableNotes.collectLatest { sn ->
-            if (!paused) {
-                val now = buffer.now()
-                buffer.addMarker(StableMarker(now, sn.midi), cutoffMs = now - windowMs)
-            }
-        }
-    }
-
     return buffer
 }
 
-@Suppress("LongParameterList")
+/** Room left after "now" along the time axis, so the newest point's glow isn't cut off. */
+private val NOW_EDGE_INSET = 12.dp
+
+/** The oldest part of the trace fades out over this share of the time already sung. */
+private const val TRACE_FADE_FRACTION = 0.35f
+
+/** Pitch older than this no longer counts as "now": its lane stops glowing and the tag goes. */
+private const val NOW_MAX_AGE_MS = 250L
+
+/** A jump longer than this share of the time axis breaks the curve (usually an octave error). */
+private const val TRACE_BREAK_FRACTION = 0.35f
+
+/** Number of gaps between the fixed lines across the graph (the "Grid lines" setting). */
+private const val GRID_DIVISIONS = 6
+
+/** The pitch axis, shared with the piano beside the graph. */
+private class LivePitchLayout(
+    val midiRange: IntRange,
+    val axis: KeyboardPitchAxis,
+    /** Length of the pitch axis (the same as the piano's), and the shift applied along it. */
+    val lengthPx: Float,
+    val alignPx: Float
+)
+
+/** Which parts of the live graph are shown (the Graph appearance switches). */
+private class LiveGraphLayers(
+    val blocks: Boolean,
+    val grid: Boolean,
+    val curve: Boolean,
+    val dots: Boolean
+)
+
+/** Everything the live graph is drawn with, apart from the samples and the clock. */
+private class LiveGraphSettings(
+    val rotated: Boolean,
+    val pitch: LivePitchLayout,
+    val windowMs: Long,
+    /** Share of the time axis showing the past; "now" sits at that point. */
+    val pastFraction: Float,
+    val layers: LiveGraphLayers,
+    val colors: GraphColors,
+    val targets: List<TargetEvent>
+)
+
+/**
+ * The live pitch graph. Pitch runs along the piano (across in portrait, up in landscape) on the same
+ * axis as the keyboard beside it, and time runs down (portrait) or to the right (landscape).
+ */
+@Suppress("LongParameterList", "LongMethod")
 @Composable
 fun PitchGraphCard(
     engine: PitchEngine,
@@ -179,15 +207,14 @@ fun PitchGraphCard(
     whiteKeyWidthDp: Dp = 56.dp,
     scrollState: ScrollState? = null,
     alignmentOffsetDp: Dp = 0.dp,
-    blackKeyShiftFraction: Float = 0.5f,
     timeWindowMs: Long = 8000L,
     bpm: Float = 120f,
     rotated: Boolean = false,
+    // Held-note blocks and their names
     showNoteLabels: Boolean = true,
     showHorizontalGrid: Boolean = true,
     showCurve: Boolean = true,
-    showBars: Boolean = false,
-    showWhiteDots: Boolean = true, // <-- NEW
+    showWhiteDots: Boolean = true,
     // Shift for the scrolled graph while a pinch-zoom's scroll is catching up (see PitchAxisZoom)
     scrollCorrectionPx: () -> Float = { 0f },
     colors: GraphColors = GraphColors.Default,
@@ -196,945 +223,221 @@ fun PitchGraphCard(
     // Share of the time window shown ahead of "now", so upcoming targets scroll into view
     lookaheadFraction: Float = 0f
 ) {
+    val density = LocalDensity.current
+    val windowMs = remember(timeWindowMs, bpm) { (timeWindowMs.toFloat() * (60f / bpm)).toLong() }
+    val buffer = rememberTraceBuffer(engine, paused, windowMs, keepAlive = targets.isNotEmpty())
+    val paints = rememberGraphPaints()
+    val scroll = scrollState ?: rememberScrollState()
+
+    val keySizePx = with(density) { whiteKeyWidthDp.toPx() }
+    val pitchAxis = remember(startMidi, keySizePx) { KeyboardPitchAxis(startMidi, keySizePx) }
+    val whiteCount = remember(startMidi, endMidi) { (startMidi..endMidi).count { isWhiteKey(it) } }
+    val contentPitchPx = whiteCount * keySizePx
+    val contentPitchDp = with(density) { contentPitchPx.toDp() }
+
+    val settings = LiveGraphSettings(
+        rotated = rotated,
+        pitch = LivePitchLayout(
+            midiRange = startMidi..endMidi,
+            axis = pitchAxis,
+            lengthPx = contentPitchPx,
+            alignPx = with(density) { alignmentOffsetDp.toPx() }
+        ),
+        windowMs = windowMs,
+        pastFraction = 1f - lookaheadFraction.coerceIn(0f, MAX_LOOKAHEAD_FRACTION),
+        layers = LiveGraphLayers(
+            blocks = showNoteLabels,
+            grid = showHorizontalGrid,
+            curve = showCurve,
+            dots = showWhiteDots
+        ),
+        colors = colors,
+        targets = targets
+    )
+
     Card(modifier = modifier, shape = RoundedCornerShape(12.dp)) {
+        // Padding only along the time axis: along the pitch axis the graph lines up with the piano
+        val timeAxisPadding = if (rotated) Modifier.padding(horizontal = 6.dp) else Modifier.padding(vertical = 6.dp)
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.surface)
-                .padding(6.dp)
+                .then(timeAxisPadding)
         ) {
-            if (!rotated) {
-                PitchGraphHorizontal(
-                    engine = engine,
-                    paused = paused,
-                    modifier = Modifier.fillMaxSize(),
-                    windowMs = timeWindowMs,
-                    startMidi = startMidi,
-                    endMidi = endMidi,
-                    whiteKeyWidthDp = whiteKeyWidthDp,
-                    scrollState = scrollState,
-                    alignmentOffsetDp = alignmentOffsetDp,
-                    blackKeyShiftFraction = blackKeyShiftFraction,
-                    showNoteLabels = showNoteLabels,
-                    showHorizontalGrid = showHorizontalGrid,
-                    showCurve = showCurve,
-                    bpm = bpm,
-                    showBars = showBars,
-                    showWhiteDots = showWhiteDots, // forwarded
-                    scrollCorrectionPx = scrollCorrectionPx,
-                    colors = colors,
-                    targets = targets,
-                    lookaheadFraction = lookaheadFraction
-                )
+            val scroller = if (rotated) {
+                Modifier
+                    .verticalScroll(scroll)
+                    .graphicsLayer { translationY = scrollCorrectionPx() }
             } else {
-                PitchGraphVertical(
-                    engine = engine,
-                    paused = paused,
-                    modifier = Modifier.fillMaxSize(),
-                    windowMs = timeWindowMs,
-                    startMidi = startMidi,
-                    endMidi = endMidi,
-                    whiteKeyWidthDp = whiteKeyWidthDp,
-                    scrollState = scrollState,
-                    alignmentOffsetDp = alignmentOffsetDp,
-                    blackKeyShiftFraction = blackKeyShiftFraction,
-                    showNoteLabels = showNoteLabels,
-                    showHorizontalGrid = showHorizontalGrid,
-                    showCurve = showCurve,
-                    bpm = bpm,
-                    showBars = showBars,
-                    showWhiteDots = showWhiteDots, // forwarded
-                    scrollCorrectionPx = scrollCorrectionPx,
-                    colors = colors,
-                    targets = targets,
-                    lookaheadFraction = lookaheadFraction
-                )
+                Modifier
+                    .horizontalScroll(scroll)
+                    .graphicsLayer { translationX = scrollCorrectionPx() }
             }
-        }
-    }
-}
-
-/**
- * Horizontal graph: midi -> x, time -> y
- * Time flows downwards (Top = Old, Bottom = New)
- */
-@Suppress("LongParameterList", "LongMethod", "CyclomaticComplexMethod")
-@Composable
-fun PitchGraphHorizontal(
-    engine: PitchEngine,
-    paused: Boolean = false,
-    modifier: Modifier = Modifier,
-    windowMs: Long = 8000L,
-    startMidi: Int = 24,
-    endMidi: Int = 84,
-    whiteKeyWidthDp: Dp = 56.dp,
-    scrollState: ScrollState? = null,
-    alignmentOffsetDp: Dp = 0.dp,
-    blackKeyShiftFraction: Float = 0.5f,
-    showNoteLabels: Boolean = true,
-    showHorizontalGrid: Boolean = true,
-    showCurve: Boolean = true,
-    bpm: Float = 120f,
-    showBars: Boolean = false,
-    showWhiteDots: Boolean = true,
-    scrollCorrectionPx: () -> Float = { 0f },
-    colors: GraphColors = GraphColors.Default,
-    targets: List<TargetEvent> = emptyList(),
-    lookaheadFraction: Float = 0f
-) {
-    val density = LocalDensity.current
-
-    val windowMsEffective = remember(windowMs, bpm) {
-        (windowMs.toFloat() * (60f / bpm)).toLong()
-    }
-    // How much of the window lies in the past; "now" sits at that fraction down the graph
-    val pastFraction = 1f - lookaheadFraction.coerceIn(0f, MAX_LOOKAHEAD_FRACTION)
-
-    val buffer = rememberTraceBuffer(engine, paused, windowMsEffective, keepAlive = targets.isNotEmpty())
-    val samples = buffer.samples
-    val stableMarkers = buffer.markers
-    val paints = rememberGraphPaints(colors.noteLabels)
-
-    val whiteCount = (startMidi..endMidi).count { !midiToNoteName(it).contains("#") }
-    val whiteKeyWidthPx = with(density) { whiteKeyWidthDp.toPx() }
-    val contentWidthPx = whiteCount * whiteKeyWidthPx
-    val contentWidthDp = with(density) { contentWidthPx.toDp() }
-
-    val padLeft = 6f
-    val alignPx = with(density) { alignmentOffsetDp.toPx() }
-
-    val midiX = remember(startMidi, endMidi, whiteKeyWidthPx, alignPx, blackKeyShiftFraction) {
-        val count = endMidi - startMidi + 1
-        val array = FloatArray(count)
-
-        val whiteList = mutableListOf<Int>()
-        for (m in startMidi..endMidi) if (!midiToNoteName(m).contains("#")) whiteList.add(m)
-        val whiteIndexMap = mutableMapOf<Int, Int>()
-        whiteList.forEachIndexed { idx, midi -> whiteIndexMap[midi] = idx }
-
-        val blackLeftIndexMap = mutableMapOf<Int, Int>()
-        var whiteIdxCounter = 0
-        for (m in startMidi..endMidi) {
-            val name = midiToNoteName(m)
-            if (name.contains("#")) {
-                blackLeftIndexMap[m] = maxOf(0, whiteIdxCounter - 1)
-            } else {
-                whiteIdxCounter++
-            }
-        }
-
-        for (m in startMidi..endMidi) {
-            val idx = m - startMidi
-            val x = if (whiteIndexMap.containsKey(m)) {
-                val widx = whiteIndexMap[m]!!
-                padLeft + (widx + 0.5f) * whiteKeyWidthPx + alignPx
-            } else {
-                val left = blackLeftIndexMap[m] ?: 0
-                val center = (left + 0.5f) * whiteKeyWidthPx
-                val shiftPx = whiteKeyWidthPx * blackKeyShiftFraction
-                padLeft + center + shiftPx + alignPx
-            }
-            array[idx] = x
-        }
-        array
-    }
-
-    val sState = scrollState ?: rememberScrollState()
-
-    // Define colors for the graph background
-    val bgTopColor = GraphStyle.backgroundTop
-    val bgBottomColor = GraphStyle.backgroundBottom
-
-    // Halo color for dots (semi-transparent dark)
-    val haloColor = GraphStyle.dotHalo
-    val dotWhite = colors.dots
-    // Horizontal bar color: soft translucent blue (matches curve)
-    val horizontalBarColor = GraphStyle.bar
-
-    Box(modifier = modifier) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .horizontalScroll(sState)
-                .graphicsLayer { translationX = scrollCorrectionPx() }
-        ) {
-            Canvas(
-                modifier = Modifier
-                    .width(contentWidthDp)
-                    .fillMaxHeight()
-            ) {
-                buffer.observeChanges()
-                val w = size.width
-                val h = size.height
-
-                // background
-                drawRect(brush = Brush.verticalGradient(listOf(bgTopColor, bgBottomColor)), size = Size(w, h))
-
-                val padTop = 12f
-                val padBottom = 20f
-                val padRight = 6f
-                val innerH = h - padTop - padBottom
-                val innerW = w - padLeft - padRight
-
-                val minMidi = startMidi
-                val maxMidi = endMidi
-
-                fun xForMidiFloat(midiFloat: Float): Float {
-                    if (midiFloat.isNaN()) return -10000f
-
-                    val floorM = midiFloat.toInt().coerceIn(minMidi, maxMidi)
-                    val ceilM = (floorM + 1).coerceAtMost(maxMidi)
-
-                    // FIX: Safely clamp the indices to ensure they never exceed the midiX array bounds
-                    val floorIndex = (floorM - minMidi).coerceIn(0, midiX.lastIndex)
-                    val ceilIndex = (ceilM - minMidi).coerceIn(0, midiX.lastIndex)
-
-                    val x0 = midiX[floorIndex]
-                    val x1 = midiX[ceilIndex]
-                    val frac = midiFloat - floorM
-
-                    return x0 + frac * (x1 - x0)
-                }
-
-                // Grid and Semitone Lines
-                for (m in minMidi..maxMidi) {
-                    // FIX: Clamp the index for X grid lines
-                    val targetIndex = (m - minMidi).coerceIn(0, midiX.lastIndex)
-                    val x = midiX[targetIndex]
-                    val isNatural = !midiToNoteName(m).contains("#")
-                    if (isNatural) {
-                        drawLine(
-                            color = Color(0x33FFFFFF),
-                            start = Offset(x, padTop),
-                            end = Offset(x, padTop + innerH),
-                            strokeWidth = 1.6f
-                        )
-                        drawIntoCanvas { canvas ->
-                            canvas.nativeCanvas.drawText(
-                                midiToDisplayName(m),
-                                x + 6f,
-                                padTop + 18f,
-                                paints.small
-                            )
-                        }
-                    } else {
-                        drawLine(
-                            color = Color(0x22FFFFFF),
-                            start = Offset(x, padTop),
-                            end = Offset(x, padTop + innerH),
-                            strokeWidth = 0.9f
-                        )
-                    }
-                }
-
-                if (showHorizontalGrid) {
-                    val step = innerH / 6f
-                    for (i in 0..6) {
-                        val yy = padTop + i * step
-                        drawLine(
-                            color = GraphStyle.pitchGrid,
-                            start = Offset(padLeft, yy),
-                            end = Offset(padLeft + innerW, yy),
-                            strokeWidth = 1f
-                        )
-                    }
-                }
-                drawLine(
-                    color = Color(0x22FFFFFF),
-                    start = Offset(padLeft, padTop + innerH / 2f),
-                    end = Offset(padLeft + innerW, padTop + innerH / 2f),
-                    strokeWidth = 1f
-                )
-
-                // Graph time, which stands still while frozen
-                val nowTime = buffer.now()
-                val windowStart = nowTime - (windowMsEffective * pastFraction).toLong()
-
-                if (targets.isNotEmpty()) {
-                    drawExerciseTargets(
-                        targets = targets,
-                        nowMs = nowTime,
-                        windowStartMs = windowStart,
-                        windowEndMs = windowStart + windowMsEffective,
-                        timeToPx = { t -> padTop + innerH * ((t - windowStart).toFloat() / windowMsEffective) },
-                        pitchToPx = { m -> xForMidiFloat(m.toFloat()) },
-                        thicknessPx = whiteKeyWidthPx * TARGET_THICKNESS_FRACTION,
-                        timeRunsDown = true
-                    )
-                }
-                if (pastFraction < 1f) {
-                    val nowY = padTop + innerH * pastFraction
-                    drawLine(
-                        color = GraphStyle.nowLine,
-                        start = Offset(padLeft, nowY),
-                        end = Offset(padLeft + innerW, nowY),
-                        strokeWidth = 2f
-                    )
-                }
-
-                if (samples.isEmpty()) return@Canvas
-
-                // build path (time -> y, midi -> x)
-                val bluePath = Path()
-                // We'll collect segments of continuous points so smoothing doesn't bridge silences/gaps
-                val pointsSegments = mutableListOf<MutableList<Offset>>()
-                var currentSeg: MutableList<Offset>? = null
-                var prevPoint: Offset? = null
-                var prevTime: Long = Long.MIN_VALUE
-                val breakDistance = innerH * 0.35f
-                val silenceGapMs = 150L
-
-                for (s in samples) {
-                    val x = xForMidiFloat(s.midi)
-                    val y = padTop + innerH * ((s.tMs - windowStart).toFloat() / windowMsEffective.toFloat())
-
-                    // treat NaN midi as a break in the trace
-                    if (s.midi.isNaN()) {
-                        prevPoint = null
-                        currentSeg = null
-                        prevTime = Long.MIN_VALUE
-                        continue
-                    }
-
-                    // Optimization: Skip drawing if points are off-screen (above the top)
-                    if (y < padTop - 50) {
-                        prevPoint = null
-                        currentSeg = null
-                        prevTime = Long.MIN_VALUE
-                        continue
-                    }
-
-                    val p = Offset(x, y)
-                    val t = s.tMs
-
-                    if (prevPoint == null) {
-                        bluePath.moveTo(p.x, p.y)
-                        currentSeg = mutableListOf()
-                        pointsSegments.add(currentSeg)
-                        currentSeg.add(p)
-                    } else {
-                        val dx = kotlin.math.abs(p.x - prevPoint.x)
-                        val dy = kotlin.math.abs(p.y - prevPoint.y)
-                        val dist = kotlin.math.hypot(dx.toDouble(), dy.toDouble()).toFloat()
-                        val timeGap = if (prevTime == Long.MIN_VALUE) 0L else t - prevTime
-
-                        if (dist > breakDistance || timeGap > silenceGapMs) {
-                            // gap detected — start a new segment
-                            bluePath.moveTo(p.x, p.y)
-                            currentSeg = mutableListOf()
-                            pointsSegments.add(currentSeg)
-                            currentSeg.add(p)
-                        } else {
-                            bluePath.lineTo(p.x, p.y)
-                            currentSeg?.add(p)
-                        }
-                    }
-
-                    prevPoint = p
-                    prevTime = t
-                }
-
-                // Build smoothed paths for each continuous segment
-                val smoothedPaths = mutableListOf<Path>()
-                for (seg in pointsSegments) {
-                    if (seg.size >= 2) smoothedPaths.add(buildSmoothedPath(seg, LIVE_CURVE_SMOOTHING))
-                }
-
-                if (showCurve) {
-                    if (smoothedPaths.isNotEmpty()) {
-                        // draw each smoothed segment separately so we don't bridge silences/gaps
-                        for (segPath in smoothedPaths) {
-                            drawPath(
-                                path = segPath,
-                                color = colors.curve,
-                                style = Stroke(width = 3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-                            )
-                        }
-                    } else {
-                        // fallback: draw the raw polyline stroke only
-                        drawPath(
-                            path = bluePath,
-                            color = colors.curve,
-                            style = Stroke(width = 3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-                        )
-                    }
-                }
-
-                // Bar visual parameters
-                val barWidth = (whiteKeyWidthPx * 0.12f).coerceAtLeast(4f).coerceAtMost(18f)
-                val barCorner = CornerRadius(3f, 3f)
-                val minBarLenPx = 6f
-                val barColor = horizontalBarColor
-
-                if (showBars) {
-                    // draw bars (group consecutive same-integer-midi runs)
-                    var i = 0
-                    while (i < samples.size) {
-                        val s0 = samples[i]
-                        if (s0.midi.isNaN()) {
-                            i++; continue
-                        }
-                        val midiInt = s0.midi.toInt()
-                        var j = i + 1
-                        while (j < samples.size) {
-                            val sj = samples[j]
-                            if (sj.midi.isNaN()) break
-                            if (sj.midi.toInt() != midiInt) break
-                            j++
-                        }
-
-                        val runStart = samples[i].tMs.coerceAtLeast(windowStart)
-                        val runEnd = samples[j - 1].tMs.coerceAtMost(nowTime)
-
-                        val yStart =
-                            padTop + innerH * ((runStart - windowStart).toFloat() / windowMsEffective.toFloat())
-                        val yEnd = padTop + innerH * ((runEnd - windowStart).toFloat() / windowMsEffective.toFloat())
-
-                        if (yEnd > padTop) {
-                            var heightPx = (yEnd - yStart).coerceAtLeast(minBarLenPx)
-
-                            // Snap xCenter to the integer MIDI value
-                            val xCenter = xForMidiFloat(midiInt.toFloat())
-
-                            val top = if (heightPx <= minBarLenPx) ((yStart + yEnd) / 2f - minBarLenPx / 2f) else yStart
-                            val size = Size(barWidth, heightPx)
-                            drawRoundRect(
-                                color = barColor,
-                                topLeft = Offset(xCenter - barWidth / 2f, top),
-                                size = size,
-                                cornerRadius = barCorner
-                            )
-                        }
-                        i = j
-                    }
-
-                    // Draw small white dots on top of bars if the user requested them (halo + white)
-                    if (showWhiteDots) {
-                        for (s in samples) {
-                            if (s.midi.isNaN()) continue
-                            val x = xForMidiFloat(s.midi)
-                            val y = padTop + innerH * ((s.tMs - windowStart).toFloat() / windowMsEffective.toFloat())
-                            if (y > padTop && x >= padLeft && x <= padLeft + innerW) {
-                                // halo below dot
-                                drawCircle(color = haloColor, radius = 4.2f, center = Offset(x, y))
-                                drawCircle(color = dotWhite, radius = 2.6f, center = Offset(x, y))
-                            }
-                        }
-                    }
+            Box(modifier = Modifier.fillMaxSize().then(scroller)) {
+                val canvasSize = if (rotated) {
+                    Modifier.fillMaxWidth().height(contentPitchDp)
                 } else {
-                    // no bars: draw dots if requested (halo + white)
-                    if (showWhiteDots) {
-                        for (s in samples) {
-                            if (s.midi.isNaN()) continue
-                            val x = xForMidiFloat(s.midi)
-                            val y = padTop + innerH * ((s.tMs - windowStart).toFloat() / windowMsEffective.toFloat())
-                            if (y > padTop) {
-                                drawCircle(color = haloColor, radius = 4.2f, center = Offset(x, y))
-                                drawCircle(color = dotWhite, radius = 2.6f, center = Offset(x, y))
-                            }
-                        }
-                    }
+                    Modifier.width(contentPitchDp).fillMaxHeight()
                 }
-
-                // stable markers
-                for (m in stableMarkers) {
-                    // FIX: Clamp marker X position
-                    val targetIndex = (m.midi - minMidi).coerceIn(0, midiX.lastIndex)
-                    val x = midiX[targetIndex]
-                    val y = padTop + innerH * ((m.tMs - windowStart).toFloat() / windowMsEffective.toFloat())
-                    drawLine(
-                        color = colors.noteLabels,
-                        start = Offset(x, padTop),
-                        end = Offset(x, padTop + innerH),
-                        strokeWidth = 2f
-                    )
-                    if (showNoteLabels) {
-                        val labelY = y - 10f
-                        // Fade the label out over its last stretch before the top edge (where the
-                        // oldest content leaves the graph) instead of cutting it off abruptly
-                        val fadeHeightPx = 48f
-                        val fade = ((labelY - padTop) / fadeHeightPx).coerceIn(0f, 1f)
-                        if (fade > 0f) {
-                            drawIntoCanvas { canvas ->
-                                val nativeCanvas = canvas.nativeCanvas
-                                val originalAlpha = paints.noteLabel.alpha
-                                paints.noteLabel.alpha = (originalAlpha * fade).toInt()
-                                nativeCanvas.save()
-                                nativeCanvas.clipRect(padLeft, padTop, padLeft + innerW, padTop + innerH)
-                                nativeCanvas.drawText(
-                                    midiToDisplayName(m.midi),
-                                    x + 6f,
-                                    labelY,
-                                    paints.noteLabel
-                                )
-                                nativeCanvas.restore()
-                                paints.noteLabel.alpha = originalAlpha
-                            }
-                        }
-                    }
-                }
-
-                // latest label
-                val last = samples.last()
-                if (!last.midi.isNaN()) {
-                    // FIX 1: Use roundToInt() instead of toInt() to stop the C4 -> B flickering
-                    val nearest = last.midi.roundToInt().coerceIn(minMidi, maxMidi)
-
-                    // FIX 2: Safely clamp the index to prevent the OutOfBounds crash
-                    val targetIndex = (nearest - minMidi).coerceIn(0, midiX.lastIndex)
-                    val x = midiX[targetIndex]
-
-                    // FIX 3: Lock the Y position to the "now" edge of the graph to stop the shaking
-                    // (the bottom edge, or the now line when upcoming targets are shown below it)
-                    val y = padTop + innerH * pastFraction
-
-                    if (showNoteLabels) {
-                        drawIntoCanvas { canvas ->
-                            canvas.nativeCanvas.drawText(
-                                midiToDisplayName(nearest),
-                                x + 6f,
-                                y - 10f, // Changed to - 10f so the text draws just above the bottom cut-off
-                                paints.label
-                            )
-                        }
-                    }
+                Canvas(modifier = canvasSize) {
+                    buffer.observeChanges()
+                    // The part of the pitch axis on screen, so the note tag can stay inside it
+                    val visiblePitch = scroll.value.toFloat()..(scroll.value + scroll.viewportSize).toFloat()
+                    // The trace starts a little before the window, so it runs right up to the edge
+                    clipRect { drawLiveGraph(settings, buffer.samples, buffer.now(), visiblePitch, paints) }
                 }
             }
         }
     }
 }
 
-/**
- * Vertical (rotated) graph:
- * - midi -> y (rows align with piano keys; reversed so lower notes at bottom)
- * - time -> x (left to right)
- * Time flows Rightwards (Left = Old, Right = New)
- */
-@Suppress("LongParameterList", "LongMethod", "CyclomaticComplexMethod")
-@Composable
-fun PitchGraphVertical(
-    engine: PitchEngine,
-    paused: Boolean = false,
-    modifier: Modifier = Modifier,
-    windowMs: Long = 8000L,
-    startMidi: Int = 24,
-    endMidi: Int = 84,
-    whiteKeyWidthDp: Dp = 56.dp,
-    scrollState: ScrollState? = null,
-    alignmentOffsetDp: Dp = 0.dp,
-    blackKeyShiftFraction: Float = 0.5f,
-    showNoteLabels: Boolean = true,
-    showHorizontalGrid: Boolean = true,
-    showCurve: Boolean = true,
-    bpm: Float = 120f,
-    showBars: Boolean = false,
-    showWhiteDots: Boolean = true, // <-- NEW
-    scrollCorrectionPx: () -> Float = { 0f },
-    colors: GraphColors = GraphColors.Default,
-    targets: List<TargetEvent> = emptyList(),
-    lookaheadFraction: Float = 0f
+/** Draws one frame of the live graph: lanes, grid, exercise targets, held notes, the trace and the now tag. */
+@Suppress("LongMethod")
+private fun DrawScope.drawLiveGraph(
+    settings: LiveGraphSettings,
+    samples: List<PitchSample>,
+    nowMs: Long,
+    visiblePitchPx: ClosedFloatingPointRange<Float>,
+    paints: GraphPaints
 ) {
-    val density = LocalDensity.current
-
-    val windowMsEffective = remember(windowMs, bpm) {
-        (windowMs.toFloat() * (60f / bpm)).toLong()
-    }
-    // How much of the window lies in the past; "now" sits at that fraction across the graph
-    val pastFraction = 1f - lookaheadFraction.coerceIn(0f, MAX_LOOKAHEAD_FRACTION)
-
-    val buffer = rememberTraceBuffer(engine, paused, windowMsEffective, keepAlive = targets.isNotEmpty())
-    val samples = buffer.samples
-    val stableMarkers = buffer.markers
-    val paints = rememberGraphPaints(colors.noteLabels)
-
-    val whiteCount = (startMidi..endMidi).count { !midiToNoteName(it).contains("#") }
-    val keyThicknessPx = with(density) { whiteKeyWidthDp.toPx() }
-    val contentPitchPx = whiteCount * keyThicknessPx
-    val contentPitchDp = with(density) { contentPitchPx.toDp() }
-
-    val padTop = 12f
-    val alignPx = with(density) { alignmentOffsetDp.toPx() }
-
-    val midiY = remember(startMidi, endMidi, keyThicknessPx, alignPx, blackKeyShiftFraction) {
-        val count = endMidi - startMidi + 1
-        val array = FloatArray(count)
-
-        val whiteList = mutableListOf<Int>()
-        for (m in startMidi..endMidi) if (!midiToNoteName(m).contains("#")) whiteList.add(m)
-        val whiteIndexMap = mutableMapOf<Int, Int>()
-        whiteList.forEachIndexed { idx, midi -> whiteIndexMap[midi] = (whiteCount - 1 - idx) }
-
-        val blackLeftIndexMap = mutableMapOf<Int, Int>()
-        var whiteIdxCounter = 0
-        for (m in startMidi..endMidi) {
-            val name = midiToNoteName(m)
-            if (name.contains("#")) {
-                blackLeftIndexMap[m] = maxOf(0, whiteIdxCounter - 1)
-            } else {
-                whiteIdxCounter++
-            }
+    val s = settings
+    val pitch = s.pitch
+    val timeRunsDown = !s.rotated
+    val timeEndPx = (if (timeRunsDown) size.height else size.width) - NOW_EDGE_INSET.toPx()
+    val windowStartMs = nowMs - (s.windowMs * s.pastFraction).toLong()
+    val axes = GraphAxes(
+        timeRunsDown = timeRunsDown,
+        timeStartPx = 0f,
+        timeEndPx = timeEndPx,
+        timeToPx = { t -> (t - windowStartMs).toFloat() / s.windowMs * timeEndPx },
+        // Landscape puts the low notes at the bottom, like the keyboard beside it
+        pitchToPx = { m ->
+            val centre = pitch.axis.centreOf(m)
+            pitch.alignPx + (if (timeRunsDown) centre else pitch.lengthPx - centre)
         }
+    )
 
-        for (m in startMidi..endMidi) {
-            val idx = m - startMidi
-            val y = if (whiteIndexMap.containsKey(m)) {
-                val widx = whiteIndexMap[m]!!
-                padTop + (widx + 0.5f) * keyThicknessPx + alignPx
-            } else {
-                val left = blackLeftIndexMap[m] ?: 0
-                val reversedLeft = whiteCount - 1 - left
-                val center = (reversedLeft + 0.5f) * keyThicknessPx
-                val shiftPx = keyThicknessPx * blackKeyShiftFraction
-                padTop + center - shiftPx + alignPx
-            }
-            array[idx] = y
-        }
-        array
-    }
+    val background = listOf(GraphStyle.backgroundTop, GraphStyle.backgroundBottom)
+    drawRect(if (timeRunsDown) Brush.verticalGradient(background) else Brush.horizontalGradient(background))
 
-    val sState = scrollState ?: rememberScrollState()
+    val latest = samples.lastOrNull()?.takeIf { !it.midi.isNaN() && nowMs - it.tMs <= NOW_MAX_AGE_MS }
+    drawNoteLanes(
+        axes,
+        LaneStyle(
+            midiRange = pitch.midiRange,
+            lanePx = pitch.axis.semitoneSize,
+            activeMidi = latest?.midi?.roundToInt(),
+            activeColor = s.colors.curve,
+            namesAtPx = if (timeRunsDown) paints.laneName.textSize + 4.dp.toPx() else 6.dp.toPx()
+        ),
+        paints
+    )
 
-    val bgLeftColor = GraphStyle.backgroundTop
-    val bgRightColor = GraphStyle.backgroundBottom
-
-    // Halo color and white dot color
-    val haloColor = GraphStyle.dotHalo
-    val dotWhite = colors.dots
-    // Vertical bar color
-    val verticalBarColor = GraphStyle.bar
-
-    Box(modifier = modifier) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(sState)
-                .graphicsLayer { translationY = scrollCorrectionPx() }
-        ) {
-            Canvas(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(contentPitchDp)
-            ) {
-                buffer.observeChanges()
-                val w = size.width
-                val h = size.height
-
-                val padBottom = 20f
-                val padLeft = 12f
-                val padRight = 12f
-                val innerW = w - padLeft - padRight
-                val innerH = h - padTop - padBottom
-
-                val minMidi = startMidi
-                val maxMidi = endMidi
-
-                fun yForMidiFloat(midiFloat: Float): Float {
-                    if (midiFloat.isNaN()) return -10000f
-
-                    val floorM = midiFloat.toInt().coerceIn(minMidi, maxMidi)
-                    val ceilM = (floorM + 1).coerceAtMost(maxMidi)
-
-                    // FIX: Clamp both the floor and ceiling indices!
-                    val floorIndex = (floorM - minMidi).coerceIn(0, midiY.lastIndex)
-                    val ceilIndex = (ceilM - minMidi).coerceIn(0, midiY.lastIndex)
-
-                    val y0 = midiY[floorIndex]
-                    val y1 = midiY[ceilIndex]
-                    val frac = midiFloat - floorM
-
-                    return y0 + frac * (y1 - y0)
-                }
-
-                // background
-                drawRect(brush = Brush.horizontalGradient(listOf(bgLeftColor, bgRightColor)), size = Size(w, h))
-
-                // draw pitch lines
-                for (m in minMidi..maxMidi) {
-                    // FIX: Clamp the index for Y grid lines
-                    val targetIndex = (m - minMidi).coerceIn(0, midiY.lastIndex)
-                    val y = midiY[targetIndex]
-                    val isNatural = !midiToNoteName(m).contains("#")
-                    val col = if (isNatural) Color(0x33FFFFFF) else Color(0x22FFFFFF)
-                    drawLine(
-                        color = col,
-                        start = Offset(padLeft, y),
-                        end = Offset(padLeft + innerW, y),
-                        strokeWidth = if (isNatural) 1.6f else 0.9f
-                    )
-                    if (isNatural) {
-                        drawIntoCanvas { canvas ->
-                            canvas.nativeCanvas.drawText(
-                                midiToDisplayName(m),
-                                padLeft + 6f,
-                                y - 6f,
-                                paints.small
-                            )
-                        }
-                    }
-                }
-
-                if (showHorizontalGrid) {
-                    val step = innerW / 6f
-                    for (i in 0..6) {
-                        val xx = padLeft + i * step
-                        drawLine(
-                            color = GraphStyle.pitchGrid,
-                            start = Offset(xx, padTop),
-                            end = Offset(xx, padTop + innerH),
-                            strokeWidth = 1f
-                        )
-                    }
-                }
-
-                // Graph time, which stands still while frozen
-                val nowTime = buffer.now()
-                val windowStart = nowTime - (windowMsEffective * pastFraction).toLong()
-
-                // time -> x
-                fun xForTime(tMs: Long): Float {
-                    val rel = (tMs - windowStart).toFloat() / windowMsEffective.toFloat()
-                    return padLeft + rel * innerW
-                }
-
-                if (targets.isNotEmpty()) {
-                    drawExerciseTargets(
-                        targets = targets,
-                        nowMs = nowTime,
-                        windowStartMs = windowStart,
-                        windowEndMs = windowStart + windowMsEffective,
-                        timeToPx = ::xForTime,
-                        pitchToPx = { m -> yForMidiFloat(m.toFloat()) },
-                        thicknessPx = keyThicknessPx * TARGET_THICKNESS_FRACTION,
-                        timeRunsDown = false
-                    )
-                }
-                if (pastFraction < 1f) {
-                    val nowX = padLeft + innerW * pastFraction
-                    drawLine(
-                        color = GraphStyle.nowLine,
-                        start = Offset(nowX, padTop),
-                        end = Offset(nowX, padTop + innerH),
-                        strokeWidth = 2f
-                    )
-                }
-
-                if (samples.isEmpty()) return@Canvas
-
-                // build path
-                val bluePath = Path()
-                // We'll collect segments of continuous points so smoothing doesn't bridge silences/gaps
-                val pointsSegments = mutableListOf<MutableList<Offset>>()
-                var currentSeg: MutableList<Offset>? = null
-                var prevPoint: Offset? = null
-                var prevTime: Long = Long.MIN_VALUE
-                val breakDistance = innerW * 0.35f
-                val silenceGapMs = 150L
-
-                for (s in samples) {
-                    val x = xForTime(s.tMs)
-                    val y = yForMidiFloat(s.midi)
-
-                    // treat NaN midi as a break in the trace
-                    if (s.midi.isNaN()) {
-                        prevPoint = null
-                        currentSeg = null
-                        prevTime = Long.MIN_VALUE
-                        continue
-                    }
-
-                    if (x < padLeft - 50) {
-                        prevPoint = null
-                        currentSeg = null
-                        prevTime = Long.MIN_VALUE
-                        continue
-                    }
-
-                    val p = Offset(x, y)
-                    val t = s.tMs
-
-                    if (prevPoint == null) {
-                        bluePath.moveTo(p.x, p.y)
-                        currentSeg = mutableListOf()
-                        pointsSegments.add(currentSeg)
-                        currentSeg.add(p)
-                    } else {
-                        val dx = kotlin.math.abs(p.x - prevPoint.x)
-                        val dy = kotlin.math.abs(p.y - prevPoint.y)
-                        val dist = kotlin.math.hypot(dx.toDouble(), dy.toDouble()).toFloat()
-                        val timeGap = if (prevTime == Long.MIN_VALUE) 0L else t - prevTime
-
-                        if (dist > breakDistance || timeGap > silenceGapMs) {
-                            bluePath.moveTo(p.x, p.y)
-                            currentSeg = mutableListOf()
-                            pointsSegments.add(currentSeg)
-                            currentSeg.add(p)
-                        } else {
-                            bluePath.lineTo(p.x, p.y)
-                            currentSeg?.add(p)
-                        }
-                    }
-
-                    prevPoint = p
-                    prevTime = t
-                }
-
-                // Build smoothed paths for each continuous segment
-                val smoothedPaths = mutableListOf<Path>()
-                for (seg in pointsSegments) {
-                    if (seg.size >= 2) smoothedPaths.add(buildSmoothedPath(seg, LIVE_CURVE_SMOOTHING))
-                }
-
-                if (showCurve) {
-                    if (smoothedPaths.isNotEmpty()) {
-                        // draw each smoothed segment separately so we don't bridge silences/gaps
-                        for (segPath in smoothedPaths) {
-                            drawPath(
-                                path = segPath,
-                                color = colors.curve,
-                                style = Stroke(width = 3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-                            )
-                        }
-                    } else {
-                        // fallback: draw the raw polyline stroke only
-                        drawPath(
-                            path = bluePath,
-                            color = colors.curve,
-                            style = Stroke(width = 3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-                        )
-                    }
-                }
-
-                val barHeight = (keyThicknessPx * 0.12f).coerceAtLeast(4f).coerceAtMost(18f)
-                val barCorner = CornerRadius(3f, 3f)
-                val minBarLenPx = 6f
-
-                // Vertical bar color
-                val barColor = verticalBarColor
-
-                if (showBars) {
-                    // draw bars grouped by integer MIDI runs
-                    var i = 0
-                    while (i < samples.size) {
-                        val s0 = samples[i]
-                        if (s0.midi.isNaN()) {
-                            i++; continue
-                        }
-                        val midiInt = s0.midi.toInt()
-                        var j = i + 1
-                        while (j < samples.size) {
-                            val sj = samples[j]
-                            if (sj.midi.isNaN()) break
-                            if (sj.midi.toInt() != midiInt) break
-                            j++
-                        }
-
-                        val runStart = samples[i].tMs.coerceAtLeast(windowStart)
-                        val runEnd = samples[j - 1].tMs.coerceAtMost(nowTime)
-
-                        val xStart = xForTime(runStart)
-                        val xEnd = xForTime(runEnd)
-
-                        if (xEnd > padLeft) {
-                            var widthPx = (xEnd - xStart).coerceAtLeast(minBarLenPx)
-                            val yCenter = yForMidiFloat(midiInt.toFloat())
-
-                            val left = if (widthPx <= minBarLenPx) ((xStart + xEnd) / 2f - minBarLenPx / 2f) else xStart
-                            val size = Size(widthPx, barHeight)
-                            drawRoundRect(
-                                color = barColor,
-                                topLeft = Offset(left, yCenter - barHeight / 2f),
-                                size = size,
-                                cornerRadius = barCorner
-                            )
-                        }
-                        i = j
-                    }
-
-                    // draw sample dots on top if requested (halo + white)
-                    if (showWhiteDots) {
-                        for (s in samples) {
-                            if (s.midi.isNaN()) continue
-                            val x = xForTime(s.tMs)
-                            val y = yForMidiFloat(s.midi)
-                            if (x > padLeft && y >= padTop && y <= padTop + innerH) {
-                                drawCircle(color = haloColor, radius = 4.2f, center = Offset(x, y))
-                                drawCircle(color = dotWhite, radius = 2.6f, center = Offset(x, y))
-                            }
-                        }
-                    }
-                } else {
-                    // no bars: draw sample dots if requested (halo + white)
-                    if (showWhiteDots) {
-                        for (s in samples) {
-                            if (s.midi.isNaN()) continue
-                            val x = xForTime(s.tMs)
-                            val y = yForMidiFloat(s.midi)
-                            if (x > padLeft && y >= padTop && y <= padTop + innerH) {
-                                drawCircle(color = haloColor, radius = 4.2f, center = Offset(x, y))
-                                drawCircle(color = dotWhite, radius = 2.6f, center = Offset(x, y))
-                            }
-                        }
-                    }
-                }
-
-                // --- Stable markers for Vertical Graph ---
-                for (m in stableMarkers) {
-                    // FIX: Clamp marker Y position
-                    val targetIndex = (m.midi - minMidi).coerceIn(0, midiY.lastIndex)
-                    val y = midiY[targetIndex]
-                    val x = xForTime(m.tMs)
-                    drawLine(
-                        color = colors.noteLabels,
-                        start = Offset(padLeft, y),
-                        end = Offset(padLeft + innerW, y),
-                        strokeWidth = 2f
-                    )
-                    if (showNoteLabels) {
-                        drawIntoCanvas { canvas ->
-                            val noteName = midiToDisplayName(m.midi)
-                            val textWidth = paints.noteLabel.measureText(noteName)
-                            var labelX = x + 8f
-                            val labelY = y - 10f
-                            val rightEdge = padLeft + innerW
-                            if (labelX + textWidth > rightEdge - 6f) labelX = x - textWidth - 8f
-                            // Let the label travel with its marker and fade out near the left edge
-                            // instead of pinning it there until the marker is trimmed.
-                            val fadeWidthPx = 48f
-                            val fade = ((labelX - padLeft) / fadeWidthPx).coerceIn(0f, 1f)
-                            if (fade > 0f) {
-                                val nativeCanvas = canvas.nativeCanvas
-                                val originalAlpha = paints.noteLabel.alpha
-                                paints.noteLabel.alpha = (originalAlpha * fade).toInt()
-                                nativeCanvas.save()
-                                nativeCanvas.clipRect(padLeft, padTop, padLeft + innerW, padTop + innerH)
-                                nativeCanvas.drawText(noteName, labelX, labelY, paints.noteLabel)
-                                nativeCanvas.restore()
-                                paints.noteLabel.alpha = originalAlpha
-                            }
-                        }
-                    }
-                }
-
-                // latest note label (snapped to integer MIDI), positioned near right edge
-                if (showNoteLabels) {
-                    val lastSample = samples.lastOrNull()
-                    if (lastSample != null && !lastSample.midi.isNaN()) {
-                        val nearest = lastSample.midi.roundToInt().coerceIn(minMidi, maxMidi)
-                        val targetIndex = (nearest - minMidi).coerceIn(0, midiY.lastIndex)
-                        val y = midiY[targetIndex]
-                        val noteName = midiToDisplayName(nearest)
-                        val textWidth = paints.label.measureText(noteName)
-                        // The "now" edge: the right edge, or the now line when targets are shown ahead
-                        val rightEdge = padLeft + innerW * pastFraction
-                        var labelX = rightEdge - textWidth - 8f
-                        labelX = labelX.coerceAtLeast(padLeft + 6f)
-                        val labelY = y - 8f // Positioned slightly above the snapped horizontal line
-                        drawIntoCanvas { canvas ->
-                            canvas.nativeCanvas.drawText(noteName, labelX, labelY, paints.label)
-                        }
-                    }
-                }
-            }
+    if (s.layers.grid) {
+        for (i in 0..GRID_DIVISIONS) {
+            val alongTime = timeEndPx * i / GRID_DIVISIONS
+            drawLine(
+                color = GraphStyle.pitchGrid,
+                start = axes.point(alongTime, 0f),
+                end = axes.point(alongTime, pitch.lengthPx),
+                strokeWidth = 1.dp.toPx()
+            )
         }
     }
+
+    if (s.targets.isNotEmpty()) {
+        drawExerciseTargets(
+            targets = s.targets,
+            nowMs = nowMs,
+            windowStartMs = windowStartMs,
+            windowEndMs = windowStartMs + s.windowMs,
+            timeToPx = axes.timeToPx,
+            pitchToPx = { m -> axes.pitchToPx(m.toFloat()) },
+            thicknessPx = pitch.axis.semitoneSize * TARGET_THICKNESS_FRACTION,
+            timeRunsDown = timeRunsDown
+        )
+    }
+    if (s.pastFraction < 1f) {
+        val nowPx = timeEndPx * s.pastFraction
+        drawLine(
+            color = GraphStyle.nowLine,
+            start = axes.point(nowPx, 0f),
+            end = axes.point(nowPx, pitch.lengthPx),
+            strokeWidth = 2.dp.toPx()
+        )
+    }
+
+    // During exercises the target bars already show the notes, so the held-note blocks stay out of the way
+    if (s.layers.blocks && s.targets.isEmpty()) {
+        drawNoteBlocks(
+            axes,
+            segmentNotes(samples, PitchSample::tMs, PitchSample::midi),
+            NoteBlockStyle(
+                thicknessPx = pitch.axis.semitoneSize * NOTE_BLOCK_LANE_FRACTION,
+                colorFor = { note -> noteBlockColor(note, s.colors) },
+                showNames = true
+            ),
+            paints
+        )
+    }
+
+    val fadeEndPx = timeEndPx * s.pastFraction * TRACE_FADE_FRACTION
+    drawTraceSegments(
+        liveTraceSegments(samples, windowStartMs - SCROLL_EXIT_MARGIN_MS, axes, timeEndPx * TRACE_BREAK_FRACTION),
+        TraceStyle(
+            colors = s.colors,
+            showCurve = s.layers.curve,
+            showDots = s.layers.dots,
+            smoothing = LIVE_CURVE_SMOOTHING,
+            fadeStart = axes.point(0f, 0f),
+            fadeEnd = axes.point(fadeEndPx, 0f)
+        )
+    )
+
+    if (latest != null) {
+        val bounds = if (timeRunsDown) {
+            Rect(visiblePitchPx.start, 0f, visiblePitchPx.endInclusive, size.height)
+        } else {
+            Rect(0f, visiblePitchPx.start, size.width, visiblePitchPx.endInclusive)
+        }
+        drawNowTag(
+            nowTag(axes.at(latest.tMs, latest.midi), latest.midi, s.colors, dotColor = s.colors.curve),
+            timeRunsDown,
+            bounds,
+            paints
+        )
+    }
+}
+
+/**
+ * Splits the samples from [fromMs] on into continuous runs for the curve, breaking at silences, pauses
+ * and jumps longer than [breakDistancePx] (usually octave errors), so no line is drawn across them.
+ */
+private fun liveTraceSegments(
+    samples: List<PitchSample>,
+    fromMs: Long,
+    axes: GraphAxes,
+    breakDistancePx: Float
+): List<List<Offset>> {
+    val segments = mutableListOf<MutableList<Offset>>()
+    var current: MutableList<Offset>? = null
+    var previousMs = Long.MIN_VALUE
+    for (sample in samples) {
+        if (sample.midi.isNaN() || sample.tMs < fromMs) {
+            current = null
+            continue
+        }
+        val p = axes.at(sample.tMs, sample.midi)
+        val run = current
+        val last = run?.last()
+        val joins = last != null && sample.tMs - previousMs <= PLAYBACK_SILENCE_GAP_MS &&
+            (p - last).getDistance() <= breakDistancePx
+        if (joins && run != null) {
+            run.add(p)
+        } else {
+            current = mutableListOf(p).also { segments.add(it) }
+        }
+        previousMs = sample.tMs
+    }
+    return segments
 }

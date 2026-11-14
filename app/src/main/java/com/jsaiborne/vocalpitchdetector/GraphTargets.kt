@@ -9,8 +9,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 /** At most this share of the live graph shows the future; the rest is the trace already sung. */
 internal const val MAX_LOOKAHEAD_FRACTION = 0.6f
 
-/** Target bars are this fraction of a white key wide: about one semitone. */
-internal const val TARGET_THICKNESS_FRACTION = 0.45f
+/** Target bars fill this share of their semitone lane. */
+internal const val TARGET_THICKNESS_FRACTION = 0.8f
 
 private const val TARGET_OUTLINE_PX = 2f
 

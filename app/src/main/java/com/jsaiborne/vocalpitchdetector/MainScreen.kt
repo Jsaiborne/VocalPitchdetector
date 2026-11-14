@@ -610,7 +610,6 @@ fun MainScreen(navController: NavHostController? = null) {
                         whiteKeyWidthDp = whiteKeyWidthDpFloat.dp,
                         scrollState = sharedScroll,
                         rotated = true,
-                        blackKeyShiftFraction = 0.5f,
                         useSamplePlayer = useSamplePlayer,
                         vocalRange = pianoVocalRange,
                         scrollCorrectionPx = { pitchZoom.visualCorrectionPx() }
@@ -640,7 +639,6 @@ fun MainScreen(navController: NavHostController? = null) {
                         showHorizontalGrid = showHorizontalGrid,
                         showCurve = showCurve,
                         rotated = true,
-                        blackKeyShiftFraction = 0.5f,
                         showWhiteDots = showWhiteDots,
                         bpm = bpm,
                         scrollCorrectionPx = { pitchZoom.visualCorrectionPx() },
@@ -715,7 +713,7 @@ fun MainScreen(navController: NavHostController? = null) {
                 startMidi = 24, endMidi = 84, onKeyPressed = { _, _ -> },
                 activeMidi = activeMidi, autoCenter = autoCenter, stableMidi = stableMidi,
                 whiteKeyWidthDp = whiteKeyWidthDpFloat.dp, scrollState = sharedScroll,
-                rotated = false, blackKeyShiftFraction = 0.5f, useSamplePlayer = useSamplePlayer,
+                rotated = false, useSamplePlayer = useSamplePlayer,
                 vocalRange = pianoVocalRange,
                 scrollCorrectionPx = { pitchZoom.visualCorrectionPx() }
             )
@@ -734,7 +732,7 @@ fun MainScreen(navController: NavHostController? = null) {
                     scrollState = sharedScroll, alignmentOffsetDp = graphAlignmentDp.dp,
                     timeWindowMs = LIVE_GRAPH_WINDOW_MS,
                     showNoteLabels = showNoteLabels, showHorizontalGrid = showHorizontalGrid,
-                    showCurve = showCurve, rotated = false, blackKeyShiftFraction = 0.5f,
+                    showCurve = showCurve, rotated = false,
                     showWhiteDots = showWhiteDots,
                     bpm = bpm,
                     scrollCorrectionPx = { pitchZoom.visualCorrectionPx() },
@@ -1288,12 +1286,7 @@ internal fun CentsMeter(
         label = "CentsNeedle"
     )
 
-    val needleColor = when {
-        !hasPitch -> Color.Transparent
-        kotlin.math.abs(cents) <= IN_TUNE_CENTS -> Color(0xFF66BB6A)
-        kotlin.math.abs(cents) <= NEAR_TUNE_CENTS -> Color(0xFFFFB74D)
-        else -> Color(0xFFEF5350)
-    }
+    val needleColor = if (hasPitch) tuningBand(cents).color else Color.Transparent
     val trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
     val tickColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
 
@@ -1349,8 +1342,6 @@ internal fun CentsMeter(
 }
 
 private const val MAX_CENTS = 50f
-private const val IN_TUNE_CENTS = 10f
-private const val NEAR_TUNE_CENTS = 25f
 
 @Suppress("MagicNumber", "LongMethod")
 @Composable

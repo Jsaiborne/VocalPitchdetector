@@ -64,7 +64,6 @@ fun Piano(
     whiteKeyHeight: Dp = 220.dp,
     blackKeyHeight: Dp = 140.dp,
     whiteKeyWidthDp: Dp = 56.dp,
-    blackKeyShiftFraction: Float = 0.5f,
     scrollState: ScrollState? = null,
     rotated: Boolean = false,
     // whether to use the SamplePlayer instead of the ToneGenerator
@@ -111,22 +110,9 @@ fun Piano(
         }
     }
 
-    data class BlackKey(val midi: Int, val leftWhiteIndex: Int)
-
-    val blackKeys = remember(startMidi, endMidi) {
-        val list = mutableListOf<BlackKey>()
-        var whiteIndex = 0
-        for (m in startMidi..endMidi) {
-            val name = midiToNoteName(m)
-            if (name.contains("#")) {
-                val left = maxOf(0, whiteIndex - 1)
-                list.add(BlackKey(m, left))
-            } else {
-                whiteIndex++
-            }
-        }
-        list
-    }
+    // Black keys sit on the even semitone axis shared with the pitch graph (see KeyboardPitchAxis),
+    // one semitone lane wide, so the graph's dark lanes carry on from them
+    val blackKeys = remember(startMidi, endMidi) { (startMidi..endMidi).filterNot { isWhiteKey(it) } }
 
     var pressedMidi by remember { mutableStateOf<Int?>(null) }
     var pressedIndex by remember { mutableStateOf<Int?>(null) }
@@ -173,24 +159,12 @@ fun Piano(
             val whiteKeyWidthPx = with(density) { whiteKeyWidthDp.toPx() }
             val contentWidthPx = whiteCount * whiteKeyWidthPx
             val contentWidthDp = with(density) { contentWidthPx.toDp() }
+            val pitchAxis = remember(startMidi, whiteKeyWidthPx) { KeyboardPitchAxis(startMidi, whiteKeyWidthPx) }
 
             LaunchedEffect(stableMidi, autoCenter) {
-                if (!autoCenter || stableMidi == null) return@LaunchedEffect
-                val targetPx = run {
-                    val whiteIndex = whiteKeys.indexOf(stableMidi)
-                    if (whiteIndex >= 0) {
-                        val center = (whiteIndex + 0.5f) * whiteKeyWidthPx
-                        center - containerWidthPx / 2f
-                    } else {
-                        val bk = blackKeys.find { it.midi == stableMidi }
-                        if (bk != null) {
-                            val center = (bk.leftWhiteIndex + 0.5f) * whiteKeyWidthPx
-                            center - containerWidthPx / 2f
-                        } else {
-                            0f
-                        }
-                    }
-                }
+                val midi = stableMidi
+                if (!autoCenter || midi == null) return@LaunchedEffect
+                val targetPx = pitchAxis.centreOf(midi.toFloat()) - containerWidthPx / 2f
                 val bounded = targetPx.coerceIn(0f, maxOf(0f, contentWidthPx - containerWidthPx))
                 scope.launch { sState.animateScrollTo(bounded.roundToInt()) }
             }
@@ -238,14 +212,10 @@ fun Piano(
                     }
                 }
 
-                val blackWidthDp = whiteKeyWidthDp * 0.62f
-                for (bk in blackKeys) {
-                    val midi = bk.midi
-                    val leftIndex = bk.leftWhiteIndex
-                    val centerDp = whiteKeyWidthDp * (leftIndex.toFloat() + 0.5f)
-                    val baseLeftDp = centerDp - (blackWidthDp / 2f)
-                    val shiftDp = whiteKeyWidthDp * blackKeyShiftFraction
-                    val offsetDp = baseLeftDp + shiftDp
+                val blackWidthPx = pitchAxis.semitoneSize
+                val blackWidthDp = with(density) { blackWidthPx.toDp() }
+                for (midi in blackKeys) {
+                    val offsetDp = with(density) { (pitchAxis.centreOf(midi.toFloat()) - blackWidthPx / 2f).toDp() }
 
                     val isActive = activeMidi == midi
                     val isPressed = pressedMidi == midi
@@ -283,33 +253,22 @@ fun Piano(
             val keySizePx = with(density) { whiteKeyWidthDp.toPx() }
             val contentHeightPx = whiteCount * keySizePx
             val contentHeightDp = with(density) { contentHeightPx.toDp() }
+            val pitchAxis = remember(startMidi, keySizePx) { KeyboardPitchAxis(startMidi, keySizePx) }
+
+            // Low notes at the bottom: how far a note's centre lies below the top of the keyboard
+            fun centreY(midi: Int): Float = contentHeightPx - pitchAxis.centreOf(midi.toFloat())
 
             LaunchedEffect(stableMidi, autoCenter) {
-                if (!autoCenter || stableMidi == null) return@LaunchedEffect
-                val targetPx = run {
-                    val idx = whiteKeys.indexOf(stableMidi)
-                    if (idx >= 0) {
-                        val reversedIndex = whiteCount - 1 - idx
-                        val center = (reversedIndex + 0.5f) * keySizePx
-                        center - containerHeightPx / 2f
-                    } else {
-                        val bk = blackKeys.find { it.midi == stableMidi }
-                        if (bk != null) {
-                            val reversedLeft = whiteCount - 1 - bk.leftWhiteIndex
-                            val center = (reversedLeft + 0.5f) * keySizePx
-                            center - containerHeightPx / 2f
-                        } else {
-                            0f
-                        }
-                    }
-                }
+                val midi = stableMidi
+                if (!autoCenter || midi == null) return@LaunchedEffect
+                val targetPx = centreY(midi) - containerHeightPx / 2f
                 val bounded = targetPx.coerceIn(0f, maxOf(0f, contentHeightPx - containerHeightPx))
                 scope.launch { sState.animateScrollTo(bounded.roundToInt()) }
             }
 
             val reversedWhite = whiteKeys.asReversed()
-            val blackThicknessDp = whiteKeyWidthDp * 0.62f
-            val blackThicknessPx = with(density) { blackThicknessDp.toPx() }
+            val blackThicknessPx = pitchAxis.semitoneSize
+            val blackThicknessDp = with(density) { blackThicknessPx.toDp() }
             // Same length ratio as portrait (black 140dp of a 220dp white key)
             val blackKeyWidthDp = keyboardWidthDp * BLACK_KEY_LENGTH_FRACTION
             val blackKeyWidthPx = with(density) { blackKeyWidthDp.toPx() }
@@ -370,19 +329,17 @@ fun Piano(
                     }
 
                     // Black keys overlay (rotated) with matching animation
-                    for (bk in blackKeys) {
-                        val reversedLeft = whiteCount - 1 - bk.leftWhiteIndex
-                        val centerDp = whiteKeyWidthDp * (reversedLeft.toFloat() + 0.5f)
-                        val offsetTopDp = centerDp - (blackThicknessDp / 2f) - (whiteKeyWidthDp * blackKeyShiftFraction)
+                    for (midi in blackKeys) {
+                        val offsetTopDp = with(density) { (centreY(midi) - blackThicknessPx / 2f).toDp() }
 
-                        val isPressed = pressedBlackMidi == bk.midi
-                        val isActive = activeMidi == bk.midi
+                        val isPressed = pressedBlackMidi == midi
+                        val isActive = activeMidi == midi
                         val elevation by animateDpAsState(if (isPressed) 14.dp else if (isActive) 8.dp else 4.dp)
                         val scale by animateFloatAsState(if (isPressed) 0.99f else 1f)
                         val bg = when {
                             isPressed -> Color(0xFF1565C0)
                             isActive -> Color(0xFF1E88E5)
-                            vocalRange != null && bk.midi in vocalRange -> VOCAL_RANGE_BLACK
+                            vocalRange != null && midi in vocalRange -> VOCAL_RANGE_BLACK
                             else -> Color.Black
                         }
 
@@ -397,11 +354,12 @@ fun Piano(
                         ) {}
                     }
 
-                    // ROTATED TOUCH OVERLAY (fixed coordinate math + single-play guard)
+                    // ROTATED TOUCH OVERLAY (fixed coordinate math + single-play guard). Keyed on the key
+                    // size too, so the hit test follows a pinch zoom instead of using the old key positions
                     Box(
                         modifier = Modifier
                             .matchParentSize()
-                            .pointerInput(useSamplePlayer) {
+                            .pointerInput(useSamplePlayer, keySizePx, blackKeyWidthPx) {
                                 var playedByPress = false
                                 detectTapGestures(
                                     onPress = { offset ->
@@ -414,16 +372,14 @@ fun Piano(
                                         // 1) Check black keys by Y-range (X must be within the black keys, which
                                         // start at the left edge)
                                         if (localX in 0f..blackKeyWidthPx) {
-                                            for (bk in blackKeys) {
-                                                val revIdx = whiteCount - 1 - bk.leftWhiteIndex
-                                                val bCenterY =
-                                                    (revIdx + 0.5f) * keySizePx - (keySizePx * blackKeyShiftFraction)
+                                            for (black in blackKeys) {
+                                                val bCenterY = centreY(black)
                                                 val bTop = bCenterY - (blackThicknessPx / 2f)
                                                 val bBottom = bCenterY + (blackThicknessPx / 2f)
 
                                                 if (localY in bTop..bBottom) {
-                                                    hitMidi = bk.midi
-                                                    pressedBlackMidi = bk.midi
+                                                    hitMidi = black
+                                                    pressedBlackMidi = black
                                                     break
                                                 }
                                             }
@@ -466,12 +422,10 @@ fun Piano(
                                         var hitMidi: Int? = null
 
                                         if (localX in 0f..blackKeyWidthPx) {
-                                            for (bk in blackKeys) {
-                                                val revIdx = whiteCount - 1 - bk.leftWhiteIndex
-                                                val bCenterY =
-                                                    (revIdx + 0.5f) * keySizePx - (keySizePx * blackKeyShiftFraction)
+                                            for (black in blackKeys) {
+                                                val bCenterY = centreY(black)
                                                 if (localY in (bCenterY - blackThicknessPx / 2)..(bCenterY + blackThicknessPx / 2)) {
-                                                    hitMidi = bk.midi
+                                                    hitMidi = black
                                                     break
                                                 }
                                             }

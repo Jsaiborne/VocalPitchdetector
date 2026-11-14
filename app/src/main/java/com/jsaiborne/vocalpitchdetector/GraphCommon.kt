@@ -25,16 +25,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlinx.coroutines.CoroutineScope
@@ -52,6 +56,17 @@ internal object GraphStyle {
     val pitchGrid = Color(0x2233AAFF)
     val timeGrid = Color(0x22FFFFFF)
 
+    // Note lanes: the black-key lanes are darker, like the keys; a brighter line under each C marks the octaves
+    val blackLane = Color(0x3D000000)
+    val laneSeparator = Color(0x14FFFFFF)
+    val octaveLine = Color(0x47FFFFFF)
+
+    /** Dark edge drawn under the pitch curve so it stands out over the lanes and note blocks. */
+    val curveOutline = Color(0x8C000000)
+
+    /** Background of the note-name tag at the newest pitch. */
+    val tagBackground = Color(0xE00B1626)
+
     // Exercise targets: notes the app plays are outlined, notes to sing are filled
     val targetGuide = Color(0x88FFFFFF)
     val targetUpcoming = Color(0x5581C784)
@@ -60,37 +75,41 @@ internal object GraphStyle {
     val nowLine = Color(0x66FFFFFF)
 }
 
-/** Text paints shared by the pitch graphs. */
+/** Text paints shared by the pitch graphs, sized in sp so they follow the screen and font size. */
 internal class GraphPaints(
-    val label: Paint,
-    val small: Paint,
-    /** Note names of the stable-note markers, in the user's note label colour. */
-    val noteLabel: Paint
+    /** Note names along the lanes. */
+    val laneName: Paint,
+    /** Lane names of the Cs, which mark the octaves. */
+    val laneNameC: Paint,
+    /** Names of the held-note blocks; the colour is set per block. */
+    val noteName: Paint,
+    /** Note name in the tag at the newest pitch. */
+    val tagNote: Paint,
+    /** Cents in that tag; the colour is set per draw. */
+    val tagCents: Paint
 )
 
 @Composable
-internal fun rememberGraphPaints(noteLabelColor: Color = GraphColors.Default.noteLabels): GraphPaints = remember(
-    noteLabelColor
-) {
-    GraphPaints(
-        label = Paint().apply {
-            color = android.graphics.Color.WHITE
-            textSize = 28f
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+internal fun rememberGraphPaints(): GraphPaints {
+    val density = LocalDensity.current
+    return remember(density) {
+        val shadowRadiusPx = with(density) { 2.dp.toPx() }
+        fun textPaint(size: TextUnit, bold: Boolean, color: Int) = Paint().apply {
+            this.color = color
+            textSize = with(density) { size.toPx() }
             isAntiAlias = true
-        },
-        small = Paint().apply {
-            color = android.graphics.Color.argb(200, 255, 255, 255)
-            textSize = 18f
-            isAntiAlias = true
-        },
-        noteLabel = Paint().apply {
-            color = noteLabelColor.toArgb()
-            textSize = 18f
-            isAntiAlias = true
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            if (bold) typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            // A soft dark edge keeps the text readable over the lanes, blocks and curve
+            setShadowLayer(shadowRadiusPx, 0f, 0f, android.graphics.Color.argb(170, 0, 0, 0))
         }
-    )
+        GraphPaints(
+            laneName = textPaint(11.sp, bold = false, color = android.graphics.Color.argb(165, 255, 255, 255)),
+            laneNameC = textPaint(11.sp, bold = true, color = android.graphics.Color.argb(235, 255, 255, 255)),
+            noteName = textPaint(12.sp, bold = true, color = android.graphics.Color.WHITE),
+            tagNote = textPaint(15.sp, bold = true, color = android.graphics.Color.WHITE),
+            tagCents = textPaint(12.sp, bold = true, color = android.graphics.Color.WHITE)
+        )
+    }
 }
 
 // --- Playback camera -------------------------------------------------------------------------
@@ -397,22 +416,31 @@ internal fun buildTraceSegments(
     return segments
 }
 
-/** Draws bars, dots and the smoothed curve for each segment (same look in both orientations). */
-internal fun DrawScope.drawTraceSegments(
-    segments: List<List<Offset>>,
-    showBars: Boolean,
-    showWhiteDots: Boolean,
-    showCurve: Boolean,
-    colors: GraphColors,
-    smoothing: Float = PLAYBACK_CURVE_SMOOTHING
-) {
+/** How [drawTraceSegments] draws the sung pitch. */
+internal data class TraceStyle(
+    val colors: GraphColors,
+    val showCurve: Boolean = true,
+    val showDots: Boolean = false,
+    val showBars: Boolean = false,
+    val smoothing: Float = PLAYBACK_CURVE_SMOOTHING,
+    /** When set, the curve fades in from nearly transparent at [fadeStart] to full colour at [fadeEnd]. */
+    val fadeStart: Offset? = null,
+    val fadeEnd: Offset? = null
+)
+
+/** Draws bars, the smoothed curve (over a dark edge) and dots for each segment, in either orientation. */
+internal fun DrawScope.drawTraceSegments(segments: List<List<Offset>>, style: TraceStyle) {
     val barSize = 8.dp.toPx()
     val barCorner = CornerRadius(4.dp.toPx(), 4.dp.toPx())
-    val dotRadius = 3.dp.toPx()
-    val haloRadius = 5.dp.toPx()
+    val dotRadius = 2.dp.toPx()
+    val haloRadius = 3.5.dp.toPx()
+    val curveStroke = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+    val outlineStroke = Stroke(width = 5.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+    val curveBrush = fadingBrush(style.colors.curve, style)
+    val outlineBrush = fadingBrush(GraphStyle.curveOutline, style)
 
     for (seg in segments) {
-        if (showBars) {
+        if (style.showBars) {
             for (p in seg) {
                 drawRoundRect(
                     color = GraphStyle.bar,
@@ -422,18 +450,24 @@ internal fun DrawScope.drawTraceSegments(
                 )
             }
         }
-        if (showWhiteDots) {
+        if (style.showCurve && seg.size >= 2) {
+            val path = buildSmoothedPath(seg, style.smoothing)
+            drawPath(path = path, brush = outlineBrush, style = outlineStroke)
+            drawPath(path = path, brush = curveBrush, style = curveStroke)
+        }
+        if (style.showDots) {
             for (p in seg) {
                 drawCircle(color = GraphStyle.dotHalo, radius = haloRadius, center = p)
-                drawCircle(color = colors.dots, radius = dotRadius, center = p)
+                drawCircle(color = style.colors.dots, radius = dotRadius, center = p)
             }
         }
-        if (showCurve && seg.size >= 2) {
-            drawPath(
-                path = buildSmoothedPath(seg, smoothing),
-                color = colors.curve,
-                style = Stroke(width = 4.5f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-            )
-        }
     }
+}
+
+/** [color], or a gradient along the time axis that fades it in when the style asks for a fade. */
+private fun fadingBrush(color: Color, style: TraceStyle): Brush {
+    val start = style.fadeStart
+    val end = style.fadeEnd
+    if (start == null || end == null) return SolidColor(color)
+    return Brush.linearGradient(listOf(color.copy(alpha = color.alpha * 0.15f), color), start = start, end = end)
 }

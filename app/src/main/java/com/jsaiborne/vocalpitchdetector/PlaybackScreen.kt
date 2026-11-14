@@ -518,7 +518,7 @@ fun PlaybackScreen(
                                 onClick = { showBars = !showBars }
                             )
                             DropdownMenuItem(
-                                text = { Text("Markers & Labels") },
+                                text = { Text("Held notes") },
                                 trailingIcon = {
                                     Checkbox(
                                         checked = showNoteLabels,
@@ -575,7 +575,6 @@ fun PlaybackScreen(
                         totalDurationMs = viewModel.totalDurationMs,
                         isPlaying = viewModel.isPlaying,
                         onSeek = viewModel::seekTo,
-                        stableMarkers = viewModel.stableMarkers,
                         showCurve = showCurve,
                         showWhiteDots = showDots,
                         showBars = showBars,
@@ -590,7 +589,6 @@ fun PlaybackScreen(
                         totalDurationMs = viewModel.totalDurationMs,
                         isPlaying = viewModel.isPlaying,
                         onSeek = viewModel::seekTo,
-                        stableMarkers = viewModel.stableMarkers,
                         showCurve = showCurve,
                         showWhiteDots = showDots,
                         showBars = showBars,
@@ -902,7 +900,7 @@ private fun TopAppBarPlaybackLandscape(
                     onClick = { onToggleShowBars(!showBars) }
                 )
                 DropdownMenuItem(
-                    text = { Text("Markers & Labels") },
+                    text = { Text("Held notes") },
                     trailingIcon = {
                         Checkbox(
                             checked = showNoteLabels,

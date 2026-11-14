@@ -68,12 +68,18 @@ internal fun GraphAppearanceDialog(state: GraphAppearanceState, actions: GraphAp
             ) {
                 SwitchRow("Grid lines", state.showGrid, actions.onShowGridChange)
                 HorizontalDivider()
+                // Held-note blocks and their names; the swatches colour them when tuning colours are off
                 GraphElementRow(
-                    "Note labels",
+                    "Held notes",
                     state.showNoteLabels,
                     actions.onShowNoteLabelsChange,
-                    colors.noteLabels
+                    colors.noteLabels,
+                    swatchesEnabled = state.showNoteLabels && !colors.colorByTuning
                 ) { actions.onColorsChange(colors.copy(noteLabels = it)) }
+                SwitchRow("Colour by tuning", colors.colorByTuning) {
+                    actions.onColorsChange(colors.copy(colorByTuning = it))
+                }
+                HorizontalDivider()
                 GraphElementRow("Pitch curve", state.showCurve, actions.onShowCurveChange, colors.curve) {
                     actions.onColorsChange(colors.copy(curve = it))
                 }
@@ -98,11 +104,12 @@ private fun GraphElementRow(
     shown: Boolean,
     onShownChange: (Boolean) -> Unit,
     selected: Color,
+    swatchesEnabled: Boolean = shown,
     onSelect: (Color) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         SwitchRow(label, shown, onShownChange)
-        SwatchRow(label = label, selected = selected, enabled = shown, onSelect = onSelect)
+        SwatchRow(label = label, selected = selected, enabled = swatchesEnabled, onSelect = onSelect)
     }
 }
 

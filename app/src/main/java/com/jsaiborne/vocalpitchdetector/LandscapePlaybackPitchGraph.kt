@@ -18,13 +18,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.drawscope.translate
-import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.dp
-import kotlin.math.abs
 import kotlinx.coroutines.launch
 
 /** Playback graph for landscape: time runs left to right, pitch runs bottom to top. */
@@ -36,17 +35,18 @@ fun LandscapePlaybackPitchGraph(
     totalDurationMs: Long = 0L,
     isPlaying: Boolean = false,
     onSeek: (Long) -> Unit = {},
-    stableMarkers: List<RecordedPitchPoint> = emptyList(),
     showCurve: Boolean = true,
     showBars: Boolean = false,
     showWhiteDots: Boolean = false,
+    // Held-note blocks and their names
     showNoteLabels: Boolean = true,
     autoCenter: Boolean = true,
     colors: GraphColors = GraphColors.Default
 ) {
     val playheadColor = MaterialTheme.colorScheme.error
     val camera = rememberPlaybackCamera(timeAxisVertical = false)
-    val paints = rememberGraphPaints(colors.noteLabels)
+    val paints = rememberGraphPaints()
+    val notes = rememberPlaybackNotes(pitchData)
 
     val pixelsPerSecond = PLAYBACK_PIXELS_PER_SECOND * camera.zoomScale
     val pixelsPerMidi = PLAYBACK_PIXELS_PER_MIDI * camera.zoomScale
@@ -69,6 +69,7 @@ fun LandscapePlaybackPitchGraph(
     }
 
     val currentPoint = remember(currentPositionMs, pitchData) { pitchData.nearestTo(currentPositionMs) }
+    val playhead = playheadState(currentPositionMs, currentPoint, notes)
 
     val targetMidi = currentPoint?.midiFloat ?: 60f
     val animatedCenterMidi by animateFloatAsState(
@@ -109,30 +110,30 @@ fun LandscapePlaybackPitchGraph(
             val viewportY = if (autoCenter) baseViewportY - camera.panAnimY.value else camera.manualViewportY
 
             translate(left = -viewportX, top = -viewportY) {
-                // 1. Draw Background Grids
+                val axes = GraphAxes(
+                    timeRunsDown = false,
+                    timeStartPx = viewportX,
+                    timeEndPx = viewportX + canvasW,
+                    timeToPx = { t -> (t / 1000f) * pixelsPerSecond },
+                    pitchToPx = { m -> -m * pixelsPerMidi }
+                )
+
+                // 1. Note lanes, named along the left edge
                 val maxVisibleMidi = (-viewportY / pixelsPerMidi).toInt() + 1
                 val minVisibleMidi = (-(viewportY + canvasH) / pixelsPerMidi).toInt() - 1
+                drawNoteLanes(
+                    axes,
+                    LaneStyle(
+                        midiRange = minVisibleMidi..maxVisibleMidi,
+                        lanePx = pixelsPerMidi,
+                        activeMidi = playhead.singingMidi,
+                        activeColor = colors.curve,
+                        namesAtPx = viewportX + 8.dp.toPx()
+                    ),
+                    paints
+                )
 
-                for (midi in minVisibleMidi..maxVisibleMidi) {
-                    val y = -midi * pixelsPerMidi
-                    drawLine(
-                        color = GraphStyle.pitchGrid,
-                        start = Offset(viewportX, y),
-                        end = Offset(viewportX + canvasW, y),
-                        strokeWidth = 1f
-                    )
-
-                    val noteName = midiToNoteName(midi)
-                    if (!noteName.contains("#")) {
-                        drawContext.canvas.nativeCanvas.drawText(
-                            midiToDisplayName(midi),
-                            viewportX + 16f,
-                            y - 8f,
-                            paints.label
-                        )
-                    }
-                }
-
+                // 2. A line every second
                 val minVisibleSec = (viewportX / pixelsPerSecond).toInt() - 1
                 val maxVisibleSec = ((viewportX + canvasW) / pixelsPerSecond).toInt() + 1
                 for (sec in minVisibleSec..maxVisibleSec) {
@@ -142,46 +143,16 @@ fun LandscapePlaybackPitchGraph(
                         color = GraphStyle.timeGrid,
                         start = Offset(x, viewportY),
                         end = Offset(x, viewportY + canvasH),
-                        strokeWidth = 1f
+                        strokeWidth = 1.dp.toPx()
                     )
                 }
 
-                // 2. Draw Stable Markers
+                // 3. Held notes, the one under the playhead brighter
                 if (showNoteLabels) {
-                    var activeMarker = stableMarkers.lastOrNull { it.timestampMs <= currentPositionMs }
-
-                    if (activeMarker != null && currentPoint != null) {
-                        val timeSinceLastSinging = abs(currentPoint.timestampMs - currentPositionMs)
-                        if (timeSinceLastSinging > 1000L) {
-                            activeMarker = null
-                        }
-                    }
-
-                    for (m in stableMarkers) {
-                        val x = (m.timestampMs / 1000f) * pixelsPerSecond
-                        val y = -m.midiNote * pixelsPerMidi
-
-                        if (m == activeMarker) {
-                            drawLine(
-                                color = colors.noteLabels,
-                                start = Offset(viewportX, y),
-                                end = Offset(viewportX + canvasW, y),
-                                strokeWidth = 2f
-                            )
-                        }
-
-                        if (x in (viewportX - 100f)..(viewportX + canvasW + 100f)) {
-                            drawContext.canvas.nativeCanvas.drawText(
-                                midiToDisplayName(m.midiNote),
-                                x + 6f,
-                                y - 10f,
-                                paints.noteLabel
-                            )
-                        }
-                    }
+                    drawNoteBlocks(axes, notes, playbackNoteStyle(pixelsPerMidi, colors, playhead.note), paints)
                 }
 
-                // 3. Draw Pitch Data (only the part near the viewport)
+                // 4. Pitch data (only the part near the viewport)
                 val minVisibleTimeMs = ((viewportX - canvasW) / pixelsPerSecond) * 1000f - 1000f
                 val maxVisibleTimeMs = ((viewportX + canvasW * 2) / pixelsPerSecond) * 1000f + 1000f
                 val segments = buildTraceSegments(
@@ -189,22 +160,24 @@ fun LandscapePlaybackPitchGraph(
                     minTimeMs = minVisibleTimeMs.toLong(),
                     maxTimeMs = maxVisibleTimeMs.toLong(),
                     breakDistance = canvasH * 0.35f
-                ) { point ->
-                    Offset((point.timestampMs / 1000f) * pixelsPerSecond, -point.midiFloat * pixelsPerMidi)
-                }
-                drawTraceSegments(segments, showBars, showWhiteDots, showCurve, colors)
+                ) { point -> axes.at(point.timestampMs, point.midiFloat) }
+                drawTraceSegments(segments, TraceStyle(colors, showCurve, showWhiteDots, showBars))
 
-                // 4. Draw Playhead
+                // 5. Playhead, with the note being sung there
                 drawLine(
                     color = playheadColor,
                     start = Offset(playheadVirtualX, viewportY),
                     end = Offset(playheadVirtualX, viewportY + canvasH),
                     strokeWidth = 2.dp.toPx()
                 )
-
-                currentPoint?.let { point ->
-                    val cy = -point.midiFloat * pixelsPerMidi
-                    drawCircle(color = playheadColor, radius = 6.dp.toPx(), center = Offset(playheadVirtualX, cy))
+                playhead.singing?.let { point ->
+                    val at = Offset(playheadVirtualX, -point.midiFloat * pixelsPerMidi)
+                    drawNowTag(
+                        nowTag(at, point.midiFloat, colors, dotColor = playheadColor),
+                        timeRunsDown = false,
+                        bounds = Rect(viewportX, viewportY, viewportX + canvasW, viewportY + canvasH),
+                        paints = paints
+                    )
                 }
             }
         }
