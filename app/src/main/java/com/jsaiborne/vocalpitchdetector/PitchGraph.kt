@@ -39,16 +39,20 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 
 /** A detected pitch as a fractional MIDI note, or NaN for silence. */
-private data class PitchSample(val tMs: Long, val midi: Float)
+internal data class PitchSample(val tMs: Long, val midi: Float)
 
 /**
- * Rolling window of recent pitch samples. Backed by an ArrayDeque so trimming the oldest entries is
- * O(1). [version] changes whenever the contents do; a Canvas that calls [observeChanges] therefore
- * redraws when new data arrives.
+ * The live graph's recent pitch and its clock: a rolling window of samples, backed by an ArrayDeque
+ * so trimming the oldest entries is O(1). [version] changes whenever the contents do; a Canvas that
+ * calls [observeChanges] therefore redraws when new data arrives.
+ *
+ * A screen whose layout changes with the orientation keeps one above the switch
+ * ([rememberTraceBuffer]) and gives it to the graph in each layout, so the trace carries on across
+ * a rotation instead of starting blank.
  */
 @Stable
-private class TraceBuffer {
-    val samples = ArrayDeque<PitchSample>()
+class TraceBuffer {
+    internal val samples = ArrayDeque<PitchSample>()
     private var version by mutableLongStateOf(0L)
 
     // The graph runs on its own clock that stands still while frozen, so Freeze stops the curve
@@ -56,12 +60,12 @@ private class TraceBuffer {
     private var pausedAtMs: Long? = null
     private var pausedTotalMs = 0L
 
-    fun observeChanges(): Long = version
+    internal fun observeChanges(): Long = version
 
     /** Graph time: wall-clock time minus the time spent frozen. */
-    fun now(): Long = (pausedAtMs ?: System.currentTimeMillis()) - pausedTotalMs
+    internal fun now(): Long = (pausedAtMs ?: System.currentTimeMillis()) - pausedTotalMs
 
-    fun setPaused(paused: Boolean) {
+    internal fun setPaused(paused: Boolean) {
         val wallMs = System.currentTimeMillis()
         val pausedAt = pausedAtMs
         if (paused && pausedAt == null) {
@@ -73,7 +77,7 @@ private class TraceBuffer {
         }
     }
 
-    fun addSample(sample: PitchSample, cutoffMs: Long) {
+    internal fun addSample(sample: PitchSample, cutoffMs: Long) {
         samples.addLast(sample)
         trim(cutoffMs)
         version++
@@ -83,13 +87,13 @@ private class TraceBuffer {
      * Drops data older than [cutoffMs] and asks the graph to redraw, so the trace keeps scrolling
      * even when no new pitch data arrives.
      */
-    fun tick(cutoffMs: Long) {
+    internal fun tick(cutoffMs: Long) {
         trim(cutoffMs)
         version++
     }
 
     /** True while any sung pitch newer than [sinceMs] is still in the buffer. */
-    fun hasContentSince(sinceMs: Long): Boolean {
+    internal fun hasContentSince(sinceMs: Long): Boolean {
         for (i in samples.indices.reversed()) {
             val s = samples[i]
             if (s.tMs < sinceMs) break
@@ -108,19 +112,27 @@ private const val SCROLL_FRAME_MS = 33L
 private const val SCROLL_IDLE_POLL_MS = 150L
 private const val SCROLL_EXIT_MARGIN_MS = 500L
 
+/** A trace for [PitchGraphCard] that lasts as long as the caller, e.g. across an orientation change below it. */
 @Composable
-private fun rememberTraceBuffer(
+fun rememberTraceBuffer(): TraceBuffer = remember { TraceBuffer() }
+
+/**
+ * Feeds [buffer] from the engine and keeps it scrolling. A graph that comes back (after a rotation)
+ * restarts this and carries on the same trace.
+ */
+@Composable
+private fun FollowPitch(
+    buffer: TraceBuffer,
     engine: PitchEngine,
     paused: Boolean,
     windowMs: Long,
     // Keeps the graph scrolling even with nothing sung, e.g. while exercise targets move across it
-    keepAlive: Boolean = false
-): TraceBuffer {
-    val buffer = remember { TraceBuffer() }
+    keepAlive: Boolean
+) {
     // Applied before the frame is drawn, so the clock stops on the same frame as the button
     SideEffect { buffer.setPaused(paused) }
 
-    LaunchedEffect(engine, paused, windowMs) {
+    LaunchedEffect(buffer, engine, paused, windowMs) {
         engine.state.collectLatest { s ->
             if (!paused) {
                 val t = buffer.now()
@@ -144,8 +156,6 @@ private fun rememberTraceBuffer(
             }
         }
     }
-
-    return buffer
 }
 
 /** Room left after "now" along the time axis, so the newest point's glow isn't cut off. */
@@ -221,11 +231,13 @@ fun PitchGraphCard(
     // Exercise notes to sing, drawn as bars under the live curve
     targets: List<TargetEvent> = emptyList(),
     // Share of the time window shown ahead of "now", so upcoming targets scroll into view
-    lookaheadFraction: Float = 0f
+    lookaheadFraction: Float = 0f,
+    // Pass one from above a layout switch to keep the trace when the graph is recreated (see TraceBuffer)
+    trace: TraceBuffer = rememberTraceBuffer()
 ) {
     val density = LocalDensity.current
     val windowMs = remember(timeWindowMs, bpm) { (timeWindowMs.toFloat() * (60f / bpm)).toLong() }
-    val buffer = rememberTraceBuffer(engine, paused, windowMs, keepAlive = targets.isNotEmpty())
+    FollowPitch(trace, engine, paused, windowMs, keepAlive = targets.isNotEmpty())
     val paints = rememberGraphPaints()
     val scroll = scrollState ?: rememberScrollState()
 
@@ -280,11 +292,11 @@ fun PitchGraphCard(
                     Modifier.width(contentPitchDp).fillMaxHeight()
                 }
                 Canvas(modifier = canvasSize) {
-                    buffer.observeChanges()
+                    trace.observeChanges()
                     // The part of the pitch axis on screen, so the note tag can stay inside it
                     val visiblePitch = scroll.value.toFloat()..(scroll.value + scroll.viewportSize).toFloat()
                     // The trace starts a little before the window, so it runs right up to the edge
-                    clipRect { drawLiveGraph(settings, buffer.samples, buffer.now(), visiblePitch, paints) }
+                    clipRect { drawLiveGraph(settings, trace.samples, trace.now(), visiblePitch, paints) }
                 }
             }
         }

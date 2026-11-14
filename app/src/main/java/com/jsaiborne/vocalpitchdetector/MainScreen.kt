@@ -224,6 +224,8 @@ fun MainScreen(navController: NavHostController? = null) {
     val pianoVocalRange = savedRange?.takeIf { showRangeOnPiano }?.let { it.low..it.high }
 
     var graphPaused by remember { mutableStateOf(false) }
+    // Shared by the portrait and landscape graphs, so rotating carries on the same trace
+    val graphTrace = rememberTraceBuffer()
     var stableMidi by remember { mutableStateOf<Int?>(null) }
     val graphAlignmentDp by remember { mutableFloatStateOf(0f) }
 
@@ -642,7 +644,8 @@ fun MainScreen(navController: NavHostController? = null) {
                         showWhiteDots = showWhiteDots,
                         bpm = bpm,
                         scrollCorrectionPx = { pitchZoom.visualCorrectionPx() },
-                        colors = graphColors
+                        colors = graphColors,
+                        trace = graphTrace
                     )
                     // Bottom of the graph, away from the ad in the top bar
                     if (showGestureTip) {
@@ -736,7 +739,8 @@ fun MainScreen(navController: NavHostController? = null) {
                     showWhiteDots = showWhiteDots,
                     bpm = bpm,
                     scrollCorrectionPx = { pitchZoom.visualCorrectionPx() },
-                    colors = graphColors
+                    colors = graphColors,
+                    trace = graphTrace
                 )
                 // Top of the graph, away from the banner ad at the bottom of the screen
                 if (showGestureTip) {

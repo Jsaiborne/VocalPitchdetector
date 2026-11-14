@@ -211,6 +211,9 @@ internal fun ExerciseRun(
     }
     val windowMs = (exercise.beatMs * 10f).toLong().coerceIn(5_000L, 10_000L)
     val sharedScroll = rememberScrollState()
+    // One trace for both layouts, so rotating keeps it, and its clock (paused time included) stays in
+    // step with the exercise clock; a new run starts both afresh
+    val graphTrace = remember(runKey) { TraceBuffer() }
 
     val piano: @Composable (Modifier) -> Unit = { m ->
         Piano(
@@ -245,7 +248,8 @@ internal fun ExerciseRun(
             showWhiteDots = false,
             colors = graphColors,
             targets = schedule.events,
-            lookaheadFraction = EXERCISE_LOOKAHEAD
+            lookaheadFraction = EXERCISE_LOOKAHEAD,
+            trace = graphTrace
         )
     }
 
