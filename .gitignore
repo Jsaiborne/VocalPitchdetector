@@ -51,3 +51,5 @@ keystore.properties
 
 # Signed release bundles kept for Play Console uploads
 /Play console/
+/app/play console/
+*.aab
