@@ -22,11 +22,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -42,18 +44,27 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Audiotrack
+import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FitnessCenter
+import androidx.compose.material.icons.filled.Height
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -67,6 +78,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -90,9 +102,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -1319,12 +1333,19 @@ private data class MenuActions(
     val onAbout: () -> Unit
 )
 
+/** A setting that is on or off, with an optional small [icon] in front of its [label]. */
 @Composable
-internal fun SwitchRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+internal fun SwitchRow(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    icon: ImageVector? = null
+) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth()
     ) {
+        if (icon != null) MenuRowIcon(icon)
         Text(
             label,
             modifier = Modifier.weight(1f),
@@ -1355,7 +1376,7 @@ private fun GraphAppearanceMenuRow(onClick: () -> Unit) {
             .clickable(onClick = onClick)
             .padding(vertical = 8.dp)
     ) {
-        Icon(Icons.Filled.Palette, contentDescription = null, modifier = Modifier.padding(end = 12.dp))
+        MenuRowIcon(Icons.Filled.Palette)
         Column(modifier = Modifier.weight(1f)) {
             Text("Graph appearance", style = MaterialTheme.typography.bodyMedium)
             Text(
@@ -1364,19 +1385,78 @@ private fun GraphAppearanceMenuRow(onClick: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
+
+/** The small, quiet icon in front of a row in the settings menu. */
+@Composable
+private fun MenuRowIcon(icon: ImageVector) {
+    Icon(
+        icon,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(end = 12.dp).size(20.dp)
+    )
+}
+
+/** The icon of a tool at the top of the settings menu, on a disc tinted with the theme colour. */
+@Composable
+private fun MenuToolIcon(icon: ImageVector, enabled: Boolean) {
+    val colors = MaterialTheme.colorScheme
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .background(colors.primary.copy(alpha = if (enabled) TINT_ALPHA else DISABLED_TINT_ALPHA), CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = if (enabled) colors.primary else colors.onSurface.copy(alpha = DISABLED_CONTENT_ALPHA),
+            modifier = Modifier.size(20.dp)
+        )
+    }
+}
+
+private const val DISABLED_TINT_ALPHA = 0.06f
+private const val DISABLED_CONTENT_ALPHA = 0.38f
 
 @Composable
 private fun MenuSectionHeader(title: String) {
     Text(
         text = title.uppercase(Locale.getDefault()),
-        modifier = Modifier.padding(top = 4.dp),
+        modifier = Modifier.padding(start = 4.dp),
         style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.SemiBold,
         color = MaterialTheme.colorScheme.primary
     )
 }
+
+/** One section of the settings menu: its heading, then its rows together on a rounded, faintly tinted panel. */
+@Composable
+private fun MenuGroup(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        MenuSectionHeader(title)
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = MENU_GROUP_ALPHA),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                content = content
+            )
+        }
+    }
+}
+
+private const val MENU_GROUP_ALPHA = 0.05f
 
 /**
  * How many cents the sung pitch is from the nearest note, as a small bar with a moving needle.
@@ -1494,7 +1574,8 @@ private fun SettingsMenu(
                     )
                 }
             },
-            leadingIcon = { Icon(Icons.Filled.Mic, contentDescription = null) },
+            leadingIcon = { MenuToolIcon(Icons.Filled.Mic, enabled = rangeTestReason == null) },
+            trailingIcon = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null) },
             enabled = rangeTestReason == null,
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
             onClick = {
@@ -1515,7 +1596,8 @@ private fun SettingsMenu(
                     )
                 }
             },
-            leadingIcon = { Icon(Icons.Filled.FitnessCenter, contentDescription = null) },
+            leadingIcon = { MenuToolIcon(Icons.Filled.FitnessCenter, enabled = rangeTestReason == null) },
+            trailingIcon = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null) },
             enabled = rangeTestReason == null,
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
             onClick = {
@@ -1529,60 +1611,92 @@ private fun SettingsMenu(
                 .padding(horizontal = 16.dp, vertical = 12.dp)
                 .heightIn(max = 400.dp)
                 .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            MenuSectionHeader("Graph")
-            GraphAppearanceMenuRow(
-                onClick = {
-                    onDismiss()
-                    actions.onOpenGraphAppearance()
-                }
-            )
-            SwitchRow("Auto-center", settings.autoCenter, actions.onAutoCenterChange)
-            val secondsOnScreen = LIVE_GRAPH_WINDOW_MS / 1000f * (DEFAULT_SCROLL_BPM / settings.bpm)
-            // One column so the label stays attached to its slider instead of picking up the row spacing
-            Column {
-                Text(
-                    "Scroll speed: ${settings.bpm.roundToInt()} BPM · ${secondsOnScreen.roundToInt()} s on screen",
-                    style = MaterialTheme.typography.bodySmall
+            MenuGroup("Graph") {
+                GraphAppearanceMenuRow(
+                    onClick = {
+                        onDismiss()
+                        actions.onOpenGraphAppearance()
+                    }
                 )
-                Slider(
-                    value = bpmToSliderPos(settings.bpm),
-                    onValueChange = { actions.onBpmChange(sliderPosToBpm(it)) },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-
-            HorizontalDivider()
-            MenuSectionHeader("Notes & piano")
-            SwitchRow("Show cents meter", settings.showCentsMeter, actions.onShowCentsMeterChange)
-            SwitchRow("Solfège note names (Do, Re, Mi)", settings.useSolfege, actions.onUseSolfegeChange)
-            SwitchRow("Use piano samples", settings.useSamplePlayer, actions.onUseSamplePlayerChange)
-            if (settings.savedRangeText != null) {
                 SwitchRow(
-                    "Shade my vocal range on the piano",
-                    settings.showRangeOnPiano,
-                    actions.onShowRangeOnPianoChange
+                    "Auto-center",
+                    settings.autoCenter,
+                    actions.onAutoCenterChange,
+                    icon = Icons.Filled.CenterFocusStrong
                 )
+                val secondsOnScreen = LIVE_GRAPH_WINDOW_MS / 1000f * (DEFAULT_SCROLL_BPM / settings.bpm)
+                // One column so the label stays attached to its slider instead of picking up the row spacing
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                        MenuRowIcon(Icons.Filled.Speed)
+                        Text(
+                            "Scroll speed",
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            "${settings.bpm.roundToInt()} BPM · ${secondsOnScreen.roundToInt()} s on screen",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Slider(
+                        value = bpmToSliderPos(settings.bpm),
+                        onValueChange = { actions.onBpmChange(sliderPosToBpm(it)) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
 
-            HorizontalDivider()
-            MenuSectionHeader("Microphone")
-            LiveVolumeSlider(
-                thresholdDb = settings.thresholdDb,
-                currentVolumeDb = rmsToDb(liveVolumeRms),
-                onThresholdChange = actions.onThresholdChange
-            )
+            MenuGroup("Notes & piano") {
+                SwitchRow(
+                    "Show cents meter",
+                    settings.showCentsMeter,
+                    actions.onShowCentsMeterChange,
+                    icon = Icons.Filled.Tune
+                )
+                SwitchRow(
+                    "Solfège note names (Do, Re, Mi)",
+                    settings.useSolfege,
+                    actions.onUseSolfegeChange,
+                    icon = Icons.Filled.MusicNote
+                )
+                SwitchRow(
+                    "Use piano samples",
+                    settings.useSamplePlayer,
+                    actions.onUseSamplePlayerChange,
+                    icon = Icons.Filled.Audiotrack
+                )
+                if (settings.savedRangeText != null) {
+                    SwitchRow(
+                        "Shade my vocal range on the piano",
+                        settings.showRangeOnPiano,
+                        actions.onShowRangeOnPianoChange,
+                        icon = Icons.Filled.Height
+                    )
+                }
+            }
+
+            MenuGroup("Microphone") {
+                Spacer(modifier = Modifier.height(4.dp))
+                LiveVolumeSlider(
+                    thresholdDb = settings.thresholdDb,
+                    currentVolumeDb = rmsToDb(liveVolumeRms),
+                    onThresholdChange = actions.onThresholdChange
+                )
+            }
         }
-        Spacer(modifier = Modifier.height(12.dp))
         HorizontalDivider()
-        Spacer(modifier = Modifier.height(8.dp))
         DropdownMenuItem(
             text = { Text("Reset to Defaults") },
+            leadingIcon = { Icon(Icons.Filled.RestartAlt, contentDescription = null) },
             onClick = actions.onResetDefaults
         )
         DropdownMenuItem(
             text = { Text("About") },
+            leadingIcon = { Icon(Icons.Filled.Info, contentDescription = null) },
             onClick = {
                 onDismiss()
                 actions.onAbout()

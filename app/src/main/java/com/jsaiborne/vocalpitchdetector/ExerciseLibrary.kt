@@ -2,7 +2,6 @@
 
 package com.jsaiborne.vocalpitchdetector
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -120,8 +119,9 @@ internal data class LibraryActions(
 private fun SectionTitle(text: String, modifier: Modifier = Modifier) {
     Text(
         text,
-        modifier = modifier,
-        style = MaterialTheme.typography.titleSmall,
+        modifier = modifier.padding(start = 4.dp),
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.SemiBold,
         color = MaterialTheme.colorScheme.primary
     )
 }
@@ -134,41 +134,52 @@ private fun ExerciseCard(
     menu: List<Pair<String, () -> Unit>>
 ) {
     var menuOpen by remember { mutableStateOf(false) }
+    // The card itself is the button, so the press ripple keeps to its rounded shape
     Card(
+        onClick = onClick,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
+        shape = EXERCISE_CARD_SHAPE,
+        modifier = Modifier.fillMaxWidth()
     ) {
         Row(
-            modifier = Modifier.padding(start = 14.dp, top = 10.dp, bottom = 10.dp, end = 2.dp),
+            modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 2.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     exercise.name,
                     style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
                 if (exercise.description.isNotEmpty()) {
                     Text(
                         exercise.description,
+                        modifier = Modifier.padding(top = 2.dp),
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
-                Spacer(modifier = Modifier.height(8.dp))
-                PatternPreview(exercise = exercise, modifier = Modifier.widthIn(max = 220.dp).height(28.dp))
+                Spacer(modifier = Modifier.height(10.dp))
+                PatternPreview(exercise = exercise, modifier = Modifier.widthIn(max = 220.dp).height(34.dp))
             }
             Spacer(modifier = Modifier.width(12.dp))
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
+                Pill(
                     best?.let { "$it%" } ?: "–",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
+                    modifier = Modifier.widthIn(min = 52.dp),
+                    emphasized = best != null,
+                    style = MaterialTheme.typography.titleMedium
                 )
-                Text("best", style = MaterialTheme.typography.labelSmall)
+                Text(
+                    "best",
+                    modifier = Modifier.padding(top = 4.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
             Box {
                 IconButton(onClick = { menuOpen = true }) {

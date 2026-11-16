@@ -4,26 +4,18 @@ package com.jsaiborne.vocalpitchdetector
 
 import android.content.Context
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -39,9 +31,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
@@ -380,64 +369,5 @@ fun ExerciseScreen(
             },
             onDismiss = { renaming = null }
         )
-    }
-}
-
-/** Title row with a back arrow ([onBack]) or a close button ([onClose]), and any [actions] before it. */
-@Composable
-internal fun ExerciseHeader(
-    title: String,
-    subtitle: String,
-    onBack: (() -> Unit)? = null,
-    onClose: (() -> Unit)? = null,
-    actions: @Composable RowScope.() -> Unit = {}
-) {
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        if (onBack != null) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-            }
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleLarge)
-            if (subtitle.isNotEmpty()) {
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-        actions()
-        if (onClose != null) {
-            IconButton(onClick = onClose) {
-                Icon(Icons.Default.Close, contentDescription = "Close exercises")
-            }
-        }
-    }
-}
-
-/** The pattern's shape: one bar per note, placed by length and by height above the root. */
-@Composable
-internal fun PatternPreview(exercise: Exercise, modifier: Modifier = Modifier) {
-    val color = MaterialTheme.colorScheme.primary
-    Canvas(modifier = modifier.fillMaxWidth()) {
-        val totalBeats = exercise.totalBeats
-        if (totalBeats <= 0f) return@Canvas
-        val rows = (exercise.span + 1).toFloat()
-        val rowHeight = size.height / rows
-        val barHeight = rowHeight.coerceIn(1.dp.toPx(), 3.dp.toPx())
-        val gap = 1.dp.toPx()
-        var beat = 0f
-        for (note in exercise.notes) {
-            val offset = note.offset
-            if (offset != null) {
-                val x = size.width * beat / totalBeats
-                val w = (size.width * note.beats / totalBeats - gap).coerceAtLeast(gap)
-                val y = size.height - (offset - exercise.minOffset + 0.5f) * rowHeight - barHeight / 2f
-                drawRoundRect(color, Offset(x, y), Size(w, barHeight), CornerRadius(barHeight / 2f))
-            }
-            beat += note.beats
-        }
     }
 }

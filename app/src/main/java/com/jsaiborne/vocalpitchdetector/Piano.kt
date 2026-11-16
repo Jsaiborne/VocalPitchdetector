@@ -39,7 +39,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
@@ -49,6 +51,28 @@ private val VOCAL_RANGE_BLACK = Color(0xFF24422C)
 
 /** How far black keys reach across the keyboard in landscape (portrait uses 140dp of 220dp). */
 private const val BLACK_KEY_LENGTH_FRACTION = 0.64f
+
+/** The size of a C key's label in portrait, and the gap to the key's right edge. */
+private class KeyLabelFit(val fontSize: TextUnit, val endPadding: Dp)
+
+private const val LABEL_MAX_SP = 16f
+private const val LABEL_MIN_SP = 8f
+
+/** A label as long as "Do4" is about this many times its font size wide. */
+private const val LABEL_WIDTH_IN_EMS = 1.9f
+private val LABEL_PADDING = 6.dp
+private val NARROW_LABEL_PADDING = 3.dp
+private val NARROW_KEY = 36.dp
+
+/**
+ * In portrait the label runs across the key, so on narrow keys (zoomed far out) it gets smaller
+ * to stay on one line. Keys wide enough for the full-size label are left as they were.
+ */
+private fun keyLabelFit(keyWidth: Dp): KeyLabelFit {
+    val padding = if (keyWidth < NARROW_KEY) NARROW_LABEL_PADDING else LABEL_PADDING
+    val sp = ((keyWidth - padding * 2).value / LABEL_WIDTH_IN_EMS).coerceIn(LABEL_MIN_SP, LABEL_MAX_SP)
+    return KeyLabelFit(sp.sp, padding)
+}
 
 @SuppressLint("UnusedBoxWithConstraintsScope")
 @Suppress("LongParameterList", "LongMethod", "CyclomaticComplexMethod")
@@ -161,6 +185,7 @@ fun Piano(
             val contentWidthPx = whiteCount * whiteKeyWidthPx
             val contentWidthDp = with(density) { contentWidthPx.toDp() }
             val pitchAxis = remember(startMidi, whiteKeyWidthPx) { KeyboardPitchAxis(startMidi, whiteKeyWidthPx) }
+            val portraitLabel = keyLabelFit(whiteKeyWidthDp)
 
             LaunchedEffect(stableMidi, autoCenter) {
                 val midi = stableMidi
@@ -204,9 +229,12 @@ fun Piano(
                                     text = midiToDisplayName(midi),
                                     modifier = Modifier
                                         .align(Alignment.BottomEnd)
-                                        .padding(bottom = 6.dp, end = 6.dp),
+                                        .padding(bottom = 6.dp, end = portraitLabel.endPadding),
                                     color = Color.Black,
-                                    textAlign = TextAlign.End
+                                    fontSize = portraitLabel.fontSize,
+                                    textAlign = TextAlign.End,
+                                    maxLines = 1,
+                                    softWrap = false
                                 )
                             }
                         }

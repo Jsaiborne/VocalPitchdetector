@@ -2,38 +2,29 @@
 
 package com.jsaiborne.vocalpitchdetector
 
-import android.graphics.Paint
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledIconToggleButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -47,22 +38,13 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import kotlin.math.ceil
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -409,142 +391,6 @@ private fun RunStatus(
             }
             OutlinedIconButton(onClick = controls.onStop, modifier = buttonModifier) {
                 Icon(Icons.Filled.Stop, contentDescription = "Stop and see the score", modifier = iconModifier)
-            }
-        }
-    }
-}
-
-/** The score (of the whole exercise, or of what was sung before Stop), how each repetition went, and what next. */
-@Suppress("LongMethod")
-@Composable
-internal fun ExerciseResultView(
-    outcome: RunOutcome,
-    newBest: Boolean,
-    onReplay: () -> Unit,
-    onChangeSettings: () -> Unit,
-    onAllExercises: () -> Unit
-) {
-    val result = outcome.result
-    val sungReps = result.reps.filter { it.frames > 0 }
-    // Only worth pointing out when one key clearly lagged behind the rest
-    val toughest = sungReps.minByOrNull { it.accuracy }
-        ?.takeIf { sungReps.size > 1 && it.accuracy < result.accuracy - 0.1f }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
-            .padding(vertical = 12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        if (result.frames == 0) {
-            Text(
-                "Nothing was scored. Try a wider range or a slower tempo.",
-                style = MaterialTheme.typography.bodyLarge,
-                textAlign = TextAlign.Center
-            )
-        } else {
-            Text("${result.percent}%", style = MaterialTheme.typography.displayLarge, fontWeight = FontWeight.Bold)
-            Text("on pitch", style = MaterialTheme.typography.titleMedium)
-            if (!outcome.completed) {
-                Text(
-                    "Stopped early, at key ${outcome.keysReached} of ${outcome.totalKeys}. " +
-                        "Only full runs count towards your best.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center
-                )
-            }
-            if (newBest) {
-                Text(
-                    "New personal best!",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-            Box(modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth()) {
-                RepBars(reps = result.reps, startOffset = outcome.startOffset)
-            }
-            Text(
-                "Each bar is one repetition, labelled with its starting note.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center
-            )
-            toughest?.let {
-                Text(
-                    "Toughest key: starting on ${midiToDisplayName(it.rootMidi + outcome.startOffset)} " +
-                        "(${(it.accuracy * 100f).roundToInt()}%)",
-                    style = MaterialTheme.typography.bodyMedium,
-                    textAlign = TextAlign.Center
-                )
-            }
-            tendencyText(result.meanCentsError)?.let {
-                Text(it, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
-            }
-        }
-        Column(
-            modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Button(onClick = onReplay, modifier = Modifier.fillMaxWidth()) { Text("Sing it again") }
-            OutlinedButton(onClick = onChangeSettings, modifier = Modifier.fillMaxWidth()) { Text("Change settings") }
-            TextButton(onClick = onAllExercises, modifier = Modifier.fillMaxWidth()) { Text("All exercises") }
-        }
-    }
-}
-
-/**
- * One bar per repetition, as tall as its accuracy, coloured from red (missed) to the theme colour,
- * and named by the note it starts on ([startOffset] semitones from its root).
- */
-@Composable
-private fun RepBars(reps: List<RepScore>, startOffset: Int) {
-    val good = MaterialTheme.colorScheme.primary
-    val fair = MaterialTheme.colorScheme.tertiary
-    val poor = MaterialTheme.colorScheme.error
-    val track = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
-    val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
-    val labelPx = with(LocalDensity.current) { 11.sp.toPx() }
-    val labelPaint = remember(labelColor, labelPx) {
-        Paint().apply {
-            color = labelColor.toArgb()
-            textSize = labelPx
-            isAntiAlias = true
-            textAlign = Paint.Align.CENTER
-        }
-    }
-
-    Canvas(modifier = Modifier.fillMaxWidth().height(140.dp)) {
-        if (reps.isEmpty()) return@Canvas
-        val labelSpace = labelPx * 1.5f
-        val chartHeight = size.height - labelSpace
-        val slot = size.width / reps.size
-        val barWidth = (slot * 0.7f).coerceAtLeast(2f)
-        // Label only every few bars when there are too many to fit
-        val labelEvery = ceil(reps.size * labelPx * 2.6f / size.width).toInt().coerceAtLeast(1)
-
-        for ((i, rep) in reps.withIndex()) {
-            val left = i * slot + (slot - barWidth) / 2f
-            val corner = CornerRadius(barWidth / 4f)
-            drawRoundRect(track, Offset(left, 0f), Size(barWidth, chartHeight), corner)
-            val barHeight = chartHeight * rep.accuracy
-            val color = when {
-                rep.accuracy >= 0.8f -> good
-                rep.accuracy >= 0.5f -> fair
-                else -> poor
-            }
-            if (barHeight > 0f) {
-                drawRoundRect(color, Offset(left, chartHeight - barHeight), Size(barWidth, barHeight), corner)
-            }
-            if (i % labelEvery == 0) {
-                drawContext.canvas.nativeCanvas.drawText(
-                    midiToDisplayName(rep.rootMidi + startOffset),
-                    left + barWidth / 2f,
-                    size.height - labelPx * 0.25f,
-                    labelPaint
-                )
             }
         }
     }
