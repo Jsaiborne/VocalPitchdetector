@@ -66,6 +66,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import java.io.File
+import java.io.IOException
+import java.io.RandomAccessFile
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -115,8 +117,11 @@ enum class RecordingSort(val label: String) {
     NAME("Name (A–Z)")
 }
 
-/** Leftover session files (audio without pitch data, or the reverse) that never show up in the list. */
-data class IncompleteFiles(val count: Int = 0, val sizeBytes: Long = 0L)
+/**
+ * Leftover session files (audio without pitch data, or the reverse) that never show up in the list.
+ * [recoverable] of them are audio files that still hold a take and can be made into a recording again.
+ */
+data class IncompleteFiles(val count: Int = 0, val sizeBytes: Long = 0L, val recoverable: Int = 0)
 
 // --- Session files, numbering and duration (shared with the playback screen) ---
 
@@ -187,6 +192,43 @@ internal fun findOrphanFiles(recordingsDir: File, nowMs: Long, minAgeMs: Long = 
     val (audio, pitch) = scanSessionFiles(recordingsDir)
     val lonely = audio.filterKeys { it !in pitch }.values + pitch.filterKeys { it !in audio }.values
     return lonely.filter { nowMs - it.lastModified() >= minAgeMs }.sortedBy { it.name }
+}
+
+/** Leftover audio shorter than this isn't worth bringing back. */
+private const val RECOVERABLE_MIN_MS = 500L
+
+/** The note a recovered recording gets, so its empty pitch graph isn't a puzzle. */
+private const val RECOVERED_NOTE = "Recovered after an interrupted recording (no pitch curve)"
+
+/** True for a leftover audio file with enough sound in it to be made into a recording again. */
+internal fun isRecoverableAudio(file: File): Boolean =
+    file.name.endsWith("_audio.wav") && wavDurationMs(file.length()) >= RECOVERABLE_MIN_MS
+
+/**
+ * Makes recordings again out of leftover audio files (see [findOrphanFiles]), such as a take that was
+ * cut off when the app died. The audio is all there apart from its header, which is only filled in when
+ * a recording stops, so the header is written from the file's length. The pitch trace was never saved,
+ * so the recording gets an empty one: it plays, but shows no pitch curve. Returns the recovered session
+ * ids; a file that can't be repaired is left as it is.
+ */
+internal fun recoverOrphanAudio(recordingsDir: File, nowMs: Long, minAgeMs: Long = ORPHAN_MIN_AGE_MS): List<String> {
+    val recovered = mutableListOf<String>()
+    for (audio in findOrphanFiles(recordingsDir, nowMs, minAgeMs).filter(::isRecoverableAudio)) {
+        val id = audio.name.substringAfter("session_").substringBefore("_audio.wav")
+        try {
+            // Whole samples only, in case the last one was cut in half
+            val audioBytes = (audio.length() - WAV_HEADER_SIZE) / BYTES_PER_SAMPLE * BYTES_PER_SAMPLE
+            RandomAccessFile(audio, "rw").use { raf ->
+                raf.setLength(WAV_HEADER_SIZE + audioBytes)
+                writeWavHeader(raf, audioBytes.toInt(), RECORDING_SAMPLE_RATE, 1, BYTES_PER_SAMPLE * Byte.SIZE_BITS)
+            }
+            File(recordingsDir, "session_${id}_pitch.json").writeText(serializePitchSession(emptyList(), emptyList()))
+            recovered += id
+        } catch (e: IOException) {
+            android.util.Log.w("RecordingsScreen", "Couldn't recover ${audio.name}", e)
+        }
+    }
+    return recovered
 }
 
 private fun RecordingSession.matches(query: String, starredOnly: Boolean): Boolean {
@@ -375,7 +417,11 @@ class RecordingsViewModel : ViewModel() {
             } else {
                 findOrphanFiles(recordingsDir, System.currentTimeMillis())
             }
-            _incomplete.value = IncompleteFiles(leftovers.size, leftovers.sumOf { it.length() })
+            _incomplete.value = IncompleteFiles(
+                count = leftovers.size,
+                sizeBytes = leftovers.sumOf { it.length() },
+                recoverable = leftovers.count(::isRecoverableAudio)
+            )
         }
     }
 
@@ -427,6 +473,30 @@ class RecordingsViewModel : ViewModel() {
             }
 
             loadSessions(appContext, recordingsDir)
+        }
+    }
+
+    /**
+     * Turns leftover audio back into recordings (see [recoverOrphanAudio]), each with a note saying
+     * where it came from, then reloads. Does nothing while a take is being recorded. [onDone] gets how
+     * many were recovered.
+     */
+    fun recoverIncomplete(context: Context, recordingsDir: File, onDone: (Int) -> Unit) {
+        val appContext = context.applicationContext
+        viewModelScope.launch {
+            val recovered = withContext(Dispatchers.IO) {
+                if (PitchEngineProvider.get().isRecording.value) {
+                    emptyList<String>()
+                } else {
+                    recoverOrphanAudio(recordingsDir, System.currentTimeMillis())
+                }
+            }
+            val notePrefs = appContext.getSharedPreferences(NOTES_PREFS, Context.MODE_PRIVATE)
+            notePrefs.edit()
+                .apply { recovered.filterNot { notePrefs.contains(it) }.forEach { putString(it, RECOVERED_NOTE) } }
+                .apply()
+            loadSessions(appContext, recordingsDir)
+            onDone(recovered.size)
         }
     }
 
@@ -590,6 +660,16 @@ fun RecordingsScreen(
                     starredOnly = starredOnly,
                     onStarredOnlyChange = viewModel::setStarredOnly,
                     incomplete = incomplete,
+                    onRecover = {
+                        viewModel.recoverIncomplete(context, recordingsDir) { count ->
+                            val message = when (count) {
+                                0 -> "Nothing could be recovered"
+                                1 -> "Recovered 1 recording. It has no pitch curve."
+                                else -> "Recovered $count recordings. They have no pitch curve."
+                            }
+                            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                        }
+                    },
                     onCleanUp = { confirmCleanUp = true }
                 )
             }

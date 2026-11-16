@@ -48,6 +48,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -86,6 +87,12 @@ data class RecordedPitchPoint(
 private const val MIN_LOOP_MS = 300L
 private val PLAYBACK_SPEEDS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f)
 private const val POSITION_TICK_MS = 16L
+
+// Which parts of the playback graph are shown, remembered between recordings and app launches
+private const val PREF_PLAYBACK_CURVE = "PlaybackShowCurve"
+private const val PREF_PLAYBACK_DOTS = "PlaybackShowDots"
+private const val PREF_PLAYBACK_BARS = "PlaybackShowBars"
+private const val PREF_PLAYBACK_HELD_NOTES = "PlaybackShowHeldNotes"
 
 private val MEDIA_AUDIO_ATTRIBUTES: AudioAttributes = AudioAttributes.Builder()
     .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -442,14 +449,23 @@ fun PlaybackScreen(
 
     val canShowAds = LocalCanShowAds.current
 
-    var showCurve by remember { mutableStateOf(true) }
-    var showDots by remember { mutableStateOf(false) }
-    var showBars by remember { mutableStateOf(false) }
-    var showNoteLabels by remember { mutableStateOf(true) }
-    // The colours chosen under Graph appearance on the live screen
-    val graphColors = remember {
-        readGraphColors(context.getSharedPreferences(APP_PREFS_NAME, Context.MODE_PRIVATE))
+    val appPrefs = remember { context.getSharedPreferences(APP_PREFS_NAME, Context.MODE_PRIVATE) }
+    // What the graph shows is remembered from the last time a recording was open
+    var showCurve by remember { mutableStateOf(appPrefs.getBoolean(PREF_PLAYBACK_CURVE, true)) }
+    var showDots by remember { mutableStateOf(appPrefs.getBoolean(PREF_PLAYBACK_DOTS, false)) }
+    var showBars by remember { mutableStateOf(appPrefs.getBoolean(PREF_PLAYBACK_BARS, false)) }
+    var showNoteLabels by remember { mutableStateOf(appPrefs.getBoolean(PREF_PLAYBACK_HELD_NOTES, true)) }
+    LaunchedEffect(showCurve, showDots, showBars, showNoteLabels) {
+        appPrefs.edit()
+            .putBoolean(PREF_PLAYBACK_CURVE, showCurve)
+            .putBoolean(PREF_PLAYBACK_DOTS, showDots)
+            .putBoolean(PREF_PLAYBACK_BARS, showBars)
+            .putBoolean(PREF_PLAYBACK_HELD_NOTES, showNoteLabels)
+            .apply()
     }
+    // The colours chosen under Graph appearance on the live screen
+    val graphColors = remember { readGraphColors(appPrefs) }
+    // Not remembered: a recording always opens following the playhead
     var autoCenter by remember { mutableStateOf(true) }
     var showSettingsMenu by remember { mutableStateOf(false) }
 

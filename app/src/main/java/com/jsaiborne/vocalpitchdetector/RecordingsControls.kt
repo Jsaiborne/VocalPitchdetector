@@ -218,7 +218,8 @@ internal fun SelectionTopBar(
 
 /**
  * Above the list: a "Starred" filter and a one-line summary of what's shown, plus (only when there are
- * leftover files from recordings that never finished saving) a row offering to clean them up.
+ * leftover files from recordings that never finished saving) a row offering to clean them up, and to
+ * recover the ones that still hold audio.
  */
 @Suppress("LongParameterList")
 @Composable
@@ -230,6 +231,7 @@ internal fun RecordingsHeader(
     starredOnly: Boolean,
     onStarredOnlyChange: (Boolean) -> Unit,
     incomplete: IncompleteFiles,
+    onRecover: () -> Unit,
     onCleanUp: () -> Unit
 ) {
     val context = LocalContext.current
@@ -262,16 +264,18 @@ internal fun RecordingsHeader(
         }
         if (incomplete.count > 0) {
             val leftoverSize = formatSize(context, incomplete.sizeBytes)
+            val withAudio = if (incomplete.recoverable > 0) ", ${incomplete.recoverable} with audio" else ""
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "${countLabel(incomplete.count, "incomplete file")} ($leftoverSize)",
+                    text = "${countLabel(incomplete.count, "incomplete file")} ($leftoverSize)$withAudio",
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (incomplete.recoverable > 0) TextButton(onClick = onRecover) { Text("Recover") }
                 TextButton(onClick = onCleanUp) { Text("Clean up") }
             }
         }
@@ -314,6 +318,13 @@ internal fun DeleteRecordingsDialog(
 @Composable
 internal fun CleanUpDialog(incomplete: IncompleteFiles, onConfirm: () -> Unit, onDismiss: () -> Unit) {
     val context = LocalContext.current
+    // Cleaning up also deletes the audio that Recover could still save, so say so first
+    val recoverWarning = when (incomplete.recoverable) {
+        0 -> ""
+        1 -> " One of them still holds audio: cancel and tap Recover to keep it as a recording."
+        else ->
+            " ${incomplete.recoverable} of them still hold audio: cancel and tap Recover to keep them as recordings."
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Clean up incomplete files") },
@@ -321,7 +332,7 @@ internal fun CleanUpDialog(incomplete: IncompleteFiles, onConfirm: () -> Unit, o
             Text(
                 "These are leftovers from recordings that never finished saving, so they don't show in your " +
                     "list. Removing them frees ${formatSize(context, incomplete.sizeBytes)}. " +
-                    "Your saved recordings are not affected."
+                    "Your saved recordings are not affected." + recoverWarning
             )
         },
         confirmButton = {

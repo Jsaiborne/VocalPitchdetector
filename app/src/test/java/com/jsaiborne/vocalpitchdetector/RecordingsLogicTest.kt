@@ -1,6 +1,9 @@
 package com.jsaiborne.vocalpitchdetector
 
 import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -209,5 +212,47 @@ class RecordingsLogicTest {
     @Test
     fun findOrphanFiles_isEmptyWhenTheFolderDoesNotExist() {
         assertTrue(findOrphanFiles(File(tmp.root, "missing"), nowMs = 1L).isEmpty())
+    }
+
+    @Test
+    fun recoverOrphanAudio_makesARecordingOutOfAudioCutOffMidTake() {
+        val dir: File = tmp.newFolder("recover")
+        val now = 10_000_000L
+        val old = now - 5 * 60_000L
+        val audioBytes = 88_200 // one second of 44.1 kHz mono 16-bit
+
+        fun create(name: String, bytes: ByteArray, modifiedAt: Long = old): File = File(dir, name).apply {
+            writeBytes(bytes)
+            setLastModified(modifiedAt)
+        }
+        // The header is only filled in when a recording stops, so a take the app died in has a blank
+        // one; this one also ends in half a sample
+        val cutOff = create("session_2_audio.wav", ByteArray(44 + audioBytes + 1))
+        create("session_1_audio.wav", ByteArray(44 + audioBytes)) // complete pair: not touched
+        val savedPitch = create("session_1_pitch.json", "saved".toByteArray())
+        create("session_3_audio.wav", ByteArray(44 + 100)) // too short to be worth keeping
+        create("session_4_pitch.json", "{}".toByteArray()) // pitch only: nothing to play
+        create("session_5_audio.wav", ByteArray(44 + audioBytes), now - 10_000L) // may still be saving
+
+        assertEquals(listOf("2"), recoverOrphanAudio(dir, now))
+
+        assertEquals(44L + audioBytes, cutOff.length())
+        val bytes = cutOff.readBytes()
+        val header = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        assertEquals("RIFF", String(bytes, 0, 4, Charsets.US_ASCII))
+        assertEquals(audioBytes + 36, header.getInt(4))
+        assertEquals(44100, header.getInt(24))
+        assertEquals(audioBytes, header.getInt(40))
+
+        // It plays with an empty pitch trace, and now shows in the list
+        val pitch = JSONObject(File(dir, "session_2_pitch.json").readText())
+        assertEquals(0, pitch.getJSONArray("pitchData").length())
+        assertEquals(0, pitch.getJSONArray("stableNotes").length())
+        assertEquals(setOf("1", "2"), listSessionFiles(dir).keys)
+
+        assertEquals("saved", savedPitch.readText())
+        assertFalse(File(dir, "session_3_pitch.json").exists())
+        assertFalse(File(dir, "session_5_pitch.json").exists())
+        assertEquals(listOf("session_3_audio.wav", "session_4_pitch.json"), findOrphanFiles(dir, now).map { it.name })
     }
 }
