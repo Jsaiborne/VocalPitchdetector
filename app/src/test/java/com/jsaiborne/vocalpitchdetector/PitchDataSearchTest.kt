@@ -3,6 +3,7 @@ package com.jsaiborne.vocalpitchdetector
 import androidx.compose.ui.geometry.Offset
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PitchDataSearchTest {
@@ -50,42 +51,52 @@ class PitchDataSearchTest {
     }
 
     @Test
-    fun buildTraceSegments_splitsOnSilenceGap() {
+    fun playbackTraceShape_splitsOnSilenceGap() {
         val data = points(0, 10, 20, 500, 510)
 
-        val segments = buildTraceSegments(data, 0, 10_000, breakDistance = 1_000f) {
+        val shape = playbackTraceShape(data, 0, 10_000, seamless = false) {
             Offset(it.timestampMs.toFloat(), 0f)
         }
 
-        assertEquals(2, segments.size)
-        assertEquals(3, segments[0].size)
-        assertEquals(2, segments[1].size)
+        assertEquals(2, shape.runs.size)
+        assertEquals(3, shape.runs[0].size)
+        assertEquals(2, shape.runs[1].size)
+        assertTrue(shape.bridges.isEmpty())
     }
 
     @Test
-    fun buildTraceSegments_splitsOnLargeJump() {
+    fun playbackTraceShape_splitsOnLargeJump() {
         val data = listOf(
             RecordedPitchPoint(0, 440f, 69),
             RecordedPitchPoint(10, 880f, 81),
             RecordedPitchPoint(20, 880f, 81)
         )
 
-        val segments = buildTraceSegments(data, 0, 10_000, breakDistance = 50f) { Offset(0f, it.midiNote * 10f) }
+        val shape = playbackTraceShape(data, 0, 10_000, seamless = false) { Offset(0f, it.midiNote * 10f) }
 
-        assertEquals(2, segments.size)
-        assertEquals(1, segments[0].size)
-        assertEquals(2, segments[1].size)
+        assertEquals(2, shape.runs.size)
+        assertEquals(1, shape.runs[0].size)
+        assertEquals(2, shape.runs[1].size)
+        assertTrue(shape.bridges.isEmpty())
     }
 
     @Test
-    fun buildTraceSegments_onlyIncludesRequestedWindow() {
+    fun playbackTraceShape_onlyIncludesRequestedWindow() {
         val data = points(0, 10, 20, 30, 40)
 
-        val segments = buildTraceSegments(data, 10, 30, breakDistance = 1_000f) {
+        val shape = playbackTraceShape(data, 10, 30, seamless = false) {
             Offset(it.timestampMs.toFloat(), 0f)
         }
 
-        assertEquals(1, segments.size)
-        assertEquals(listOf(10f, 20f, 30f), segments[0].map { it.x })
+        assertEquals(1, shape.runs.size)
+        assertEquals(listOf(10f, 20f, 30f), shape.runs[0].map { it.x })
+    }
+
+    @Test
+    fun playbackTraceShape_emptyWindowGivesNoRuns() {
+        val data = points(0, 10, 20)
+
+        assertTrue(playbackTraceShape(data, 100, 200, seamless = false) { Offset.Zero }.runs.isEmpty())
+        assertTrue(playbackTraceShape(emptyList(), 0, 200, seamless = false) { Offset.Zero }.runs.isEmpty())
     }
 }

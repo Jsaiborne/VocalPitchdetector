@@ -12,8 +12,9 @@ private const val PREF_COLOR_NOTE_LABELS = "ColorNoteLabels"
 private const val PREF_COLOR_CURVE = "ColorCurve"
 private const val PREF_COLOR_DOTS = "ColorDots"
 private const val PREF_COLOR_BY_TUNING = "ColorByTuning"
+private const val PREF_SEAMLESS_GAPS = "SeamlessGaps"
 
-/** User-chosen colours of the pitch graph elements, shared by the live and playback graphs. */
+/** User-chosen colours and styles of the pitch graph elements, shared by the live and playback graphs. */
 @Immutable
 data class GraphColors(
     /** Held-note blocks and their names (when they aren't coloured by tuning). */
@@ -21,14 +22,20 @@ data class GraphColors(
     val curve: Color,
     val dots: Color,
     /** Colour held notes green, amber or red by how close to the note they were sung. */
-    val colorByTuning: Boolean = true
+    val colorByTuning: Boolean = true,
+    /**
+     * Carry the curve straight through a short hole in a note (a reading or two the detector lost),
+     * instead of joining the two sides with a faint dotted line.
+     */
+    val seamlessGaps: Boolean = false
 ) {
     companion object {
         val Default = GraphColors(
             noteLabels = Color(0xFFFFD54F),
             curve = Color(0xFF7AD3FF),
             dots = Color.White,
-            colorByTuning = true
+            colorByTuning = true,
+            seamlessGaps = false
         )
     }
 }
@@ -55,7 +62,8 @@ internal fun readGraphColors(prefs: SharedPreferences): GraphColors {
         noteLabels = Color(prefs.getInt(PREF_COLOR_NOTE_LABELS, d.noteLabels.toArgb())),
         curve = Color(prefs.getInt(PREF_COLOR_CURVE, d.curve.toArgb())),
         dots = Color(prefs.getInt(PREF_COLOR_DOTS, d.dots.toArgb())),
-        colorByTuning = prefs.getBoolean(PREF_COLOR_BY_TUNING, d.colorByTuning)
+        colorByTuning = prefs.getBoolean(PREF_COLOR_BY_TUNING, d.colorByTuning),
+        seamlessGaps = prefs.getBoolean(PREF_SEAMLESS_GAPS, d.seamlessGaps)
     )
 }
 
@@ -64,3 +72,4 @@ internal fun SharedPreferences.Editor.putGraphColors(colors: GraphColors): Share
         .putInt(PREF_COLOR_CURVE, colors.curve.toArgb())
         .putInt(PREF_COLOR_DOTS, colors.dots.toArgb())
         .putBoolean(PREF_COLOR_BY_TUNING, colors.colorByTuning)
+        .putBoolean(PREF_SEAMLESS_GAPS, colors.seamlessGaps)

@@ -83,6 +83,10 @@ internal fun GraphAppearanceDialog(state: GraphAppearanceState, actions: GraphAp
                 GraphElementRow("Pitch curve", state.showCurve, actions.onShowCurveChange, colors.curve) {
                     actions.onColorsChange(colors.copy(curve = it))
                 }
+                // Off: a faint dotted line across a short hole in a note; on: the curve carries straight through
+                SwitchRow("Seamless short gaps", colors.seamlessGaps) {
+                    actions.onColorsChange(colors.copy(seamlessGaps = it))
+                }
                 GraphElementRow("Pitch dots", state.showDots, actions.onShowDotsChange, colors.dots) {
                     actions.onColorsChange(colors.copy(dots = it))
                 }

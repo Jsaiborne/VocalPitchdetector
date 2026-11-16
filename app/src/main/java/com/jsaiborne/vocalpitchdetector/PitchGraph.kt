@@ -24,8 +24,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -60,6 +60,9 @@ class TraceBuffer {
     private var pausedAtMs: Long? = null
     private var pausedTotalMs = 0L
 
+    // Wall-clock time of the last Resume; readings detected before it belong to the frozen stretch
+    private var resumedAtMs = 0L
+
     internal fun observeChanges(): Long = version
 
     /** Graph time: wall-clock time minus the time spent frozen. */
@@ -73,13 +76,24 @@ class TraceBuffer {
         } else if (!paused && pausedAt != null) {
             pausedTotalMs += wallMs - pausedAt
             pausedAtMs = null
+            resumedAtMs = wallMs
             version++
         }
     }
 
-    internal fun addSample(sample: PitchSample, cutoffMs: Long) {
-        samples.addLast(sample)
-        trim(cutoffMs)
+    /**
+     * Adds a reading at the time the engine detected it ([detectedAtMs], wall clock), rather than when
+     * the screen got round to it, so UI hiccups don't bunch the points up. A reading from before the
+     * last Resume, or no newer than the last one, is skipped: the engine's latest state is handed over
+     * again whenever the graph starts listening (after Resume or a rotation).
+     */
+    internal fun addReading(detectedAtMs: Long, midi: Float, windowMs: Long) {
+        if (detectedAtMs < resumedAtMs) return
+        val now = now()
+        val t = (detectedAtMs - pausedTotalMs).coerceAtMost(now)
+        if (t <= (samples.lastOrNull()?.tMs ?: Long.MIN_VALUE)) return
+        samples.addLast(PitchSample(tMs = t, midi = midi))
+        trim(now - windowMs)
         version++
     }
 
@@ -107,8 +121,11 @@ class TraceBuffer {
     }
 }
 
-/** Scroll redraw interval (~30 fps), and how long to keep scrolling after the last sung note. */
-private const val SCROLL_FRAME_MS = 33L
+/**
+ * Display frames closer together than this are skipped, so a 120 Hz screen redraws the graph at 60 fps;
+ * how often to check for a trace while idle; and how long to keep scrolling after the last sung note.
+ */
+private const val SCROLL_MIN_FRAME_GAP_MS = 10L
 private const val SCROLL_IDLE_POLL_MS = 150L
 private const val SCROLL_EXIT_MARGIN_MS = 500L
 
@@ -135,22 +152,25 @@ private fun FollowPitch(
     LaunchedEffect(buffer, engine, paused, windowMs) {
         engine.state.collectLatest { s ->
             if (!paused) {
-                val t = buffer.now()
                 val midi = if (s.frequency > 0f) freqToMidi(s.frequency.toDouble()).toFloat() else Float.NaN
-                buffer.addSample(PitchSample(tMs = t, midi = midi), cutoffMs = t - windowMs)
+                buffer.addReading(detectedAtMs = s.timestampMs, midi = midi, windowMs = windowMs)
             }
         }
     }
 
-    // The engine reports silence only once, so the graph drives its own scrolling: it redraws at
-    // ~30 fps while a trace is still on screen, and stops redrawing once it has scrolled away, so an
-    // idle screen costs almost nothing
+    // The engine reports silence only once, so the graph drives its own scrolling: it redraws on the
+    // display's frames while a trace is still on screen, so it moves evenly, and stops redrawing once
+    // the trace has scrolled away, so an idle screen costs almost nothing
     LaunchedEffect(buffer, paused, windowMs, keepAlive) {
+        var lastFrameMs = 0L
         while (true) {
-            val now = buffer.now()
-            if (!paused && (keepAlive || buffer.hasContentSince(now - windowMs - SCROLL_EXIT_MARGIN_MS))) {
-                buffer.tick(cutoffMs = now - windowMs)
-                delay(SCROLL_FRAME_MS)
+            if (!paused && (keepAlive || buffer.hasContentSince(buffer.now() - windowMs - SCROLL_EXIT_MARGIN_MS))) {
+                withFrameMillis { frameMs ->
+                    if (frameMs - lastFrameMs >= SCROLL_MIN_FRAME_GAP_MS) {
+                        lastFrameMs = frameMs
+                        buffer.tick(cutoffMs = buffer.now() - windowMs)
+                    }
+                }
             } else {
                 delay(SCROLL_IDLE_POLL_MS)
             }
@@ -166,9 +186,6 @@ private const val TRACE_FADE_FRACTION = 0.35f
 
 /** Pitch older than this no longer counts as "now": its lane stops glowing and the tag goes. */
 private const val NOW_MAX_AGE_MS = 250L
-
-/** A jump longer than this share of the time axis breaks the curve (usually an octave error). */
-private const val TRACE_BREAK_FRACTION = 0.35f
 
 /** Number of gaps between the fixed lines across the graph (the "Grid lines" setting). */
 private const val GRID_DIVISIONS = 6
@@ -393,14 +410,20 @@ private fun DrawScope.drawLiveGraph(
         )
     }
 
+    val trace = buildTraceShape(samples, PitchSample::tMs, PitchSample::midi, s.colors.seamlessGaps) { sample ->
+        axes.at(sample.tMs, sample.midi)
+    }
+    // While you sing, the curve runs on at the newest pitch up to "now", so its end stays on the now
+    // edge instead of slipping back between readings (never longer than the gap to the next reading)
+    val head = latest?.let { axes.at(it.tMs, it.midi) to axes.at(nowMs, it.midi) }
     val fadeEndPx = timeEndPx * s.pastFraction * TRACE_FADE_FRACTION
     drawTraceSegments(
-        liveTraceSegments(samples, windowStartMs - SCROLL_EXIT_MARGIN_MS, axes, timeEndPx * TRACE_BREAK_FRACTION),
+        trace.copy(head = head),
         TraceStyle(
             colors = s.colors,
+            timeAlongY = timeRunsDown,
             showCurve = s.layers.curve,
             showDots = s.layers.dots,
-            smoothing = LIVE_CURVE_SMOOTHING,
             fadeStart = axes.point(0f, 0f),
             fadeEnd = axes.point(fadeEndPx, 0f)
         )
@@ -413,43 +436,10 @@ private fun DrawScope.drawLiveGraph(
             Rect(0f, visiblePitchPx.start, size.width, visiblePitchPx.endInclusive)
         }
         drawNowTag(
-            nowTag(axes.at(latest.tMs, latest.midi), latest.midi, s.colors, dotColor = s.colors.curve),
+            nowTag(axes.at(nowMs, latest.midi), latest.midi, s.colors, dotColor = s.colors.curve),
             timeRunsDown,
             bounds,
             paints
         )
     }
-}
-
-/**
- * Splits the samples from [fromMs] on into continuous runs for the curve, breaking at silences, pauses
- * and jumps longer than [breakDistancePx] (usually octave errors), so no line is drawn across them.
- */
-private fun liveTraceSegments(
-    samples: List<PitchSample>,
-    fromMs: Long,
-    axes: GraphAxes,
-    breakDistancePx: Float
-): List<List<Offset>> {
-    val segments = mutableListOf<MutableList<Offset>>()
-    var current: MutableList<Offset>? = null
-    var previousMs = Long.MIN_VALUE
-    for (sample in samples) {
-        if (sample.midi.isNaN() || sample.tMs < fromMs) {
-            current = null
-            continue
-        }
-        val p = axes.at(sample.tMs, sample.midi)
-        val run = current
-        val last = run?.last()
-        val joins = last != null && sample.tMs - previousMs <= PLAYBACK_SILENCE_GAP_MS &&
-            (p - last).getDistance() <= breakDistancePx
-        if (joins && run != null) {
-            run.add(p)
-        } else {
-            current = mutableListOf(p).also { segments.add(it) }
-        }
-        previousMs = sample.tMs
-    }
-    return segments
 }

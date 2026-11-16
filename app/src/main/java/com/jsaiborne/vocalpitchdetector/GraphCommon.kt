@@ -27,6 +27,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -40,7 +42,6 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.abs
-import kotlin.math.hypot
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -116,9 +117,6 @@ internal fun rememberGraphPaints(): GraphPaints {
 
 internal const val PLAYBACK_PIXELS_PER_SECOND = 300f
 internal const val PLAYBACK_PIXELS_PER_MIDI = 60f
-internal const val PLAYBACK_SILENCE_GAP_MS = 150L
-internal const val PLAYBACK_CURVE_SMOOTHING = 1.8f
-internal const val LIVE_CURVE_SMOOTHING = 0.5f
 internal const val PLAYHEAD_SCREEN_FRACTION = 0.2f
 
 /**
@@ -374,74 +372,57 @@ internal fun Modifier.pitchAxisZoom(zoom: PitchAxisZoom, vertical: Boolean): Mod
         }
     }
 
-// --- Trace building / drawing ---------------------------------------------------------------
+// --- Trace drawing ---------------------------------------------------------------------------
+
+/** Opacity of the dotted bridge across a short hole in the curve, so it reads as "no reading here". */
+private const val BRIDGE_ALPHA = 0.45f
 
 /**
- * Splits the recorded points between [minTimeMs] and [maxTimeMs] into continuous runs, starting
- * a new run at every silence gap or large jump so curves are not drawn across them.
- * [toOffset] maps a recorded point to graph space.
+ * The recorded pitch from [fromMs] to [toMs] (the part of a playback graph near the screen) as runs of
+ * curve ([buildTraceShape]), mapped to the graph with [toOffset].
  */
-internal fun buildTraceSegments(
+internal fun playbackTraceShape(
     points: List<RecordedPitchPoint>,
-    minTimeMs: Long,
-    maxTimeMs: Long,
-    breakDistance: Float,
+    fromMs: Long,
+    toMs: Long,
+    seamless: Boolean,
     toOffset: (RecordedPitchPoint) -> Offset
-): List<List<Offset>> {
-    val segments = mutableListOf<MutableList<Offset>>()
-    var current: MutableList<Offset>? = null
-    var prev: Offset? = null
-    var prevTime = Long.MIN_VALUE
-
-    var i = points.firstIndexAtOrAfter(minTimeMs)
-    while (i < points.size) {
-        val point = points[i++]
-        if (point.timestampMs > maxTimeMs) break
-
-        val p = toOffset(point)
-        val previous = prev
-        val startNewSegment = previous == null || current == null ||
-            hypot((p.x - previous.x).toDouble(), (p.y - previous.y).toDouble()) > breakDistance ||
-            point.timestampMs - prevTime > PLAYBACK_SILENCE_GAP_MS
-
-        if (startNewSegment) {
-            current = mutableListOf(p)
-            segments.add(current)
-        } else {
-            current.add(p)
-        }
-        prev = p
-        prevTime = point.timestampMs
-    }
-    return segments
+): TraceShape {
+    val start = points.firstIndexAtOrAfter(fromMs)
+    val end = points.firstIndexAtOrAfter(toMs + 1).coerceAtLeast(start)
+    return buildTraceShape(
+        points.subList(start, end),
+        RecordedPitchPoint::timestampMs,
+        RecordedPitchPoint::midiFloat,
+        seamless,
+        toOffset
+    )
 }
 
 /** How [drawTraceSegments] draws the sung pitch. */
 internal data class TraceStyle(
     val colors: GraphColors,
+    /** Time runs along y (portrait) rather than x; the curve is smoothed along the time axis. */
+    val timeAlongY: Boolean,
     val showCurve: Boolean = true,
     val showDots: Boolean = false,
     val showBars: Boolean = false,
-    val smoothing: Float = PLAYBACK_CURVE_SMOOTHING,
     /** When set, the curve fades in from nearly transparent at [fadeStart] to full colour at [fadeEnd]. */
     val fadeStart: Offset? = null,
     val fadeEnd: Offset? = null
 )
 
-/** Draws bars, the smoothed curve (over a dark edge) and dots for each segment, in either orientation. */
-internal fun DrawScope.drawTraceSegments(segments: List<List<Offset>>, style: TraceStyle) {
-    val barSize = 8.dp.toPx()
-    val barCorner = CornerRadius(4.dp.toPx(), 4.dp.toPx())
-    val dotRadius = 2.dp.toPx()
-    val haloRadius = 3.5.dp.toPx()
-    val curveStroke = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-    val outlineStroke = Stroke(width = 5.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-    val curveBrush = fadingBrush(style.colors.curve, style)
-    val outlineBrush = fadingBrush(GraphStyle.curveOutline, style)
-
-    for (seg in segments) {
-        if (style.showBars) {
-            for (p in seg) {
+/**
+ * Draws the sung pitch in either orientation: bars, then the curve (every dark edge first, then every
+ * coloured line, so no edge cuts into another line), the dotted bridges across short holes, and the dots
+ * at the real readings.
+ */
+internal fun DrawScope.drawTraceSegments(shape: TraceShape, style: TraceStyle) {
+    if (style.showBars) {
+        val barSize = 8.dp.toPx()
+        val barCorner = CornerRadius(4.dp.toPx(), 4.dp.toPx())
+        for (run in shape.runs) {
+            for (p in run) {
                 drawRoundRect(
                     color = GraphStyle.bar,
                     topLeft = Offset(p.x - barSize / 2, p.y - barSize / 2),
@@ -450,13 +431,41 @@ internal fun DrawScope.drawTraceSegments(segments: List<List<Offset>>, style: Tr
                 )
             }
         }
-        if (style.showCurve && seg.size >= 2) {
-            val path = buildSmoothedPath(seg, style.smoothing)
-            drawPath(path = path, brush = outlineBrush, style = outlineStroke)
-            drawPath(path = path, brush = curveBrush, style = curveStroke)
+    }
+    if (style.showCurve) {
+        val curveBrush = fadingBrush(style.colors.curve, style)
+        val outlineBrush = fadingBrush(GraphStyle.curveOutline, style)
+        val curveStroke = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+        val outlineStroke = Stroke(width = 5.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+        val headPath = shape.head?.let { (from, to) ->
+            Path().apply {
+                moveTo(from.x, from.y)
+                lineTo(to.x, to.y)
+            }
         }
-        if (style.showDots) {
-            for (p in seg) {
+        val paths = shape.runs.filter { it.size >= 2 }.map { monotonePath(it, style.timeAlongY) } +
+            listOfNotNull(headPath)
+        for (path in paths) drawPath(path = path, brush = outlineBrush, style = outlineStroke)
+        for (path in paths) drawPath(path = path, brush = curveBrush, style = curveStroke)
+
+        val bridgeDots = PathEffect.dashPathEffect(floatArrayOf(0.01f, 4.dp.toPx()))
+        for ((from, to) in shape.bridges) {
+            drawLine(
+                brush = curveBrush,
+                start = from,
+                end = to,
+                strokeWidth = 1.5.dp.toPx(),
+                cap = StrokeCap.Round,
+                pathEffect = bridgeDots,
+                alpha = BRIDGE_ALPHA
+            )
+        }
+    }
+    if (style.showDots) {
+        val dotRadius = 2.dp.toPx()
+        val haloRadius = 3.5.dp.toPx()
+        for (run in shape.runs) {
+            for (p in run) {
                 drawCircle(color = GraphStyle.dotHalo, radius = haloRadius, center = p)
                 drawCircle(color = style.colors.dots, radius = dotRadius, center = p)
             }

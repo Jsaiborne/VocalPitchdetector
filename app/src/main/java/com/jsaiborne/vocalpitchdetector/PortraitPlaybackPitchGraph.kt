@@ -155,13 +155,22 @@ fun PortraitPlaybackPitchGraph(
                 // 4. Pitch data (only the part near the viewport)
                 val minVisibleTimeMs = ((viewportY - canvasH) / pixelsPerSecond) * 1000f - 1000f
                 val maxVisibleTimeMs = ((viewportY + canvasH * 2) / pixelsPerSecond) * 1000f + 1000f
-                val segments = buildTraceSegments(
+                val trace = playbackTraceShape(
                     points = pitchData,
-                    minTimeMs = minVisibleTimeMs.toLong(),
-                    maxTimeMs = maxVisibleTimeMs.toLong(),
-                    breakDistance = canvasW * 0.35f
+                    fromMs = minVisibleTimeMs.toLong(),
+                    toMs = maxVisibleTimeMs.toLong(),
+                    seamless = colors.seamlessGaps
                 ) { point -> axes.at(point.timestampMs, point.midiFloat) }
-                drawTraceSegments(segments, TraceStyle(colors, showCurve, showWhiteDots, showBars))
+                drawTraceSegments(
+                    trace,
+                    TraceStyle(
+                        colors = colors,
+                        timeAlongY = true,
+                        showCurve = showCurve,
+                        showDots = showWhiteDots,
+                        showBars = showBars
+                    )
+                )
 
                 // 5. Playhead, with the note being sung there
                 drawLine(
