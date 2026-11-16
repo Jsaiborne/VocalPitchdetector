@@ -76,5 +76,38 @@ internal val BUILT_IN_EXERCISES: List<Exercise> = listOf(
         notes = listOf(ExerciseNote(0, 1f), ExerciseNote(7, 2f), ExerciseNote(0, 2f)),
         bpm = 90f,
         builtIn = true
+    ),
+    Exercise(
+        id = "builtin_descending_five",
+        name = "Descending 5-Tone",
+        description = "5-4-3-2-1 · start high and settle down to the root",
+        notes = pattern(7, 5, 4, 2, 0),
+        bpm = 110f,
+        builtIn = true
+    ),
+    Exercise(
+        id = "builtin_broken_thirds",
+        name = "Broken Thirds",
+        description = "1-3-2-4-3-5-4-2-1 · zigzag steps that train the ear",
+        notes = pattern(0, 4, 2, 5, 4, 7, 5, 2, 0),
+        bpm = 110f,
+        builtIn = true
+    ),
+    Exercise(
+        id = "builtin_major_scale",
+        name = "Major Scale",
+        description = "A full octave up and back · even steps all the way",
+        notes = pattern(0, 2, 4, 5, 7, 9, 11, 12, 11, 9, 7, 5, 4, 2, 0, beats = 0.5f, lastBeats = 2f),
+        bpm = 100f,
+        breathBeats = 2.5f,
+        builtIn = true
+    ),
+    Exercise(
+        id = "builtin_long_tone",
+        name = "Long Tone",
+        description = "One held note · keep the pitch steady and centred",
+        notes = listOf(ExerciseNote(0, 4f)),
+        bpm = 50f,
+        builtIn = true
     )
 )

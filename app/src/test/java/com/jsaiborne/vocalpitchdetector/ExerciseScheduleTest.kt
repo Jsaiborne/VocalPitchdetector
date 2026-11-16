@@ -71,7 +71,9 @@ class ExerciseScheduleTest {
     fun singAlongScoresWhilePlayingAndCuesTheNextKey() {
         val s = buildSchedule(twoNotes, 60, 65, Direction.UP, GuideMode.SING_ALONG, startMs = 0L)
         val expected = listOf(
+            // The starting note on both count-in beats, so the tempo is heard before coming in
             TargetEvent(0, 1000, 60, 0, TargetKind.CUE),
+            TargetEvent(1000, 2000, 60, 0, TargetKind.CUE),
             TargetEvent(2000, 3000, 60, 0, TargetKind.GUIDE_AND_SING),
             TargetEvent(3000, 4000, 64, 0, TargetKind.GUIDE_AND_SING),
             // The next root sounds in the last beat of the breath
@@ -82,6 +84,27 @@ class ExerciseScheduleTest {
         assertEquals(expected, s.events)
         assertNull(s.reps.first().listenStartMs)
         assertEquals(8000L, s.endMs)
+    }
+
+    @Test
+    fun cuesGiveTheNoteThePatternStartsOn() {
+        // Starts on the third and comes down to the root
+        val startsOnThird = twoNotes.copy(notes = listOf(ExerciseNote(4, 1f), ExerciseNote(0, 1f)))
+        val s = buildSchedule(startsOnThird, 60, 65, Direction.UP, GuideMode.SING_ALONG, startMs = 0L)
+        assertEquals(listOf(60, 61), s.reps.map { it.rootMidi })
+        // Two count-in cues for the first key, then one for the next
+        assertEquals(listOf(64, 64, 65), s.events.filter { it.kind == TargetKind.CUE }.map { it.midi })
+    }
+
+    @Test
+    fun aPatternTooWideForTheRangeStaysWhereItCanBeHeard() {
+        val wide = twoNotes.copy(notes = listOf(ExerciseNote(-12, 1f), ExerciseNote(24, 1f)))
+        // Centred on a range at the very bottom, its lowest note would be far below the detector's reach
+        val root = exerciseRoots(wide, EXERCISE_MIN_MIDI, EXERCISE_MIN_MIDI + 4, Direction.UP).single()
+        assertEquals(EXERCISE_MIN_MIDI, root + wide.minOffset)
+        // And at the very top, its highest note stays in reach too
+        val topRoot = exerciseRoots(wide, EXERCISE_MAX_MIDI - 4, EXERCISE_MAX_MIDI, Direction.UP).single()
+        assertEquals(EXERCISE_MAX_MIDI, topRoot + wide.maxOffset)
     }
 
     @Test
@@ -187,6 +210,25 @@ class ExerciseScheduleTest {
         wall = 6_000L
         // Carries on from where it stopped, three seconds of pause later
         assertEquals(3_000L, clock.now())
+    }
+
+    @Test
+    fun sungPitchesArePlacedOnTheExerciseClock() {
+        var wall = 1_000L
+        val clock = ExerciseClock { wall }
+        assertEquals(900L, clock.exerciseTimeOf(900L))
+        wall = 2_000L
+        clock.pause()
+        wall = 5_000L
+        // Sung just before the pause but only reported during it: still counts
+        assertEquals(1_950L, clock.exerciseTimeOf(1_950L))
+        assertNull(clock.exerciseTimeOf(3_000L))
+        clock.resume()
+        wall = 6_000L
+        // Heard during the pause, reported after it: left out
+        assertNull(clock.exerciseTimeOf(4_000L))
+        // Three seconds were spent paused
+        assertEquals(2_500L, clock.exerciseTimeOf(5_500L))
     }
 
     @Test

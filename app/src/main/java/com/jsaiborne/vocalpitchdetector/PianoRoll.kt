@@ -17,6 +17,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -61,6 +62,9 @@ private const val AUTO_SCROLL_MS_PER_ROW = 110f
 /** While a note is held still at an edge, the grid keeps scrolling on this tick. */
 private const val AUTO_SCROLL_TICK_MS = 16L
 private const val MAX_TICK_MS = 50f
+
+/** While a pattern is played, its play line is kept within this share of the grid from the left. */
+private const val PLAYHEAD_FOLLOW_FRACTION = 0.75f
 
 /** Empty beats shown after the last note, to draw into. */
 private const val SPARE_STEPS = 4 * STEPS_PER_BEAT
@@ -187,7 +191,12 @@ internal fun PianoRoll(
     var scrollY by remember { mutableFloatStateOf(0f) }
     var centred by remember { mutableStateOf(false) }
 
-    val shownSteps = (notes.endStep + SPARE_STEPS).coerceIn(MIN_SHOWN_STEPS, MAX_PATTERN_STEPS)
+    // The grid is as wide as the pattern plus some room to draw into. While a note is being dragged
+    // it never gets narrower: shrinking it would pull the scroll back, which the drag would take
+    // for more movement and shrink it again, sending the note flying
+    var heldSteps by remember { mutableIntStateOf(0) }
+    val patternSteps = (notes.endStep + SPARE_STEPS).coerceIn(MIN_SHOWN_STEPS, MAX_PATTERN_STEPS)
+    val shownSteps = maxOf(patternSteps, heldSteps)
     val maxScrollX = (gutterPx + shownSteps * stepPx - viewSize.width).coerceAtLeast(0f)
     val maxScrollY = (rulerPx + ROW_COUNT * rowPx - viewSize.height).coerceAtLeast(0f)
     val geometry = RollGeometry(
@@ -226,7 +235,30 @@ internal fun PianoRoll(
             zoom = newZoom
         }
     )
-    val input = rememberUpdatedState(RollInput(notes, selected, geometry, actions, view))
+    val heldActions = actions.copy(
+        onDragStart = { note ->
+            heldSteps = shownSteps
+            actions.onDragStart(note)
+        },
+        onDragEnd = {
+            heldSteps = 0
+            actions.onDragEnd()
+        }
+    )
+    val input = rememberUpdatedState(RollInput(notes, selected, geometry, heldActions, view))
+
+    // While the pattern is being played, the grid follows the play line so it never runs off the edge
+    LaunchedEffect(playheadStep) {
+        val step = playheadStep
+        if (step != null && viewSize.width > 0) {
+            val x = geometry.x(step)
+            val limit = gutterPx + (viewSize.width - gutterPx) * PLAYHEAD_FOLLOW_FRACTION
+            when {
+                x > limit -> view.onScroll(x - limit, 0f)
+                x < gutterPx -> view.onScroll(x - gutterPx, 0f)
+            }
+        }
+    }
 
     Canvas(
         modifier = modifier
@@ -280,23 +312,25 @@ internal fun PianoRoll(
         }
 
         // Notes, the selected one with a grip at its end for changing the length
+        val insetX = 0.5.dp.toPx()
+        val insetY = 1.5.dp.toPx()
+        val gripWidth = 3.dp.toPx()
         for (note in notes) {
-            val left = g.x(note.start.toFloat()) + 1f
-            val top = g.y(note.offset) + 3f
-            val width = note.length * stepPx - 2f
-            val height = rowPx - 6f
+            val left = g.x(note.start.toFloat()) + insetX
+            val top = g.y(note.offset) + insetY
+            val width = note.length * stepPx - insetX * 2f
+            val height = rowPx - insetY * 2f
             val isSelected = note == selected
             drawRoundRect(
                 if (isSelected) colors.tertiary else colors.primary,
                 Offset(left, top),
                 Size(width, height),
-                CornerRadius(6f)
+                CornerRadius(3.dp.toPx())
             )
             if (isSelected) {
-                val gripWidth = 6f
                 drawRoundRect(
                     colors.onTertiary,
-                    Offset(left + width - gripWidth - 4f, top + height * 0.25f),
+                    Offset(left + width - gripWidth * 1.75f, top + height * 0.25f),
                     Size(gripWidth, height * 0.5f),
                     CornerRadius(gripWidth / 2f)
                 )
@@ -305,7 +339,7 @@ internal fun PianoRoll(
 
         playheadStep?.let {
             val x = g.x(it)
-            drawLine(colors.error, Offset(x, rulerPx), Offset(x, gridBottom), strokeWidth = 3f)
+            drawLine(colors.error, Offset(x, rulerPx), Offset(x, gridBottom), strokeWidth = 1.5.dp.toPx())
         }
 
         // Note names down the side, beat numbers across the top; both stay put while the grid scrolls
@@ -320,7 +354,7 @@ internal fun PianoRoll(
             val named = nameEveryRow || midi % 12 !in BLACK_KEY_PITCH_CLASSES
             if (named && top < size.height && top + rowPx > rulerPx) {
                 val paint = if (offset % 12 == 0) rootLabelPaint else labelPaint
-                canvas.drawText(midiToDisplayName(midi), 6f, top + rowPx / 2f + textPx / 3f, paint)
+                canvas.drawText(midiToDisplayName(midi), 2.dp.toPx(), top + rowPx / 2f + textPx / 3f, paint)
             }
         }
         // Beat numbers thin out when zoomed far out, so they never overlap
@@ -329,7 +363,7 @@ internal fun PianoRoll(
             val beat = step / STEPS_PER_BEAT
             val labelled = step % STEPS_PER_BEAT == 0 && beat % beatEvery == 0 && step < MAX_PATTERN_STEPS
             if (labelled && g.x(step.toFloat()) >= gutterPx) {
-                canvas.drawText("${beat + 1}", g.x(step.toFloat()) + 4f, rulerPx - 6f, labelPaint)
+                canvas.drawText("${beat + 1}", g.x(step.toFloat()) + 2.dp.toPx(), rulerPx - 3.dp.toPx(), labelPaint)
             }
         }
     }

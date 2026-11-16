@@ -33,6 +33,9 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,14 +43,68 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONException
+import org.json.JSONObject
 
 private enum class ExerciseStep { LIBRARY, EDIT, SETUP, RUN, RESULT }
+
+/** A run can't be picked up again after the screen is recreated, so it comes back as its setup. */
+private val STEP_SAVER = Saver<ExerciseStep, String>(
+    save = { step ->
+        val resumable = step != ExerciseStep.RUN && step != ExerciseStep.RESULT
+        (if (resumable) step else ExerciseStep.SETUP).name
+    },
+    restore = { name -> ExerciseStep.entries.firstOrNull { it.name == name } ?: ExerciseStep.LIBRARY }
+)
+
+/**
+ * Keeps an exercise (or none) across the screen being recreated: a built-in by its id, one of the
+ * user's own, or a draft that isn't on disk yet, as its JSON.
+ */
+private val EXERCISE_SAVER = Saver<Exercise?, String>(
+    save = { exercise ->
+        when {
+            exercise == null -> ""
+            exercise.builtIn -> exercise.id
+            else -> exercise.toJson().toString()
+        }
+    },
+    restore = { saved -> restoreExercise(saved) }
+)
+
+private fun restoreExercise(saved: String): Exercise? = when {
+    saved.isEmpty() -> null
+    !saved.startsWith("{") -> BUILT_IN_EXERCISES.firstOrNull { it.id == saved }
+    else -> try {
+        // A draft may have no notes yet
+        exerciseFromJson(JSONObject(saved), requireNotes = false)
+    } catch (ignored: JSONException) {
+        null
+    }
+}
+
+/** Calls [onStop] (the latest one given) when the app is left or the screen turns off. */
+@Composable
+internal fun OnStopEffect(onStop: () -> Unit) {
+    val latestOnStop by rememberUpdatedState(onStop)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) latestOnStop()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+}
 
 /**
  * Vocal exercises: pick one (or draw your own), set it up, sing it against target bars, then see
@@ -79,10 +136,15 @@ fun ExerciseScreen(
 
     // A built-in can be reopened at once; one of the user's own has to wait until they're read from disk
     val resumed = remember { BUILT_IN_EXERCISES.firstOrNull { it.id == resumeExerciseId } }
-    var step by remember { mutableStateOf(if (resumed != null) ExerciseStep.SETUP else ExerciseStep.LIBRARY) }
-    var exercise by remember { mutableStateOf(resumed) }
+    // Where the user is, and what they're working on, is saved with the activity: Android recreates
+    // it when the theme or font size changes, or after closing the app in the background, and an
+    // exercise being drawn mustn't be lost to that. (The editor keeps its own unsaved changes.)
+    var step by rememberSaveable(stateSaver = STEP_SAVER) {
+        mutableStateOf(if (resumed != null) ExerciseStep.SETUP else ExerciseStep.LIBRARY)
+    }
+    var exercise by rememberSaveable(stateSaver = EXERCISE_SAVER) { mutableStateOf(resumed) }
     var settings by remember { mutableStateOf(readExerciseSettings(prefs, savedRange)) }
-    var bpm by remember { mutableFloatStateOf(resumed?.bpm ?: 100f) }
+    var bpm by rememberSaveable { mutableFloatStateOf(resumed?.bpm ?: DEFAULT_EXERCISE_BPM) }
     var outcome by remember { mutableStateOf<RunOutcome?>(null) }
     var newBest by remember { mutableStateOf(false) }
     // Bumped on every start, so "Sing it again" builds a fresh schedule
@@ -90,10 +152,10 @@ fun ExerciseScreen(
 
     // The user's own exercises; null until they've been read from disk
     var mine by remember { mutableStateOf<List<SavedExercise>?>(null) }
-    var draft by remember { mutableStateOf<Exercise?>(null) }
-    var draftIsNew by remember { mutableStateOf(false) }
+    var draft by rememberSaveable(stateSaver = EXERCISE_SAVER) { mutableStateOf<Exercise?>(null) }
+    var draftIsNew by rememberSaveable { mutableStateOf(false) }
     // Where the editor goes back to: the list, or the setup of the exercise being edited
-    var editReturn by remember { mutableStateOf(ExerciseStep.LIBRARY) }
+    var editReturn by rememberSaveable(stateSaver = STEP_SAVER) { mutableStateOf(ExerciseStep.LIBRARY) }
     var renaming by remember { mutableStateOf<Exercise?>(null) }
 
     LaunchedEffect(store) {
@@ -140,12 +202,20 @@ fun ExerciseScreen(
         scope.launch {
             withContext(Dispatchers.IO) { store.delete(target.id) }
             snackbar.currentSnackbarData?.dismiss()
-            val result = snackbar.showSnackbar(
-                "Deleted \"${target.name}\"",
-                actionLabel = "Undo",
-                duration = SnackbarDuration.Short
-            )
-            if (result == SnackbarResult.ActionPerformed) persist(target)
+            var undone = false
+            try {
+                val result = snackbar.showSnackbar(
+                    "Deleted \"${target.name}\"",
+                    actionLabel = "Undo",
+                    duration = SnackbarDuration.Short
+                )
+                undone = result == SnackbarResult.ActionPerformed
+            } finally {
+                // Gone for good (also when the screen is left with the message still up), so its
+                // best score and play history go too; Undo keeps them
+                if (!undone) clearBestScore(prefs, target.id, lastPlayedToo = true)
+            }
+            if (undone) persist(target)
         }
     }
 
@@ -356,14 +426,14 @@ internal fun PatternPreview(exercise: Exercise, modifier: Modifier = Modifier) {
         if (totalBeats <= 0f) return@Canvas
         val rows = (exercise.span + 1).toFloat()
         val rowHeight = size.height / rows
-        val barHeight = rowHeight.coerceIn(2f, 8f)
-        val gap = 2f
+        val barHeight = rowHeight.coerceIn(1.dp.toPx(), 3.dp.toPx())
+        val gap = 1.dp.toPx()
         var beat = 0f
         for (note in exercise.notes) {
             val offset = note.offset
             if (offset != null) {
                 val x = size.width * beat / totalBeats
-                val w = (size.width * note.beats / totalBeats - gap).coerceAtLeast(2f)
+                val w = (size.width * note.beats / totalBeats - gap).coerceAtLeast(gap)
                 val y = size.height - (offset - exercise.minOffset + 0.5f) * rowHeight - barHeight / 2f
                 drawRoundRect(color, Offset(x, y), Size(w, barHeight), CornerRadius(barHeight / 2f))
             }

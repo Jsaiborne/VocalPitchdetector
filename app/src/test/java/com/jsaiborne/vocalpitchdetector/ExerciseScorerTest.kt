@@ -1,6 +1,7 @@
 package com.jsaiborne.vocalpitchdetector
 
 import kotlin.math.pow
+import kotlin.random.Random
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -104,6 +105,34 @@ class ExerciseScorerTest {
             PitchFrame(t, guide?.let { midiToFreq(it.midi).toFloat() } ?: -1f)
         }
         assertEquals(0, scoreFrames(hearsPianoOnly, schedule, DEFAULT_TOLERANCE_CENTS).percent)
+    }
+
+    @Test
+    fun aReadingStandsUntilTheNextOne() {
+        val readings = listOf(PitchFrame(100, 220f), PitchFrame(160, 233f), PitchFrame(200, -1f))
+        val frames = framesFromReadings(readings, fromMs = 80, toMs = 240)
+        assertEquals(listOf(80L, 100L, 120L, 140L, 160L, 180L, 200L, 220L), frames.map { it.tMs })
+        // Nothing heard yet, then each pitch until the next, then the silence that ended the note
+        assertEquals(listOf(-1f, 220f, 220f, 220f, 233f, 233f, -1f, -1f), frames.map { it.frequencyHz })
+    }
+
+    @Test
+    fun aReadingGoesStaleWhenNothingFollowsIt() {
+        val frames = framesFromReadings(listOf(PitchFrame(0, 220f)), fromMs = 0, toMs = 1000)
+        assertEquals(220f, frames.first { it.tMs == STALE_PITCH_MS }.frequencyHz)
+        assertEquals(-1f, frames.first { it.tMs == STALE_PITCH_MS + SCORE_FRAME_MS }.frequencyHz)
+    }
+
+    @Test
+    fun pitchesAreScoredWhenTheyWereSungNotWhenTheyArrived() {
+        // In tune throughout, with a reading every 25 ms and silence when each note ends; the engine
+        // hands them over late and in batches, so the order they arrive in mustn't matter
+        val readings = schedule.scoredEvents.flatMap { e ->
+            (e.startMs until e.endMs step 25).map { PitchFrame(it, midiToFreq(e.midi).toFloat()) } +
+                PitchFrame(e.endMs, -1f)
+        }.shuffled(Random(1))
+        val frames = framesFromReadings(readings, schedule.startMs, schedule.endMs)
+        assertEquals(100, scoreFrames(frames, schedule, DEFAULT_TOLERANCE_CENTS).percent)
     }
 
     @Test

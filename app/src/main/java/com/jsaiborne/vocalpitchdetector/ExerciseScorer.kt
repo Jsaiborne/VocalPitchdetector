@@ -20,8 +20,39 @@ private const val TENDENCY_MAX_CENTS = 200f
 /** Below this average error the singer is neither flat nor sharp. */
 private const val TENDENCY_NEUTRAL_CENTS = 10f
 
+/** A pitch older than this is out of date (the engine only reports when something changes). */
+internal const val STALE_PITCH_MS = 400L
+
 /** The sung pitch at one moment; [frequencyHz] is 0 or less when nothing was being sung. */
 data class PitchFrame(val tMs: Long, val frequencyHz: Float)
+
+/**
+ * Rebuilds the sung pitch every [stepMs] from [fromMs] up to [toMs] out of the engine's [readings],
+ * each of which is a [PitchFrame] placed at the time of the audio it describes. A reading stands
+ * until the next one (the engine reports silence once, when a note ends), but no longer than
+ * [staleMs]. Placing pitches when they were sung, rather than when the app heard about them, is
+ * what keeps the detector's delay out of the score.
+ */
+internal fun framesFromReadings(
+    readings: List<PitchFrame>,
+    fromMs: Long,
+    toMs: Long,
+    stepMs: Long = SCORE_FRAME_MS,
+    staleMs: Long = STALE_PITCH_MS
+): List<PitchFrame> {
+    val sorted = readings.sortedBy { it.tMs }
+    val frames = ArrayList<PitchFrame>()
+    var next = 0
+    var latest: PitchFrame? = null
+    var t = fromMs
+    while (t < toMs) {
+        while (next < sorted.size && sorted[next].tMs <= t) latest = sorted[next++]
+        val heard = latest?.takeIf { t - it.tMs <= staleMs }
+        frames += PitchFrame(t, heard?.frequencyHz ?: -1f)
+        t += stepMs
+    }
+    return frames
+}
 
 data class RepScore(
     val repIndex: Int,

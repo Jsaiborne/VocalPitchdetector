@@ -1,8 +1,11 @@
 package com.jsaiborne.vocalpitchdetector
 
+import org.json.JSONException
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class ExerciseJsonTest {
@@ -46,6 +49,47 @@ class ExerciseJsonTest {
         assertEquals(2f, exercise.breathBeats)
         assertEquals("", exercise.description)
         assertEquals(DEFAULT_EDITOR_ROOT_MIDI, exercise.editorRootMidi)
+    }
+
+    @Test(expected = JSONException::class)
+    fun aFileFromANewerFormatIsRefused() {
+        exerciseFromJson(JSONObject("""{"version":99,"id":"x","name":"Later","notes":[{"offset":0,"beats":1}]}"""))
+    }
+
+    @Test
+    fun valuesTheAppCantPlayAreBroughtIntoRange() {
+        val json = JSONObject(
+            """{"id":"x","name":"   ","bpm":0,"breathBeats":99,"editorRoot":5,"notes":[
+                {"offset":0,"beats":0},{"offset":40,"beats":1},{"offset":-40,"beats":-2},{"offset":2,"beats":0.01}
+            ]}"""
+        )
+        val exercise = exerciseFromJson(json)
+        assertEquals("Untitled", exercise.name)
+        // A tempo of 0 would make every beat last for ever
+        assertEquals(MIN_EXERCISE_BPM, exercise.bpm)
+        assertEquals(MAX_BREATH_BEATS, exercise.breathBeats)
+        assertEquals(EDITOR_ROOT_RANGE.first, exercise.editorRootMidi)
+        // Notes with no length are dropped; the rest are kept on the grid's rows and steps
+        assertEquals(listOf(ExerciseNote(EDITOR_MAX_OFFSET, 1f), ExerciseNote(2, 0.25f)), exercise.notes)
+    }
+
+    @Test
+    fun aPatternLongerThanTheGridIsCutOff() {
+        val tooLong = Exercise(id = "x", name = "Long", notes = List(40) { ExerciseNote(0, 1f) })
+        val read = exerciseFromJson(tooLong.toJson())
+        assertEquals(MAX_PATTERN_STEPS / STEPS_PER_BEAT, read.notes.size)
+    }
+
+    @Test
+    fun anExerciseWithNothingToSingIsRefusedUnlessItsADraft() {
+        val empty = Exercise(id = "x", name = "Empty", notes = listOf(ExerciseNote(null, 1f)))
+        assertTrue(exerciseFromJson(empty.toJson(), requireNotes = false).notes.all { it.isRest })
+        try {
+            exerciseFromJson(empty.toJson())
+            fail("An exercise with only rests was accepted")
+        } catch (expected: JSONException) {
+            // Refused, as it should be
+        }
     }
 
     @Test

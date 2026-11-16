@@ -44,19 +44,6 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
-private const val MAX_NAME_LENGTH = 40
-private const val MAX_DESCRIPTION_LENGTH = 120
-
-/** What can be done from the exercise list. */
-internal data class LibraryActions(
-    val onSelect: (Exercise) -> Unit,
-    val onNew: () -> Unit,
-    val onEdit: (Exercise) -> Unit,
-    val onRename: (Exercise) -> Unit,
-    val onDuplicate: (Exercise) -> Unit,
-    val onDelete: (Exercise) -> Unit
-)
-
 /**
  * The user's own exercises ([mine], null while they load), then the built-in warm-ups. A
  * built-in can't be changed, but its menu copies it into the editor.
@@ -118,6 +105,16 @@ internal fun ExerciseLibrary(
         }
     }
 }
+
+/** What can be done from the exercise list. */
+internal data class LibraryActions(
+    val onSelect: (Exercise) -> Unit,
+    val onNew: () -> Unit,
+    val onEdit: (Exercise) -> Unit,
+    val onRename: (Exercise) -> Unit,
+    val onDuplicate: (Exercise) -> Unit,
+    val onDelete: (Exercise) -> Unit
+)
 
 @Composable
 private fun SectionTitle(text: String, modifier: Modifier = Modifier) {

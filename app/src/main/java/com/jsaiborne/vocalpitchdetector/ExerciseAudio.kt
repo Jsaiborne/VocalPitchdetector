@@ -9,59 +9,85 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
-/** A pitch older than this is out of date (the engine only reports when something changes). */
-private const val STALE_PITCH_MS = 400L
+/** How often a paused run looks to see whether it has been resumed. */
+private const val PAUSE_POLL_MS = 30L
+
+/** A guide note found this late when playback restarts is still played, not dropped. */
+private const val LATE_NOTE_GRACE_MS = 120L
+
+/** A guide note sounds for at least this long, however short its bar. */
+private const val MIN_GUIDE_NOTE_MS = 80
+
+/** How long a run waits after its last note for the final pitch readings to come in before scoring. */
+internal const val SCORE_TAIL_MS = 150L
+
+/**
+ * How far a run's guide playback has got. Playback is restarted whenever the schedule changes or
+ * a pause ends, so this is kept outside it: a restart then neither repeats a note nor drops one.
+ */
+internal class GuidePlayback {
+    @Volatile
+    var lastStartedMs = Long.MIN_VALUE
+}
+
+/**
+ * Waits until the exercise clock reaches [untilMs]. The clock is checked rather than trusted to
+ * keep moving: while it's paused this just waits, so nothing that follows can happen during a
+ * pause, even when the pause came from leaving the app (when the screen can't cancel anything).
+ */
+internal suspend fun ExerciseClock.awaitTime(untilMs: Long) {
+    var waitMs = untilMs - now()
+    while (isPaused || waitMs > 0) {
+        delay(if (isPaused) PAUSE_POLL_MS else waitMs)
+        waitMs = untilMs - now()
+    }
+}
 
 /**
  * Plays the audible notes of [schedule] (guide notes and cues) that are still to come, at their
  * scheduled times on [clock]. Each wait is measured against the clock rather than summed, so
  * playback never drifts from the targets on the graph. Cancel the calling coroutine to stop.
  *
- * Playback restarts whenever the schedule changes or a pause ends; notes already started are left
- * alone (a paused piano note carries on by itself), so none is played twice.
+ * Playback restarts whenever the schedule changes or a pause ends; [playback] remembers the notes
+ * already started (a paused piano note carries on by itself), so none is played twice.
  */
-internal suspend fun playSchedule(schedule: ExerciseSchedule, clock: ExerciseClock) = withContext(Dispatchers.Default) {
-    val from = clock.now()
-    val audible = schedule.events.filter { it.kind.audible && it.startMs > from }.sortedBy { it.startMs }
-    for (event in audible) {
-        val waitMs = event.startMs - clock.now()
-        if (waitMs > 0) delay(waitMs)
-        playGuideNote(event.midi, (event.endMs - event.startMs).toInt())
+internal suspend fun playSchedule(schedule: ExerciseSchedule, clock: ExerciseClock, playback: GuidePlayback) =
+    withContext(Dispatchers.Default) {
+        val earliestMs = clock.now() - LATE_NOTE_GRACE_MS
+        val audible = schedule.events
+            .filter { it.kind.audible && it.startMs > playback.lastStartedMs && it.startMs >= earliestMs }
+            .sortedBy { it.startMs }
+        for (event in audible) {
+            clock.awaitTime(event.startMs)
+            playback.lastStartedMs = event.startMs
+            playGuideNote(event.midi, (event.endMs - event.startMs).toInt())
+        }
     }
-}
 
-/** A piano sample when one is loaded, otherwise a synthesised tone of the note's length. */
+/**
+ * A piano sample when one is loaded, otherwise a synthesised tone of the note's length. The piano
+ * note is let go after [durationMs] too, so short notes and rests sound as they are drawn; with
+ * [ring] it is left to ring out instead (a tap on the editor's grid).
+ */
 @Suppress("TooGenericExceptionCaught")
-internal fun playGuideNote(midi: Int, durationMs: Int) {
+internal fun playGuideNote(midi: Int, durationMs: Int, ring: Boolean = false) {
     try {
-        if (!SamplePlayer.play(midi)) ToneGenerator.playTone(midiToFreq(midi), durationMs)
+        val holdMs = if (ring) null else durationMs.coerceAtLeast(MIN_GUIDE_NOTE_MS)
+        if (!SamplePlayer.play(midi, holdMs)) ToneGenerator.playTone(midiToFreq(midi), durationMs)
     } catch (e: RuntimeException) {
         Log.w("ExerciseAudio", "Guide note $midi failed: ${e.message}")
     }
 }
 
 /**
- * Samples the sung pitch into [frames] every [SCORE_FRAME_MS] until the schedule ends on [clock].
- * Sampling on a clock (instead of collecting the engine's updates) is what lets silence count
- * against the score: the engine reports silence only once. Frames are added to the caller's list
- * so they survive a pause, which cancels this and starts it again.
+ * Keeps every pitch the engine reports in [readings], placed on [clock] at the time of the audio
+ * it describes, until cancelled. Readings from a pause are left out. The score is worked out from
+ * these afterwards (see [framesFromReadings]), which is what lets silence count against it and
+ * keeps the detector's delay out of it.
  */
-internal suspend fun recordFrames(
-    engine: PitchEngine,
-    schedule: ExerciseSchedule,
-    clock: ExerciseClock,
-    frames: MutableList<PitchFrame>
-) {
-    var now = clock.now()
-    while (now < schedule.endMs) {
-        if (now >= schedule.startMs) {
-            val state = engine.state.value
-            // The engine stamps its updates with wall-clock time
-            val fresh = System.currentTimeMillis() - state.timestampMs <= STALE_PITCH_MS
-            frames += PitchFrame(now, if (fresh) state.frequency else -1f)
-        }
-        delay(SCORE_FRAME_MS)
-        now = clock.now()
+internal suspend fun collectReadings(engine: PitchEngine, clock: ExerciseClock, readings: MutableList<PitchFrame>) {
+    engine.readings.collect { reading ->
+        clock.exerciseTimeOf(reading.timestampMs)?.let { readings += PitchFrame(it, reading.frequency) }
     }
 }
 
@@ -75,9 +101,12 @@ internal fun hasHeadphones(context: Context): Boolean {
         AudioDeviceInfo.TYPE_WIRED_HEADSET,
         AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
         AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
-        AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+        AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+        // USB-C headphones and adapters often report themselves as a plain USB device
+        AudioDeviceInfo.TYPE_USB_DEVICE
     )
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) headphoneTypes += AudioDeviceInfo.TYPE_USB_HEADSET
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) headphoneTypes += AudioDeviceInfo.TYPE_HEARING_AID
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) headphoneTypes += AudioDeviceInfo.TYPE_BLE_HEADSET
     return audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { it.type in headphoneTypes }
 }

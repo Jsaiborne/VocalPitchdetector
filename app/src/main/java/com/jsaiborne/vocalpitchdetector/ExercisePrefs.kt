@@ -11,10 +11,6 @@ private const val PREF_EXERCISE_STRICT = "ExerciseStrict"
 private const val PREF_EXERCISE_BEST_PREFIX = "ExerciseBest_"
 private const val PREF_EXERCISE_PLAYED_PREFIX = "ExercisePlayed_"
 
-/** Exercises stay inside the notes the pitch detector can hear (about B1 to D6). */
-internal const val EXERCISE_MIN_MIDI = 36
-internal const val EXERCISE_MAX_MIDI = 84
-
 /** With no range test yet, start from C3 to C4, which most voices can manage. */
 private const val DEFAULT_LOW_MIDI = 48
 private const val DEFAULT_HIGH_MIDI = 60
@@ -92,9 +88,14 @@ internal fun saveBestScore(prefs: SharedPreferences, exerciseId: String, percent
     return true
 }
 
-/** Forgets the best score, for when an exercise's notes change and the old score no longer applies. */
-internal fun clearBestScore(prefs: SharedPreferences, exerciseId: String) {
-    prefs.edit().remove(PREF_EXERCISE_BEST_PREFIX + exerciseId).apply()
+/**
+ * Forgets the best score, for when an exercise's notes change and the old score no longer applies.
+ * With [lastPlayedToo], also forgets when it was last played: for an exercise that is gone for good.
+ */
+internal fun clearBestScore(prefs: SharedPreferences, exerciseId: String, lastPlayedToo: Boolean = false) {
+    val editor = prefs.edit().remove(PREF_EXERCISE_BEST_PREFIX + exerciseId)
+    if (lastPlayedToo) editor.remove(PREF_EXERCISE_PLAYED_PREFIX + exerciseId)
+    editor.apply()
 }
 
 /** When the exercise was last started, or 0 if never. */

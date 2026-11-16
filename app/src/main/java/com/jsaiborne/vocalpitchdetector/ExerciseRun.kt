@@ -52,7 +52,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -61,8 +61,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.ui.unit.sp
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
@@ -85,13 +84,15 @@ private const val PORTRAIT_STATUS_ICON_DP = 24
 
 /**
  * How a run ended: its score, how far through the keys it got ([keysReached] of [totalKeys]), and
- * whether it ran to the end or was stopped early.
+ * whether it ran to the end or was stopped early. [startOffset] is the pattern's first note, in
+ * semitones from the root, for naming each repetition by the note it starts on.
  */
 internal data class RunOutcome(
     val result: ExerciseResult,
     val keysReached: Int,
     val totalKeys: Int,
-    val completed: Boolean
+    val completed: Boolean,
+    val startOffset: Int
 )
 
 /** The run's buttons and their state, handed to the status card as one. */
@@ -132,22 +133,36 @@ internal fun ExerciseRun(
     val schedule = remember(plan, startMs) {
         buildScheduleForRoots(exercise, plan.map { it.rootMidi }, settings.mode, startMs)
     }
-    // Kept across pauses and plan changes, which cancel and restart the playback and sampling
-    val frames = remember(runKey) { mutableListOf<PitchFrame>() }
+    // Kept across pauses and plan changes, which cancel and restart the playback
+    val readings = remember(runKey) { mutableListOf<PitchFrame>() }
+    val playback = remember(runKey) { GuidePlayback() }
+    // One trace for both layouts, so rotating keeps it. Its clock is paused and resumed together
+    // with the exercise clock, so the target bars stay lined up with it; a new run starts both afresh
+    val graphTrace = remember(runKey) { TraceBuffer() }
     var paused by remember(runKey) { mutableStateOf(false) }
     var repeating by remember(runKey) { mutableStateOf(false) }
     val latestOnFinished by rememberUpdatedState(onFinished)
 
-    // Playback and scoring run side by side; pausing or leaving the screen cancels both
+    // Every sung pitch is kept, timed on the exercise clock, and scored once the run is over
+    LaunchedEffect(engine, clock) { collectReadings(engine, clock, readings) }
+
+    // Plays the guide notes and waits for the end. Both follow the exercise clock, so they stand
+    // still while it's paused even before this is cancelled: after leaving the app nothing on screen
+    // is updated (or cancelled) until the user comes back
     LaunchedEffect(schedule, paused) {
         if (paused) return@LaunchedEffect
-        launch { playSchedule(schedule, clock) }
-        recordFrames(engine, schedule, clock, frames)
+        launch { playSchedule(schedule, clock, playback) }
+        clock.awaitTime(schedule.endMs + SCORE_TAIL_MS)
+        val frames = framesFromReadings(readings, schedule.startMs, schedule.endMs)
         val result = scoreFrames(frames, schedule, settings.toleranceCents)
-        latestOnFinished(RunOutcome(result, keyRoots.size, keyRoots.size, completed = true))
+        latestOnFinished(RunOutcome(result, keyRoots.size, keyRoots.size, completed = true, exercise.firstOffset))
     }
-    DisposableEffect(Unit) {
-        onDispose { ToneGenerator.stop() }
+    DisposableEffect(clock) {
+        onDispose {
+            ToneGenerator.stop()
+            // Piano notes frozen by a pause would otherwise wait in the pool and sound in a later run
+            if (clock.isPaused) SamplePlayer.stopAll()
+        }
     }
     // A run lasts a few minutes with no touches, so keep the screen from sleeping
     val view = LocalView.current
@@ -173,10 +188,13 @@ internal fun ExerciseRun(
         if (repeating && repIndex != null) plan = plan.withRepeatAfter(repIndex)
     }
 
-    // Freezes on the spot, piano notes included; resuming carries on from the same moment
+    // Freezes on the spot, piano notes and graph included; resuming carries on from the same moment.
+    // The clocks are stopped here and now, not left to the next recomposition, which can be a long
+    // way off when the app is being left
     val pauseRun: () -> Unit = {
         if (!paused) {
             clock.pause()
+            graphTrace.setPaused(true)
             SamplePlayer.pauseAll()
             ToneGenerator.stop()
             paused = true
@@ -184,15 +202,7 @@ internal fun ExerciseRun(
     }
     // Leaving the app pauses the run: otherwise the guide notes would play on in the background and
     // the time away would be scored as silence. The user resumes it when they come back
-    val latestPauseRun by rememberUpdatedState(pauseRun)
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) latestPauseRun()
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
+    OnStopEffect(pauseRun)
 
     val controls = RunControls(
         paused = paused,
@@ -200,6 +210,7 @@ internal fun ExerciseRun(
         onTogglePause = {
             if (paused) {
                 clock.resume()
+                graphTrace.setPaused(false)
                 SamplePlayer.resumeAll()
                 paused = false
             } else {
@@ -214,12 +225,14 @@ internal fun ExerciseRun(
         onStop = {
             // Score whatever has been sung so far, the current repetition included
             val sung = schedule.truncatedAt(clock.now())
+            val frames = framesFromReadings(readings, sung.startMs, sung.endMs)
             val result = scoreFrames(frames, sung, settings.toleranceCents)
             val keysReached = plan.getOrNull(sung.reps.lastIndex)?.let { it.keyIndex + 1 } ?: 0
             if (result.frames == 0) {
                 onStop()
             } else {
-                latestOnFinished(RunOutcome(result, keysReached, keyRoots.size, completed = false))
+                val outcome = RunOutcome(result, keysReached, keyRoots.size, completed = false, exercise.firstOffset)
+                latestOnFinished(outcome)
             }
         }
     )
@@ -232,9 +245,6 @@ internal fun ExerciseRun(
     }
     val windowMs = (exercise.beatMs * 10f).toLong().coerceIn(5_000L, 10_000L)
     val sharedScroll = rememberScrollState()
-    // One trace for both layouts, so rotating keeps it, and its clock (paused time included) stays in
-    // step with the exercise clock; a new run starts both afresh
-    val graphTrace = remember(runKey) { TraceBuffer() }
 
     val piano: @Composable (Modifier) -> Unit = { m ->
         Piano(
@@ -454,7 +464,7 @@ internal fun ExerciseResultView(
                 )
             }
             Box(modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth()) {
-                RepBars(reps = result.reps)
+                RepBars(reps = result.reps, startOffset = outcome.startOffset)
             }
             Text(
                 "Each bar is one repetition, labelled with its starting note.",
@@ -464,7 +474,7 @@ internal fun ExerciseResultView(
             )
             toughest?.let {
                 Text(
-                    "Toughest key: starting on ${midiToDisplayName(it.rootMidi)} " +
+                    "Toughest key: starting on ${midiToDisplayName(it.rootMidi + outcome.startOffset)} " +
                         "(${(it.accuracy * 100f).roundToInt()}%)",
                     style = MaterialTheme.typography.bodyMedium,
                     textAlign = TextAlign.Center
@@ -485,18 +495,22 @@ internal fun ExerciseResultView(
     }
 }
 
-/** One bar per repetition, as tall as its accuracy, coloured from red (missed) to the theme colour. */
+/**
+ * One bar per repetition, as tall as its accuracy, coloured from red (missed) to the theme colour,
+ * and named by the note it starts on ([startOffset] semitones from its root).
+ */
 @Composable
-private fun RepBars(reps: List<RepScore>) {
+private fun RepBars(reps: List<RepScore>, startOffset: Int) {
     val good = MaterialTheme.colorScheme.primary
     val fair = MaterialTheme.colorScheme.tertiary
     val poor = MaterialTheme.colorScheme.error
     val track = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
-    val labelPaint = remember(labelColor) {
+    val labelPx = with(LocalDensity.current) { 11.sp.toPx() }
+    val labelPaint = remember(labelColor, labelPx) {
         Paint().apply {
             color = labelColor.toArgb()
-            textSize = 24f
+            textSize = labelPx
             isAntiAlias = true
             textAlign = Paint.Align.CENTER
         }
@@ -504,12 +518,12 @@ private fun RepBars(reps: List<RepScore>) {
 
     Canvas(modifier = Modifier.fillMaxWidth().height(140.dp)) {
         if (reps.isEmpty()) return@Canvas
-        val labelSpace = 32f
+        val labelSpace = labelPx * 1.5f
         val chartHeight = size.height - labelSpace
         val slot = size.width / reps.size
         val barWidth = (slot * 0.7f).coerceAtLeast(2f)
         // Label only every few bars when there are too many to fit
-        val labelEvery = ceil(reps.size * 56f / size.width).toInt().coerceAtLeast(1)
+        val labelEvery = ceil(reps.size * labelPx * 2.6f / size.width).toInt().coerceAtLeast(1)
 
         for ((i, rep) in reps.withIndex()) {
             val left = i * slot + (slot - barWidth) / 2f
@@ -526,9 +540,9 @@ private fun RepBars(reps: List<RepScore>) {
             }
             if (i % labelEvery == 0) {
                 drawContext.canvas.nativeCanvas.drawText(
-                    midiToDisplayName(rep.rootMidi),
+                    midiToDisplayName(rep.rootMidi + startOffset),
                     left + barWidth / 2f,
-                    size.height - 6f,
+                    size.height - labelPx * 0.25f,
                     labelPaint
                 )
             }

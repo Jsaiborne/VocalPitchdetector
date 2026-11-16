@@ -10,6 +10,7 @@ import org.json.JSONObject
 internal const val EXERCISES_DIR = "exercises"
 
 private const val USER_ID_PREFIX = "user_"
+private const val TEMP_SUFFIX = ".tmp"
 private val VALID_ID = Regex("[A-Za-z0-9_-]+")
 
 /** An exercise read from disk, with when it was last saved. */
@@ -25,17 +26,21 @@ internal fun newExerciseId(): String = USER_ID_PREFIX + UUID.randomUUID().toStri
  */
 internal class ExerciseStore(private val dir: File) {
 
-    /** Every readable exercise, most recently saved first. Files that can't be read are skipped. */
+    /**
+     * Every readable exercise, most recently saved first. Files that can't be read are skipped, and
+     * a temporary file left behind by a save that was cut short is cleared away.
+     */
     fun loadAll(): List<SavedExercise> {
-        val files = dir.listFiles { file -> file.isFile && file.name.endsWith(".json") } ?: return emptyList()
-        return files.mapNotNull(::read).sortedByDescending { it.savedAtMs }
+        val files = dir.listFiles { file -> file.isFile } ?: return emptyList()
+        files.filter { it.name.endsWith(TEMP_SUFFIX) }.forEach { it.delete() }
+        return files.filter { it.name.endsWith(".json") }.mapNotNull(::read).sortedByDescending { it.savedAtMs }
     }
 
     /** Writes [exercise], replacing any earlier version. Throws [IOException] if it can't. */
     fun save(exercise: Exercise): SavedExercise {
         val target = fileFor(exercise.id)
         if (!dir.isDirectory && !dir.mkdirs()) throw IOException("Can't create $dir")
-        val temp = File(dir, target.name + ".tmp")
+        val temp = File(dir, target.name + TEMP_SUFFIX)
         temp.writeText(exercise.toJson().toString(2))
         // On Android a rename replaces the old file in one step. Some file systems (Windows, where
         // the unit tests run) won't rename over an existing file, so clear it out of the way there
@@ -56,8 +61,10 @@ internal class ExerciseStore(private val dir: File) {
 
     private fun read(file: File): SavedExercise? = try {
         val exercise = exerciseFromJson(JSONObject(file.readText()))
-        // The file name is how the exercise is found again, so it has to match the id inside
-        if (file.name == "${exercise.id}.json") SavedExercise(exercise, file.lastModified()) else null
+        // The file name is how the exercise is found again, so it has to match the id inside, and
+        // the id has to be one that can be saved under again
+        val findable = file.name == "${exercise.id}.json" && VALID_ID.matches(exercise.id)
+        if (findable) SavedExercise(exercise, file.lastModified()) else null
     } catch (ignored: JSONException) {
         null
     } catch (ignored: IOException) {

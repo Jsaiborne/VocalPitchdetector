@@ -5,8 +5,13 @@ import kotlin.math.roundToLong
 
 // --- Exercise timeline (no Android or Compose types, so it can be unit tested) --------------------
 
-/** Beats of count-in before the first repetition: the first root sounds, then a beat of silence. */
+/**
+ * Beats of count-in before the first repetition. In call & response the starting note sounds, then
+ * a beat of silence before the demonstration. Singing along, it sounds on every count-in beat, so
+ * the singer hears the tempo as well as the note before coming in.
+ */
 internal const val COUNT_IN_BEATS = 2f
+private const val SING_ALONG_COUNT_IN_CUES = 2
 
 /** In call & response, the pause between the app's demonstration and the singer's turn. */
 internal const val RESPONSE_GAP_BEATS = 1f
@@ -100,6 +105,10 @@ internal class ExerciseClock(private val wallClock: () -> Long = System::current
     @Volatile
     private var pausedTotalMs = 0L
 
+    /** Wall-clock time of the last resume; anything heard before it and after the pause doesn't count. */
+    @Volatile
+    private var resumedAtMs = Long.MIN_VALUE
+
     val isPaused: Boolean get() = pausedAtMs != null
 
     fun now(): Long = (pausedAtMs ?: wallClock()) - pausedTotalMs
@@ -110,8 +119,20 @@ internal class ExerciseClock(private val wallClock: () -> Long = System::current
 
     fun resume() {
         val pausedAt = pausedAtMs ?: return
-        pausedTotalMs += wallClock() - pausedAt
+        val wallMs = wallClock()
+        pausedTotalMs += wallMs - pausedAt
+        resumedAtMs = wallMs
         pausedAtMs = null
+    }
+
+    /**
+     * Where something that happened at wall-clock [wallMs] (a sung pitch, stamped by the engine)
+     * falls on the exercise clock, or null when it happened during a pause.
+     */
+    fun exerciseTimeOf(wallMs: Long): Long? {
+        val pausedAt = pausedAtMs
+        val duringPause = (pausedAt != null && wallMs > pausedAt) || wallMs < resumedAtMs
+        return if (duringPause) null else wallMs - pausedTotalMs
     }
 }
 
@@ -142,7 +163,7 @@ internal fun List<RepPlan>.withoutRepeatAfter(index: Int): List<RepPlan> {
 /**
  * The roots the pattern is sung from, one semitone apart, so that every note stays inside
  * [lowMidi]..[highMidi]. When the range is narrower than the pattern, it is sung once from the root
- * that centres it in the range.
+ * that centres it in the range, moved if need be so no note leaves what the detector can hear.
  */
 internal fun exerciseRoots(exercise: Exercise, lowMidi: Int, highMidi: Int, direction: Direction): List<Int> {
     val lowest = lowMidi - exercise.minOffset
@@ -150,7 +171,10 @@ internal fun exerciseRoots(exercise: Exercise, lowMidi: Int, highMidi: Int, dire
     val up = if (highest >= lowest) {
         (lowest..highest).toList()
     } else {
-        listOf(Math.floorDiv(lowMidi + highMidi - exercise.minOffset - exercise.maxOffset, 2))
+        val centred = Math.floorDiv(lowMidi + highMidi - exercise.minOffset - exercise.maxOffset, 2)
+        val floor = EXERCISE_MIN_MIDI - exercise.minOffset
+        val ceiling = EXERCISE_MAX_MIDI - exercise.maxOffset
+        listOf(if (floor <= ceiling) centred.coerceIn(floor, ceiling) else centred)
     }
     return when (direction) {
         Direction.UP -> up
@@ -191,7 +215,9 @@ internal fun buildScheduleForRoots(
 
     // Time is kept as a Double and rounded per event, so rounding never builds up into drift
     var cursor = startMs.toDouble()
-    events += TargetEvent(cursor.roundToLong(), (cursor + beatMs).roundToLong(), roots.first(), 0, TargetKind.CUE)
+    // A cue gives the note the singer starts on, which isn't always the root
+    val firstOffset = exercise.firstOffset
+    events += countInCues(roots.first() + firstOffset, mode, cursor, beatMs)
     cursor += COUNT_IN_BEATS * beatMs
 
     for ((index, root) in roots.withIndex()) {
@@ -214,7 +240,7 @@ internal fun buildScheduleForRoots(
                 events += TargetEvent(
                     startMs = (cursor + breathMs - cueMs).roundToLong(),
                     endMs = (cursor + breathMs).roundToLong(),
-                    midi = roots[index + 1],
+                    midi = roots[index + 1] + firstOffset,
                     repIndex = index + 1,
                     kind = TargetKind.CUE
                 )
@@ -223,6 +249,20 @@ internal fun buildScheduleForRoots(
         }
     }
     return ExerciseSchedule(events, reps, startMs, cursor.roundToLong())
+}
+
+/** The count-in from [fromMs]: the starting note [midi], once, or on each beat when singing along. */
+private fun countInCues(midi: Int, mode: GuideMode, fromMs: Double, beatMs: Double): List<TargetEvent> {
+    val cues = if (mode == GuideMode.SING_ALONG) SING_ALONG_COUNT_IN_CUES else 1
+    return (0 until cues).map { beat ->
+        TargetEvent(
+            startMs = (fromMs + beat * beatMs).roundToLong(),
+            endMs = (fromMs + (beat + 1) * beatMs).roundToLong(),
+            midi = midi,
+            repIndex = 0,
+            kind = TargetKind.CUE
+        )
+    }
 }
 
 /** Adds one pass of the pattern from [root] starting at [fromMs]; returns the time it ends. */

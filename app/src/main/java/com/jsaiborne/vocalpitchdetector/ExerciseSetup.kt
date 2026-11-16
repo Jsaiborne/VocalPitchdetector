@@ -38,8 +38,6 @@ import androidx.compose.ui.unit.dp
 import java.util.Locale
 import kotlin.math.roundToInt
 
-internal const val MIN_EXERCISE_BPM = 40f
-internal const val MAX_EXERCISE_BPM = 200f
 internal const val BPM_STEP = 5f
 
 /** Choose the range, direction, guide mode and tempo before starting an exercise. */

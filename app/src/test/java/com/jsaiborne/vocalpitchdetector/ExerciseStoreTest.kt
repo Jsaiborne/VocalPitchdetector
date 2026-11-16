@@ -65,6 +65,29 @@ class ExerciseStoreTest {
     }
 
     @Test
+    fun filesThatCouldntBePlayedOrSavedAgainAreSkipped() {
+        val store = ExerciseStore(folder.root)
+        val good = exercise("Good")
+        store.save(good)
+        // Nothing to sing
+        val silent = exercise("Silent").copy(notes = listOf(ExerciseNote(null, 1f)))
+        File(folder.root, "${silent.id}.json").writeText(silent.toJson().toString())
+        // An id that couldn't be used as a file name the next time it is saved
+        val unsafe = exercise("Unsafe").copy(id = "not safe!")
+        File(folder.root, "${unsafe.id}.json").writeText(unsafe.toJson().toString())
+        assertEquals(listOf(good), store.loadAll().map { it.exercise })
+    }
+
+    @Test
+    fun aTemporaryFileLeftByAnInterruptedSaveIsCleared() {
+        val store = ExerciseStore(folder.root)
+        val leftover = File(folder.root, "${newExerciseId()}.json.tmp")
+        leftover.writeText("{ half an exer")
+        assertTrue(store.loadAll().isEmpty())
+        assertFalse(leftover.exists())
+    }
+
+    @Test
     fun aMissingFolderIsAnEmptyLibrary() {
         assertTrue(ExerciseStore(File(folder.root, "nowhere")).loadAll().isEmpty())
     }
