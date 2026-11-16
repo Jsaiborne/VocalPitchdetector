@@ -106,9 +106,12 @@ class YinPitchDetector(
             tauEstimate = bestTau
         }
 
-        // 7. Parabolic Interpolation
+        // 7. The pick may be a fraction of the true period (a harmonic); see preferTruePeriod
+        tauEstimate = preferTruePeriod(tauEstimate, minLag, maxLag)
+
+        // 8. Parabolic Interpolation
         val betterTau = parabolicInterpolation(cmndf, tauEstimate, minLag, maxLag)
-        val frequency = sampleRate.toFloat() / betterTau.toFloat()
+        val frequency = sampleRate.toFloat() / betterTau
         val normValue = cmndf[tauEstimate].coerceIn(0f, 1f)
 
         // Final sanity check on frequency bounds
@@ -117,6 +120,30 @@ class YinPitchDetector(
         }
 
         return YinResult(frequency.toDouble(), normValue.toDouble(), rms)
+    }
+
+    /**
+     * A voice whose fundamental and other odd harmonics are weak (an open vowel high in a man's range,
+     * where the vowel boosts the 2nd harmonic) repeats almost exactly every half period, so the threshold
+     * search can stop at a dip that's a fraction of the true period, reading A4 as A5. The true period is
+     * then a whole multiple of [tau] with a clearly deeper dip; this returns that multiple, or else [tau].
+     * On a correct pick, the dips at its multiples are about as deep as its own, never half, so it stays.
+     */
+    private fun preferTruePeriod(tau: Int, minLag: Int, maxLag: Int): Int {
+        var best = tau
+        for (k in 2..MAX_PERIOD_MULTIPLE) {
+            val centre = k * tau
+            if (centre + k > maxLag) break
+            // The lowest point near k × tau (rounding in tau grows k-fold), then the bottom of its dip
+            var dip = centre - k
+            for (i in centre - k + 1..centre + k) if (cmndf[i] < cmndf[dip]) dip = i
+            while (dip < maxLag && cmndf[dip + 1] < cmndf[dip]) dip++
+            while (dip > minLag && cmndf[dip - 1] < cmndf[dip]) dip--
+            if (cmndf[dip] < cmndf[best] * SUBHARMONIC_RATIO && cmndf[best] - cmndf[dip] > SUBHARMONIC_MARGIN) {
+                best = dip
+            }
+        }
+        return best
     }
 
     private fun parabolicInterpolation(y: FloatArray, tau: Int, minIdx: Int, maxIdx: Int): Float {
@@ -143,5 +170,15 @@ class YinPitchDetector(
 
     private companion object {
         private const val YIN_MAX_ACCEPTABLE_CMND = 0.45f
+
+        /**
+         * A dip at a multiple of the pick is taken as the true period when it's below this share of the
+         * pick's dip and at least [SUBHARMONIC_MARGIN] lower.
+         */
+        private const val SUBHARMONIC_RATIO = 0.5f
+        private const val SUBHARMONIC_MARGIN = 0.02f
+
+        /** Multiples of the pick checked: an octave up (2), an octave and a fifth (3), two octaves (4). */
+        private const val MAX_PERIOD_MULTIPLE = 4
     }
 }

@@ -23,6 +23,9 @@ import kotlin.math.sqrt
 /** Readings in the median that removes one-reading glitches; 3 delays the pitch by just one reading. */
 private const val MEDIAN_READINGS = 3
 
+/** How long a sudden octave jump inside a note is held back before it's taken as a real leap. */
+private const val OCTAVE_HOLD_MS = 90f
+
 @Suppress("LongParameterList")
 class AudioRecordPitchDetector(
     private val sampleRate: Int = 44100,
@@ -83,7 +86,8 @@ class AudioRecordPitchDetector(
         sampleRate = sampleRate,
         hopSize = hopSize,
         medianWindow = MEDIAN_READINGS,
-        smoothingAlpha = if (smoothingMs > 0f) 1.0 - exp(-hopMs / smoothingMs.toDouble()) else 1.0
+        smoothingAlpha = if (smoothingMs > 0f) 1.0 - exp(-hopMs / smoothingMs.toDouble()) else 1.0,
+        octaveHoldFrames = framesFor(OCTAVE_HOLD_MS, hopMs)
     )
 
     private val gate = VoicingGate(graceFrames = framesFor(graceMs, hopMs))

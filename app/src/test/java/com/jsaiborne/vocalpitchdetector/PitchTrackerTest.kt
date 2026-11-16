@@ -72,7 +72,7 @@ class PitchTrackerTest {
             )
 
             if (outHz != null && prevHz != null) {
-                val ratio = outHz / prevHz!!
+                val ratio = outHz / prevHz
                 if (ratio > 0) {
                     val semis = abs(12.0 * ln(ratio) / ln(2.0))
                     maxSemitoneJump = max(maxSemitoneJump, semis)
@@ -106,5 +106,63 @@ class PitchTrackerTest {
 
         assertNotNull(hz)
         assertEquals(452.9, hz!!, 0.01)
+    }
+
+    // --- Octave flips --------------------------------------------------------------------------
+
+    /** Set up as the detector uses it: a reading every ~23 ms, light smoothing, a 4-reading octave hold. */
+    private fun liveTracker() = PitchTracker(
+        sampleRate = 44100,
+        hopSize = 1024,
+        medianWindow = 3,
+        smoothingAlpha = 0.6,
+        octaveHoldFrames = 4,
+        energyThreshold = 1e-4,
+        confidenceThreshold = 0.12
+    )
+
+    private fun PitchTracker.feed(hz: Double): Double = processFrame(pitchHz = hz, cmndfMin = 0.05, rms = 0.3)!!
+
+    private fun semitonesBetween(hz: Double, referenceHz: Double) = 12.0 * ln(hz / referenceHz) / ln(2.0)
+
+    @Test
+    fun briefOctaveFlip_staysOnTheNote() {
+        val tracker = liveTracker()
+        repeat(10) { tracker.feed(440.0) }
+
+        val during = List(3) { tracker.feed(880.0) }
+        val after = tracker.feed(440.0)
+
+        for (hz in during + after) assertEquals(0.0, semitonesBetween(hz, 440.0), 0.5)
+    }
+
+    @Test
+    fun realOctaveLeap_isTakenAfterTheHoldAndSticks() {
+        val tracker = liveTracker()
+        repeat(10) { tracker.feed(440.0) }
+
+        val outputs = List(12) { tracker.feed(880.0) }
+
+        // Held back at first, then taken as a leap, and it stays up
+        assertEquals(0.0, semitonesBetween(outputs.first(), 440.0), 0.5)
+        for (hz in outputs.takeLast(6)) assertEquals(0.0, semitonesBetween(hz, 880.0), 0.5)
+    }
+
+    @Test
+    fun octaveDropout_isFoldedUpToo() {
+        val tracker = liveTracker()
+        repeat(10) { tracker.feed(440.0) }
+
+        for (hz in List(2) { tracker.feed(220.0) }) assertEquals(0.0, semitonesBetween(hz, 440.0), 0.5)
+    }
+
+    @Test
+    fun noFoldingAfterReset() {
+        val tracker = liveTracker()
+        repeat(10) { tracker.feed(440.0) }
+
+        tracker.reset()
+
+        assertEquals(0.0, semitonesBetween(tracker.feed(880.0), 880.0), 0.5)
     }
 }

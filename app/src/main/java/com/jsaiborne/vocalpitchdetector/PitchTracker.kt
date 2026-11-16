@@ -28,7 +28,8 @@ class PitchTracker(
     private val hangoverMs: Int = 200,
     private val medianWindow: Int = 5,
     private val smoothingAlpha: Double = 0.45,
-    private val maxJumpSemitonesPerFrame: Double = 12.0,
+    /** Readings a sudden octave jump is folded back for before it's taken as a real leap. */
+    private val octaveHoldFrames: Int = 4,
     private var energyThreshold: Double = DEFAULT_ENERGY_THRESHOLD,
     private var confidenceThreshold: Double = DEFAULT_CONF_THRESHOLD
 ) {
@@ -41,6 +42,9 @@ class PitchTracker(
     private var lastStablePitchSemi: Double? = null
     private var holdCounter = 0
     private var smoothedSemi: Double? = null
+
+    // Readings in a row folded back by an octave (see foldOctaveJump)
+    private var octaveHeld = 0
 
     // Optimized: ArrayDeque for history, reused DoubleArray for sorting to prevent GC churn
     private val medianBuffer = ArrayDeque<Double>(medianWindow)
@@ -70,23 +74,8 @@ class PitchTracker(
         holdCounter = 0
         val candidateSemi = pitchHz?.let { hzToSemitone(it) } ?: return null
 
-        var chosenSemi = candidateSemi
-
-        // Continuity / Octave Correction
-        if (lastStablePitchSemi != null) {
-            val diff = abs(chosenSemi - lastStablePitchSemi!!)
-            if (diff > maxJumpSemitonesPerFrame) {
-                // Only correct octave if confidence isn't practically perfect (e.g. > 0.95)
-                // If confidence is super high, we assume the singer actually jumped that far.
-                if (confidence < 0.75) {
-                    val octaveShift = ((lastStablePitchSemi!! - chosenSemi) / 12.0).roundToInt()
-                    val shifted = chosenSemi + 12.0 * octaveShift
-                    if (abs(shifted - lastStablePitchSemi!!) < diff) {
-                        chosenSemi = shifted
-                    }
-                }
-            }
-        }
+        // Continuity: a brief octave flip is folded back into the note being sung
+        val chosenSemi = foldOctaveJump(candidateSemi)
 
         // Median Smoothing (Zero Allocation)
         if (medianBuffer.size >= medianWindow) medianBuffer.removeFirst()
@@ -109,6 +98,30 @@ class PitchTracker(
 
         lastStablePitchSemi = smoothedSemi
         return smoothedSemi?.let { semitoneToHz(it) }
+    }
+
+    /**
+     * A sudden jump of a whole number of octaves from the note being sung is usually the detector
+     * catching a harmonic (or a sub-harmonic) for a moment, so it's folded back for up to
+     * [octaveHoldFrames] readings. One that lasts longer is a real leap: the smoothing starts again at
+     * the new octave, so the leap sticks.
+     */
+    private fun foldOctaveJump(semi: Double): Double {
+        val last = lastStablePitchSemi ?: return semi
+        val octaves = ((semi - last) / 12.0).roundToInt()
+        val folded = semi - 12.0 * octaves
+        if (octaves == 0 || abs(folded - last) > OCTAVE_FOLD_SEMITONES) {
+            octaveHeld = 0
+            return semi
+        }
+        if (octaveHeld < octaveHoldFrames) {
+            octaveHeld++
+            return folded
+        }
+        octaveHeld = 0
+        medianBuffer.clear()
+        smoothedSemi = null
+        return semi
     }
 
     private fun calculateMedian(): Double {
@@ -138,6 +151,7 @@ class PitchTracker(
         smoothedSemi = null
         medianBuffer.clear()
         holdCounter = 0
+        octaveHeld = 0
     }
 
     fun setEnergyThreshold(th: Double) { energyThreshold = th }
@@ -152,5 +166,8 @@ class PitchTracker(
 
         private const val MILLIS_PER_SECOND = 1000
         private const val MIN_HANGOVER_FRAMES = 1
+
+        /** How close an octave-folded reading must be to the note being sung to count as an octave flip. */
+        private const val OCTAVE_FOLD_SEMITONES = 1.5
     }
 }

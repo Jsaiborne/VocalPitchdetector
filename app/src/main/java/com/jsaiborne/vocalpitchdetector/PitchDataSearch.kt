@@ -3,6 +3,15 @@ package com.jsaiborne.vocalpitchdetector
 import kotlin.math.abs
 
 /**
+ * Un-rounded MIDI pitch, so playback curves glide between semitone lines like the live graph.
+ * [RecordedPitchPoint.midiNote] is rounded at record time; this is recovered from [RecordedPitchPoint.frequencyHz].
+ *
+ * Kept here, away from the playback screen's Android set-up, so plain JVM unit tests can use it.
+ */
+internal val RecordedPitchPoint.midiFloat: Float
+    get() = if (frequencyHz > 0f) freqToMidi(frequencyHz.toDouble()).toFloat() else midiNote.toFloat()
+
+/**
  * Index of the first point whose timestamp is >= [timeMs] (or size if there is none).
  * Recorded pitch data is written in time order, so this is a binary search.
  */
