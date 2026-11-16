@@ -132,6 +132,14 @@ class PitchTracker(
         }
     }
 
+    /** Forgets the note so far (after a silence), so the next note's smoothing doesn't start from it. */
+    fun reset() {
+        lastStablePitchSemi = null
+        smoothedSemi = null
+        medianBuffer.clear()
+        holdCounter = 0
+    }
+
     fun setEnergyThreshold(th: Double) { energyThreshold = th }
     fun setConfidenceThreshold(th: Double) { confidenceThreshold = th }
 

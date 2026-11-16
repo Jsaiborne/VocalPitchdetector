@@ -5,6 +5,8 @@ import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Test
 
 class PitchTrackerTest {
@@ -85,5 +87,24 @@ class PitchTrackerTest {
         assert(maxSemitoneJump < 6.0) {
             "Detected pitch spike: $maxSemitoneJump semitones"
         }
+    }
+
+    @Test
+    fun reset_startsTheNextNoteAfresh() {
+        val tracker = PitchTracker(
+            sampleRate = 44100,
+            hopSize = 1024,
+            smoothingAlpha = 0.18,
+            energyThreshold = 1e-4,
+            confidenceThreshold = 0.12
+        )
+        repeat(5) { tracker.processFrame(pitchHz = 440.0, cmndfMin = 0.05, rms = 0.3) }
+
+        tracker.reset()
+        // Half a semitone up: without the reset, the median would still give 440 Hz
+        val hz = tracker.processFrame(pitchHz = 452.9, cmndfMin = 0.05, rms = 0.3)
+
+        assertNotNull(hz)
+        assertEquals(452.9, hz!!, 0.01)
     }
 }

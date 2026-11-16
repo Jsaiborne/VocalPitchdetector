@@ -36,7 +36,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collectLatest
 
 /** A detected pitch as a fractional MIDI note, or NaN for silence. */
 internal data class PitchSample(val tMs: Long, val midi: Float)
@@ -82,10 +81,10 @@ class TraceBuffer {
     }
 
     /**
-     * Adds a reading at the time the engine detected it ([detectedAtMs], wall clock), rather than when
+     * Adds a reading at the time of the audio it describes ([detectedAtMs], wall clock), rather than when
      * the screen got round to it, so UI hiccups don't bunch the points up. A reading from before the
-     * last Resume, or no newer than the last one, is skipped: the engine's latest state is handed over
-     * again whenever the graph starts listening (after Resume or a rotation).
+     * last Resume, or no newer than the last one, is skipped, so nothing from the frozen stretch or
+     * already shown is added when the graph starts listening again (after Resume or a rotation).
      */
     internal fun addReading(detectedAtMs: Long, midi: Float, windowMs: Long) {
         if (detectedAtMs < resumedAtMs) return
@@ -149,8 +148,9 @@ private fun FollowPitch(
     // Applied before the frame is drawn, so the clock stops on the same frame as the button
     SideEffect { buffer.setPaused(paused) }
 
+    // Every reading, not just the latest, so none goes missing while the UI is busy
     LaunchedEffect(buffer, engine, paused, windowMs) {
-        engine.state.collectLatest { s ->
+        engine.readings.collect { s ->
             if (!paused) {
                 val midi = if (s.frequency > 0f) freqToMidi(s.frequency.toDouble()).toFloat() else Float.NaN
                 buffer.addReading(detectedAtMs = s.timestampMs, midi = midi, windowMs = windowMs)

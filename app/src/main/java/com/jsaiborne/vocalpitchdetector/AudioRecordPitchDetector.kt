@@ -16,20 +16,32 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
+import kotlin.math.exp
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
+
+/** Readings in the median that removes one-reading glitches; 3 delays the pitch by just one reading. */
+private const val MEDIAN_READINGS = 3
 
 @Suppress("LongParameterList")
 class AudioRecordPitchDetector(
     private val sampleRate: Int = 44100,
+    /** Samples analysed for each reading (the YIN window). */
     private val bufferSize: Int = 2048,
+    /** Samples between readings; less than [bufferSize] makes each window overlap the one before. */
+    private val hopSize: Int = bufferSize / 2,
     private val minFreq: Float = 60f,
     private val maxFreq: Float = 1200f,
-    private val smoothingAlpha: Float = 0.45f,
+    /** Time constant of the pitch smoothing; 0 turns it off. */
+    smoothingMs: Float = 25f,
     private val stabilityCentsThreshold: Float = 30f,
     private val stabilityConfidenceThreshold: Float = 0.55f,
-    private val stabilityRequiredFrames: Int = 3,
+    /** How long the pitch must stay near one note for it to count as a stable note. */
+    stabilityMs: Float = 140f,
     pitchConfidenceThreshold: Float = 0.45f,
-    minContiguousFrames: Int = 4
+    minVoicedMs: Float = 70f,
+    /** How long a note may lose its pitch (a weak or quiet moment) and still carry on. */
+    graceMs: Float = 70f
 ) {
     private var audioRecord: AudioRecord? = null
     private val running = AtomicBoolean(false)
@@ -39,8 +51,9 @@ class AudioRecordPitchDetector(
     @Volatile
     var pitchConfidenceThreshold: Float = pitchConfidenceThreshold
 
+    /** How long a sound must keep a pitch before it counts as a note. */
     @Volatile
-    var minContiguousFrames: Int = minContiguousFrames
+    var minVoicedMs: Float = minVoicedMs
 
     // --- Disk Recording State (all access to the stream/counters is guarded by diskLock) ---
     private val diskLock = Any()
@@ -61,30 +74,43 @@ class AudioRecordPitchDetector(
         threshold = 0.25f
     )
 
-    // Each loop reads a whole buffer, so frames arrive bufferSize samples apart; the tracker's
-    // hangover timing must use that spacing, or the note lingers ~4x too long after singing stops
+    /** Time between readings, and half a window: a reading describes the middle of its window. */
+    private val hopMs = hopSize * 1000f / sampleRate
+    private val halfWindowMs = bufferSize * 500L / sampleRate
+
+    // Readings arrive hopSize samples apart, so the tracker's timings and the smoothing use that spacing
     private val tracker = PitchTracker(
         sampleRate = sampleRate,
-        hopSize = bufferSize,
-        smoothingAlpha = smoothingAlpha.toDouble()
+        hopSize = hopSize,
+        medianWindow = MEDIAN_READINGS,
+        smoothingAlpha = if (smoothingMs > 0f) 1.0 - exp(-hopMs / smoothingMs.toDouble()) else 1.0
     )
+
+    private val gate = VoicingGate(graceFrames = framesFor(graceMs, hopMs))
+    private val stabilityRequiredFrames = framesFor(stabilityMs, hopMs)
 
     var volumeThreshold: Float = 0.02f
 
-    private var smoothedFreq: Float = -1f
-    private var framesWithPitch: Int = 0
     private var stableCount: Int = 0
     private var lastStableMidi: Int = -1
+
+    // Set by start(), before the audio thread that calls them begins
+    private var onPitch: (Float, Float, Long) -> Unit = { _, _, _ -> }
+    private var onStable: ((Int, Float, Long) -> Unit)? = null
 
     /**
      * Opens the microphone and starts analysing. Returns false if the microphone could not be
      * opened (e.g. it is in use by a call or another app), so the caller can tell the user.
+     *
+     * [onPitchDetected] gets (frequency in Hz or -1 for silence, confidence, time in ms) and
+     * [onStableNote] gets (MIDI note, frequency, time); times are wall-clock times of the audio they
+     * describe, a little before the call. Silence is reported once, when a note ends.
      */
     @SuppressLint("MissingPermission")
     fun start(
-        onPitchDetected: (Float, Float) -> Unit,
+        onPitchDetected: (Float, Float, Long) -> Unit,
         onVolumeDetected: (Float) -> Unit,
-        onStableNote: ((Int, Float) -> Unit)? = null
+        onStableNote: ((Int, Float, Long) -> Unit)? = null
     ): Boolean {
         if (running.get()) return true
 
@@ -122,64 +148,71 @@ class AudioRecordPitchDetector(
             return false
         }
         audioRecord = record
+        onPitch = onPitchDetected
+        onStable = onStableNote
         running.set(true)
-        resetPitchState(onPitchDetected)
+        // Clears any pitch still showing from before
+        onPitchDetected(-1f, 0f, System.currentTimeMillis())
 
         workerThread = Thread {
-            val audioBuffer = ShortArray(bufferSize)
-            val floatBuffer = FloatArray(bufferSize)
+            val hop = ShortArray(hopSize)
+            // The last bufferSize samples; each read slides it on by hopSize, so windows overlap
+            val window = FloatArray(bufferSize)
+            var filled = 0
+            val clock = SampleClock(sampleRate)
 
             while (running.get()) {
-                val read = audioRecord?.read(audioBuffer, 0, bufferSize) ?: 0
+                val read = audioRecord?.read(hop, 0, hopSize) ?: 0
                 if (read > 0) {
-                    // Write raw PCM to disk if recording is active
+                    val endMs = clock.advance(read, System.currentTimeMillis())
+
+                    // Write raw PCM to disk if recording is active (only the new samples)
                     if (isRecordingToDisk.get() && !isDiskRecordingPaused.get()) {
-                        writePcm(audioBuffer, read)
+                        writePcm(hop, read)
                     }
 
-                    // 1. Calculate RMS volume
-                    var sumSquares = 0f
-                    for (i in 0 until read) {
-                        val norm = audioBuffer[i] / 32768f
-                        floatBuffer[i] = norm
-                        sumSquares += norm * norm
-                    }
-                    val rms = kotlin.math.sqrt(sumSquares / read)
+                    System.arraycopy(window, read, window, 0, bufferSize - read)
+                    for (i in 0 until read) window[bufferSize - read + i] = hop[i] / 32768f
+                    filled = minOf(bufferSize, filled + read)
+
+                    val rms = rmsOf(window)
                     onVolumeDetected(rms)
-
-                    // 2. Pitch Detection
-                    if (rms >= volumeThreshold) {
-                        val yinResult = yin.getPitch(floatBuffer, read, rms.toDouble())
-                        val confidence = (1.0 - yinResult.cmndfMin).coerceIn(0.0, 1.0).toFloat()
-
-                        if (confidence >= pitchConfidenceThreshold) {
-                            val finalPitch = tracker.processFrame(
-                                yinResult.pitchHz,
-                                yinResult.cmndfMin,
-                                rms.toDouble()
-                            )
-                            if (finalPitch != null) {
-                                framesWithPitch++
-                                if (framesWithPitch >= minContiguousFrames) {
-                                    smoothedFreq = finalPitch.toFloat()
-                                    onPitchDetected(smoothedFreq, confidence)
-                                    checkStability(smoothedFreq, confidence, onStableNote)
-                                }
-                            } else {
-                                resetPitchState(onPitchDetected)
-                            }
-                        } else {
-                            resetPitchState(onPitchDetected)
-                        }
-                    } else {
-                        resetPitchState(onPitchDetected)
-                    }
+                    if (filled == bufferSize) analyse(window, rms, timeMs = endMs - halfWindowMs)
                 }
             }
         }
         workerThread?.priority = Thread.MAX_PRIORITY
         workerThread?.start()
         return true
+    }
+
+    /** Finds the pitch of one full [window] (centred at [timeMs]) and publishes what it leads to. */
+    private fun analyse(window: FloatArray, rms: Float, timeMs: Long) {
+        var pitch: TimedPitch? = null
+        if (rms >= volumeThreshold) {
+            val yinResult = yin.getPitch(window, bufferSize, rms.toDouble())
+            val confidence = (1.0 - yinResult.cmndfMin).coerceIn(0.0, 1.0).toFloat()
+            if (confidence >= pitchConfidenceThreshold) {
+                val hz = tracker.processFrame(yinResult.pitchHz, yinResult.cmndfMin, rms.toDouble())
+                if (hz != null) pitch = TimedPitch(timeMs, hz.toFloat(), confidence)
+            }
+        }
+        val onsetFrames = framesFor(minVoicedMs, hopMs)
+        publish(if (pitch != null) gate.voiced(pitch, onsetFrames) else gate.unvoiced(timeMs))
+    }
+
+    private fun publish(step: GateStep) {
+        for (p in step.pitches) {
+            onPitch(p.frequencyHz, p.confidence, p.timeMs)
+            checkStability(p)
+        }
+        step.silenceAtMs?.let { onPitch(-1f, 0f, it) }
+        if (step.resetTracker) {
+            tracker.reset()
+            stableCount = 0
+            // Silence ends the note, so singing the same note again gets its own stable marker
+            lastStableMidi = -1
+        }
     }
 
     private fun writePcm(samples: ShortArray, count: Int) {
@@ -265,25 +298,12 @@ class AudioRecordPitchDetector(
         }.start()
     }
 
-    private fun resetPitchState(onPitchDetected: (Float, Float) -> Unit) {
-        smoothedFreq = -1f
-        framesWithPitch = 0
-        stableCount = 0
-        // Silence ends the note, so singing the same note again gets its own stable marker
-        lastStableMidi = -1
-        onPitchDetected(-1f, 0f)
-    }
-
-    private fun checkStability(
-        freq: Float,
-        confidence: Float,
-        onStableNote: ((Int, Float) -> Unit)?
-    ) {
-        val midiFloat = freqToMidi(freq.toDouble())
+    private fun checkStability(pitch: TimedPitch) {
+        val midiFloat = freqToMidi(pitch.frequencyHz.toDouble())
         val nearestMidi = midiFloat.roundToInt()
         val cents = (midiFloat - nearestMidi) * 100f
 
-        if (abs(cents) <= stabilityCentsThreshold && confidence >= stabilityConfidenceThreshold) {
+        if (abs(cents) <= stabilityCentsThreshold && pitch.confidence >= stabilityConfidenceThreshold) {
             stableCount++
         } else {
             stableCount = 0
@@ -292,7 +312,7 @@ class AudioRecordPitchDetector(
         if (stableCount >= stabilityRequiredFrames) {
             if (lastStableMidi != nearestMidi) {
                 lastStableMidi = nearestMidi
-                onStableNote?.invoke(nearestMidi, freq)
+                onStable?.invoke(nearestMidi, pitch.frequencyHz, pitch.timeMs)
             }
         }
     }
@@ -300,6 +320,16 @@ class AudioRecordPitchDetector(
     private companion object {
         private const val WAV_HEADER_BYTES = 44
     }
+}
+
+/** The number of readings, [hopMs] apart, that span [ms]; at least one. */
+private fun framesFor(ms: Float, hopMs: Float): Int = (ms / hopMs).roundToInt().coerceAtLeast(1)
+
+/** Root-mean-square level of [samples]. */
+private fun rmsOf(samples: FloatArray): Float {
+    var sumSquares = 0f
+    for (s in samples) sumSquares += s * s
+    return sqrt(sumSquares / samples.size)
 }
 
 /** Writes a 44-byte PCM WAV header at the start of [raf] for [audioLen] bytes of sample data. */

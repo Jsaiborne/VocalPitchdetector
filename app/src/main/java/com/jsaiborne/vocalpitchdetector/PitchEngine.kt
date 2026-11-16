@@ -8,6 +8,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -48,17 +49,36 @@ class PitchEngine(
 
     companion object {
         private const val DEFAULT_SAMPLE_RATE = 44100
+
+        /** Samples analysed for each reading (~46 ms, enough for the lowest notes). */
         private const val DEFAULT_BUFFER_SIZE = 2048
+
+        /** Samples between readings (~23 ms), so each analysis overlaps the one before by half. */
+        private const val DEFAULT_HOP_SIZE = 1024
         private const val DEFAULT_MIN_FREQ = 60f
         private const val DEFAULT_MAX_FREQ = 1200f
-        private const val DEFAULT_SMOOTHING_ALPHA = 0.18f
+
+        /** Time constant of the pitch smoothing: light, so vibrato and scoops still show. */
+        private const val DEFAULT_SMOOTHING_MS = 25f
         private const val DEFAULT_VOLUME_THRESHOLD = 0.02f
         private const val DEFAULT_CONFIDENCE_THRESHOLD = 0.45f
-        private const val DEFAULT_MIN_CONTIGUOUS_FRAMES = 4
+
+        /** How long a sound must keep a pitch before it counts as a note. */
+        private const val DEFAULT_MIN_VOICED_MS = 70f
+
+        /** How long a note may lose its pitch (a weak or quiet moment) and still carry on. */
+        private const val DEFAULT_GRACE_MS = 70f
         private const val SENSITIVE_CONFIDENCE_THRESHOLD = 0.30f
-        private const val SENSITIVE_MIN_CONTIGUOUS_FRAMES = 2
+        private const val SENSITIVE_MIN_VOICED_MS = 45f
+
+        /** Readings [readings] keeps for a collector that falls behind (~1.5 s). */
+        private const val READINGS_BUFFER = 64
     }
 
+    /**
+     * The latest reading: [frequency] in Hz (-1 for silence), and [timestampMs], the wall-clock time of
+     * the audio it describes (slightly before it was published).
+     */
     data class PitchState(
         val frequency: Float = -1f,
         val confidence: Float = 0f,
@@ -73,6 +93,17 @@ class PitchEngine(
 
     private val _state = MutableStateFlow(PitchState())
     val state: StateFlow<PitchState> = _state
+
+    private val _readings = MutableSharedFlow<PitchState>(
+        extraBufferCapacity = READINGS_BUFFER,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+
+    /**
+     * Every reading in order, as published to [state], including the ones [state] skips over while its
+     * collectors are busy. Nothing is replayed to a new collector. For the live graph.
+     */
+    val readings: SharedFlow<PitchState> = _readings
 
     private val _volumeRms = MutableStateFlow(0f)
     val volumeRms: StateFlow<Float> = _volumeRms
@@ -98,7 +129,7 @@ class PitchEngine(
 
     private var volumeThreshold: Float = DEFAULT_VOLUME_THRESHOLD
     private var pitchConfidenceThreshold: Float = DEFAULT_CONFIDENCE_THRESHOLD
-    private var minContiguousFrames: Int = DEFAULT_MIN_CONTIGUOUS_FRAMES
+    private var minVoicedMs: Float = DEFAULT_MIN_VOICED_MS
 
     // Everything below is guarded by recordLock: it is written from the audio thread
     // (recorded points) and the UI thread (start/pause/resume/stop).
@@ -108,6 +139,9 @@ class PitchEngine(
     private var recordingStartTimeMs = 0L
     private var pauseStartTimeMs = 0L
     private var accumulatedPauseTimeMs = 0L
+
+    // When recording last started or resumed; readings of audio from before then aren't recorded
+    private var recordingSegmentStartMs = 0L
 
     private val recordedSession = mutableListOf<RecordedPitchPoint>()
     private val recordedStableNotes = mutableListOf<RecordedPitchPoint>()
@@ -127,48 +161,33 @@ class PitchEngine(
         val newDetector = AudioRecordPitchDetector(
             sampleRate = DEFAULT_SAMPLE_RATE,
             bufferSize = DEFAULT_BUFFER_SIZE,
+            hopSize = DEFAULT_HOP_SIZE,
             minFreq = DEFAULT_MIN_FREQ,
             maxFreq = DEFAULT_MAX_FREQ,
-            smoothingAlpha = DEFAULT_SMOOTHING_ALPHA,
+            smoothingMs = DEFAULT_SMOOTHING_MS,
             pitchConfidenceThreshold = pitchConfidenceThreshold,
-            minContiguousFrames = minContiguousFrames
+            minVoicedMs = minVoicedMs,
+            graceMs = DEFAULT_GRACE_MS
         )
         newDetector.volumeThreshold = volumeThreshold
 
         val started = newDetector.run {
             start(
-                onPitchDetected = { freqHz, confidence ->
-                    // Silence is reported once, when a note ends. Re-publishing it every frame
-                    // (~21/s) would keep the whole UI recomposing while nobody is singing.
-                    if (freqHz <= 0f && _state.value.frequency <= 0f) return@start
-                    _state.value = PitchState(
-                        frequency = freqHz,
-                        confidence = confidence,
-                        timestampMs = System.currentTimeMillis()
-                    )
-
-                    if (freqHz > 0 && confidence >= pitchConfidenceThreshold && _isRecording.value) {
-                        recordPoint(
-                            target = recordedSession,
-                            freqHz = freqHz,
-                            midiNote = freqToMidi(freqHz.toDouble()).roundToInt()
-                        )
-                    }
-                },
+                onPitchDetected = { freqHz, confidence, timeMs -> publishReading(freqHz, confidence, timeMs) },
                 onVolumeDetected = { rms ->
                     _volumeRms.value = rms
                 },
-                onStableNote = { midiNote, frequencyHz ->
+                onStableNote = { midiNote, frequencyHz, timeMs ->
                     _stableNotes.tryEmit(
                         StableNote(
                             midi = midiNote,
                             frequency = frequencyHz,
-                            timestampMs = System.currentTimeMillis()
+                            timestampMs = timeMs
                         )
                     )
 
                     if (_isRecording.value) {
-                        recordPoint(recordedStableNotes, frequencyHz, midiNote)
+                        recordPoint(recordedStableNotes, frequencyHz, midiNote, timeMs)
                     }
                 }
             )
@@ -188,12 +207,33 @@ class PitchEngine(
         (end - recordingStartTimeMs - accumulatedPauseTimeMs).coerceAtLeast(0L)
     }
 
-    /** Adds a point to [target] unless recording has stopped or is paused. */
-    private fun recordPoint(target: MutableList<RecordedPitchPoint>, freqHz: Float, midiNote: Int) {
-        val now = System.currentTimeMillis()
+    /** Publishes a reading from the detector (on the audio thread) and records it if recording. */
+    private fun publishReading(freqHz: Float, confidence: Float, timeMs: Long) {
+        // Silence is reported once, when a note ends; publishing it again would only make the UI
+        // recompose while nobody is singing
+        if (freqHz <= 0f && _state.value.frequency <= 0f) return
+        val reading = PitchState(frequency = freqHz, confidence = confidence, timestampMs = timeMs)
+        _state.value = reading
+        _readings.tryEmit(reading)
+
+        if (freqHz > 0 && confidence >= pitchConfidenceThreshold && _isRecording.value) {
+            recordPoint(
+                target = recordedSession,
+                freqHz = freqHz,
+                midiNote = freqToMidi(freqHz.toDouble()).roundToInt(),
+                timeMs = timeMs
+            )
+        }
+    }
+
+    /**
+     * Adds a point for audio at wall-clock [timeMs] to [target], unless recording has stopped or is
+     * paused, or the audio is from before recording started or resumed.
+     */
+    private fun recordPoint(target: MutableList<RecordedPitchPoint>, freqHz: Float, midiNote: Int, timeMs: Long) {
         synchronized(recordLock) {
-            if (!_isRecording.value || _isPaused.value) return
-            val relativeTimeMs = now - recordingStartTimeMs - accumulatedPauseTimeMs
+            if (!_isRecording.value || _isPaused.value || timeMs < recordingSegmentStartMs) return
+            val relativeTimeMs = timeMs - recordingStartTimeMs - accumulatedPauseTimeMs
             target.add(RecordedPitchPoint(relativeTimeMs, freqHz, midiNote))
         }
     }
@@ -208,6 +248,7 @@ class PitchEngine(
             currentPitchFile = pitchFile
             currentAudioFile = audioFile
             recordingStartTimeMs = System.currentTimeMillis()
+            recordingSegmentStartMs = recordingStartTimeMs
             accumulatedPauseTimeMs = 0L
             pauseStartTimeMs = 0L
             _isPaused.value = false
@@ -302,7 +343,9 @@ class PitchEngine(
     fun resumeRecording() {
         synchronized(recordLock) {
             if (!_isRecording.value || !_isPaused.value) return
-            accumulatedPauseTimeMs += System.currentTimeMillis() - pauseStartTimeMs
+            val now = System.currentTimeMillis()
+            accumulatedPauseTimeMs += now - pauseStartTimeMs
+            recordingSegmentStartMs = now
             _isPaused.value = false
         }
         detector?.resumeDiskRecording()
@@ -318,9 +361,10 @@ class PitchEngine(
         detector?.pitchConfidenceThreshold = pitchConfidenceThreshold
     }
 
-    fun setMinContiguousFrames(frames: Int) {
-        minContiguousFrames = frames.coerceAtLeast(1)
-        detector?.minContiguousFrames = minContiguousFrames
+    /** How long a sound must keep a pitch before it's shown as a note. */
+    fun setMinVoicedMs(ms: Float) {
+        minVoicedMs = ms.coerceAtLeast(0f)
+        detector?.minVoicedMs = minVoicedMs
     }
 
     /**
@@ -331,9 +375,7 @@ class PitchEngine(
         setPitchConfidenceThreshold(
             if (enabled) SENSITIVE_CONFIDENCE_THRESHOLD else DEFAULT_CONFIDENCE_THRESHOLD
         )
-        setMinContiguousFrames(
-            if (enabled) SENSITIVE_MIN_CONTIGUOUS_FRAMES else DEFAULT_MIN_CONTIGUOUS_FRAMES
-        )
+        setMinVoicedMs(if (enabled) SENSITIVE_MIN_VOICED_MS else DEFAULT_MIN_VOICED_MS)
     }
 
     fun isRunning(): Boolean = running
