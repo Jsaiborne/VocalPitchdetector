@@ -39,6 +39,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -122,6 +123,10 @@ class PlaybackViewModel : ViewModel(), PlaybackControls {
     var sessionNote by mutableStateOf<String?>(null)
         private set
 
+    /** True when the recording's audio couldn't be opened (the file is missing or damaged). */
+    var loadFailed by mutableStateOf(false)
+        private set
+
     // Speed is kept between recordings; the loop is reset whenever a new recording loads
     var playbackSpeed by mutableFloatStateOf(1f)
         private set
@@ -144,6 +149,7 @@ class PlaybackViewModel : ViewModel(), PlaybackControls {
         if (loadedAudioPath == audioFile.absolutePath) return
         loadedAudioPath = audioFile.absolutePath
         sessionNote = null
+        loadFailed = false
 
         loadJob?.cancel()
         mediaPlayer?.release()
@@ -165,6 +171,7 @@ class PlaybackViewModel : ViewModel(), PlaybackControls {
             }
 
             mediaPlayer = player
+            loadFailed = player == null
             totalDurationMs = player?.duration?.toLong() ?: 0L
 
             val (data, markers) = parsePitchData(pitchFile)
@@ -592,6 +599,14 @@ fun PlaybackScreen(
                 }
             }
 
+            if (viewModel.loadFailed) {
+                Text(
+                    text = "This recording's audio couldn't be opened, so it can't be played.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+
             // --- Compact Controls Section ---
             val formatTime = ::formatDuration
 
@@ -620,7 +635,7 @@ fun PlaybackScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                IconButton(onClick = { viewModel.togglePlayPause() }) {
+                IconButton(onClick = { viewModel.togglePlayPause() }, enabled = !viewModel.loadFailed) {
                     Icon(
                         imageVector = if (viewModel.isPlaying) {
                             Icons.Default.Pause
@@ -628,7 +643,12 @@ fun PlaybackScreen(
                             Icons.Default.PlayArrow
                         },
                         contentDescription = if (viewModel.isPlaying) "Pause" else "Play",
-                        tint = MaterialTheme.colorScheme.primary,
+                        // No tint when disabled, so the button's own greyed-out colour shows
+                        tint = if (viewModel.loadFailed) {
+                            LocalContentColor.current
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        },
                         modifier = Modifier.size(32.dp)
                     )
                 }

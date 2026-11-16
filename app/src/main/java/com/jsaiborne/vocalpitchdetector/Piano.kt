@@ -131,8 +131,9 @@ fun Piano(
                 try {
                     tryAwaitRelease()
                 } finally {
-                    // on release stop the continuous tone (if using the oscillator)
-                    if (!useSamplePlayer) ToneGenerator.stop()
+                    // On release stop the continuous tone. Also with samples switched on: while they are
+                    // still loading the press falls back to the tone, which would otherwise never stop
+                    ToneGenerator.stop()
                     pressedMidi = null
                     playedByPress = false
                 }
@@ -403,9 +404,8 @@ fun Piano(
                                         try {
                                             tryAwaitRelease()
                                         } finally {
-                                            if (!useSamplePlayer) {
-                                                ToneGenerator.stop()
-                                            }
+                                            // Also with samples on (see the portrait keys)
+                                            ToneGenerator.stop()
                                             pressedMidi = null
                                             pressedIndex = null
                                             pressedBlackMidi = null

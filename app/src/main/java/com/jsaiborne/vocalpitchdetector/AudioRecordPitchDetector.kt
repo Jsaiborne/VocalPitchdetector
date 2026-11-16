@@ -109,12 +109,18 @@ class AudioRecordPitchDetector(
      * [onPitchDetected] gets (frequency in Hz or -1 for silence, confidence, time in ms) and
      * [onStableNote] gets (MIDI note, frequency, time); times are wall-clock times of the audio they
      * describe, a little before the call. Silence is reported once, when a note ends.
+     *
+     * [onMicLost] is called (on the audio thread) if the microphone stream dies after starting, and
+     * [onDiskError] the first time recorded audio can't be written to disk; analysis has then stopped
+     * (mic lost) or carries on without recording (disk error).
      */
     @SuppressLint("MissingPermission")
     fun start(
         onPitchDetected: (Float, Float, Long) -> Unit,
         onVolumeDetected: (Float) -> Unit,
-        onStableNote: ((Int, Float, Long) -> Unit)? = null
+        onStableNote: ((Int, Float, Long) -> Unit)? = null,
+        onMicLost: (() -> Unit)? = null,
+        onDiskError: (() -> Unit)? = null
     ): Boolean {
         if (running.get()) return true
 
@@ -164,15 +170,23 @@ class AudioRecordPitchDetector(
             val window = FloatArray(bufferSize)
             var filled = 0
             val clock = SampleClock(sampleRate)
+            var micLost = false
 
             while (running.get()) {
                 val read = audioRecord?.read(hop, 0, hopSize) ?: 0
+                if (read < 0) {
+                    // The stream is dead (e.g. the audio route changed under it). Reading again would
+                    // fail the same way at once, spinning this thread at full speed for nothing
+                    Log.e("AudioRecordPitch", "AudioRecord read failed: $read")
+                    micLost = true
+                    break
+                }
                 if (read > 0) {
                     val endMs = clock.advance(read, System.currentTimeMillis())
 
                     // Write raw PCM to disk if recording is active (only the new samples)
-                    if (isRecordingToDisk.get() && !isDiskRecordingPaused.get()) {
-                        writePcm(hop, read)
+                    if (isRecordingToDisk.get() && !isDiskRecordingPaused.get() && !writePcm(hop, read)) {
+                        onDiskError?.invoke()
                     }
 
                     System.arraycopy(window, read, window, 0, bufferSize - read)
@@ -184,6 +198,7 @@ class AudioRecordPitchDetector(
                     if (filled == bufferSize) analyse(window, rms, timeMs = endMs - halfWindowMs)
                 }
             }
+            if (micLost) onMicLost?.invoke()
         }
         workerThread?.priority = Thread.MAX_PRIORITY
         workerThread?.start()
@@ -219,9 +234,13 @@ class AudioRecordPitchDetector(
         }
     }
 
-    private fun writePcm(samples: ShortArray, count: Int) {
+    /**
+     * Appends [count] samples to the recording. Returns false when they couldn't be written (the
+     * storage is full, say); nothing more is written after that, so it's reported only once.
+     */
+    private fun writePcm(samples: ShortArray, count: Int): Boolean {
         synchronized(diskLock) {
-            val stream = recordingStream ?: return
+            val stream = recordingStream ?: return true
             try {
                 byteBuffer.clear()
                 for (i in 0 until count) {
@@ -229,14 +248,19 @@ class AudioRecordPitchDetector(
                 }
                 stream.write(byteBuffer.array(), 0, count * 2)
                 recordedBytes += count * 2 // 2 bytes per Short
+                return true
             } catch (e: java.io.IOException) {
                 Log.e("AudioRecordPitch", "Failed to write audio stream", e)
+                isRecordingToDisk.set(false)
+                return false
             }
         }
     }
 
     // --- Recording Control Methods ---
-    fun startDiskRecording(outputFile: File) {
+
+    /** Starts writing the audio to [outputFile]. Returns false if the file couldn't be created. */
+    fun startDiskRecording(outputFile: File): Boolean {
         synchronized(diskLock) {
             try {
                 currentOutputFile = outputFile
@@ -247,9 +271,11 @@ class AudioRecordPitchDetector(
                 stream.write(ByteArray(WAV_HEADER_BYTES))
                 recordingStream = stream
                 isRecordingToDisk.set(true)
+                return true
             } catch (e: java.io.IOException) {
                 Log.e("AudioRecordPitch", "Failed to start disk recording", e)
                 currentOutputFile = null
+                return false
             }
         }
     }
@@ -265,10 +291,16 @@ class AudioRecordPitchDetector(
 
             try {
                 stream.close()
+            } catch (e: java.io.IOException) {
+                // The last buffered samples may be lost (full storage); what is on disk still gets a header
+                Log.e("AudioRecordPitch", "Error closing the recording", e)
+            }
 
-                // Rewrite the file header with the exact byte lengths
+            try {
+                // Rewrite the file header with the length of the audio that really reached the disk
+                val audioBytes = minOf(recordedBytes.toLong(), file.length() - WAV_HEADER_BYTES).coerceAtLeast(0L)
                 RandomAccessFile(file, "rw").use { raf ->
-                    writeWavHeader(raf, recordedBytes, sampleRate, 1, 16)
+                    writeWavHeader(raf, audioBytes.toInt(), sampleRate, 1, 16)
                 }
             } catch (e: java.io.IOException) {
                 Log.e("AudioRecordPitch", "Error stopping disk recording", e)

@@ -3,6 +3,7 @@ package com.jsaiborne.vocalpitchdetector
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.ln
+import kotlin.math.pow
 import kotlin.math.sin
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -84,5 +85,35 @@ class YinPitchDetectorTest {
         // Guards against the octave check pushing ordinary notes an octave down
         val amps = doubleArrayOf(1.0, 0.6, 0.4, 0.25, 0.15)
         for (freq in listOf(98.0, 130.81, 196.0, 261.63, 329.63, 440.0, 523.25, 659.25)) assertReadAt(freq, amps)
+    }
+
+    @Test
+    fun highNotesWithVibrato_areNotReadAnOctaveDown() {
+        // A soprano's top notes, with a singer's vibrato so the windows aren't perfectly periodic. A5 and
+        // above used to be read an octave low: the dip at twice the period looked deeper than the true one
+        val amps = doubleArrayOf(1.0, 0.6, 0.4, 0.25, 0.15)
+        val vibratoCents = 25.0
+        val vibratoHz = 5.5
+        val detector = appDetector()
+        for (freq in listOf(880.0, 987.77, 1046.5, 1174.66)) {
+            var phase = 0.0
+            repeat(8) { index ->
+                var freqSum = 0.0
+                val samples = FloatArray(window) { i ->
+                    val seconds = (index * window + i).toDouble() / rate
+                    val f = freq * 2.0.pow(vibratoCents / 1200.0 * sin(2.0 * PI * vibratoHz * seconds))
+                    freqSum += f
+                    phase += 2.0 * PI * f / rate
+                    var s = 0.0
+                    for (k in amps.indices) s += amps[k] * sin((k + 1) * phase)
+                    (0.5 * s / amps.sum()).toFloat()
+                }
+                val sungHz = freqSum / window
+                val hz = detector.getPitch(samples, window).pitchHz
+                assertNotNull("no pitch for $freq Hz (window $index)", hz)
+                val semitonesOff = 12.0 * ln(hz!! / sungHz) / ln(2.0)
+                assertTrue("$freq Hz (window $index) was read as $hz Hz", abs(semitonesOff) < 0.5)
+            }
+        }
     }
 }

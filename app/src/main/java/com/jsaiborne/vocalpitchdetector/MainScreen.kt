@@ -4,10 +4,17 @@
 package com.jsaiborne.vocalpitchdetector
 
 import android.Manifest
+import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
+import android.provider.Settings
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -74,6 +81,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -90,6 +98,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -141,6 +150,9 @@ private const val MIN_SCROLL_BPM = 15f
 private const val MAX_SCROLL_BPM = 240f
 private const val DEFAULT_SCROLL_BPM = 60f
 private const val RECORDING_TIMER_TICK_MS = 250L
+
+/** A permission request answered faster than this was refused by Android without showing its dialog. */
+private const val PERMISSION_DIALOG_MIN_MS = 500L
 
 /** Notifications only need a runtime permission from Android 13 (Tiramisu) on. */
 private fun notificationPermissionGranted(context: Context): Boolean {
@@ -215,6 +227,8 @@ fun MainScreen(navController: NavHostController? = null) {
     }
     var rangeTestActive by rememberSaveable { mutableStateOf(false) }
     var exerciseActive by rememberSaveable { mutableStateOf(false) }
+    // The exercise whose setup opened the range test, so its setup can be reopened after the test
+    var exerciseToResume by rememberSaveable { mutableStateOf<String?>(null) }
 
     // The last saved range-test result; re-read whenever the test closes, in case it was retaken
     var savedRange by remember { mutableStateOf(readSavedRange(context)) }
@@ -268,10 +282,22 @@ fun MainScreen(navController: NavHostController? = null) {
         )
     }
 
+    // When the permission banner's Allow was tapped (0 = the request didn't come from the banner)
+    var bannerAskedAtMs by remember { mutableLongStateOf(0L) }
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         hasMicPermission = isGranted
+        val askedAtMs = bannerAskedAtMs
+        bannerAskedAtMs = 0L
+        // Once the permission has been refused for good, Android answers "no" at once without showing
+        // its dialog. Allow would then seem to do nothing, so take the user to the app's settings
+        val answeredWithoutDialog = askedAtMs != 0L &&
+            SystemClock.elapsedRealtime() - askedAtMs < PERMISSION_DIALOG_MIN_MS
+        val activity = context as? Activity
+        val refusedForGood = activity != null &&
+            !ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.RECORD_AUDIO)
+        if (!isGranted && answeredWithoutDialog && refusedForGood) openAppSettings(context)
     }
 
     LaunchedEffect(Unit) {
@@ -280,22 +306,64 @@ fun MainScreen(navController: NavHostController? = null) {
         }
     }
 
-    DisposableEffect(hasMicPermission) {
-        if (hasMicPermission) {
-            engine.start()
-            engine.setVolumeThreshold(dbToRms(thresholdDb))
-        }
-        onDispose {
-            // A recording keeps going (RecordingService owns its notification); only release the mic
-            // when nothing needs it
+    val startEngine: () -> Unit = {
+        engine.start()
+        engine.setVolumeThreshold(dbToRms(thresholdDb))
+    }
+    val latestStartEngine by rememberUpdatedState(startEngine)
+
+    // The microphone is only held while this screen is visible or a recording is running: it's opened
+    // when the screen comes into view and let go when the app is left, the screen turns off or another
+    // screen opens. RecordingService reads uiAttached to know whether it may release the mic itself.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, engine) {
+        val releaseMic: () -> Unit = {
+            PitchEngineProvider.uiAttached = false
+            // A recording keeps going in the background (RecordingService owns its notification)
             if (!engine.isRecording.value) engine.stop()
+        }
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> {
+                    PitchEngineProvider.uiAttached = true
+                    // The permission may have been granted in the system settings while we were away
+                    hasMicPermission = ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.RECORD_AUDIO
+                    ) == PackageManager.PERMISSION_GRANTED
+                    if (hasMicPermission) latestStartEngine()
+                }
+                Lifecycle.Event.ON_PAUSE -> ToneGenerator.stop()
+                Lifecycle.Event.ON_STOP -> releaseMic()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            ToneGenerator.stop()
+            releaseMic()
         }
     }
 
-    // Tells RecordingService whether a screen is open, so it knows if it may release the mic
-    DisposableEffect(Unit) {
-        PitchEngineProvider.uiAttached = true
-        onDispose { PitchEngineProvider.uiAttached = false }
+    // The permission dialog doesn't stop the screen, so a grant from it starts the engine here
+    LaunchedEffect(hasMicPermission) {
+        val visible = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+        if (hasMicPermission && visible) startEngine()
+    }
+
+    LaunchedEffect(engine) {
+        engine.recordingFailures.collect { failure ->
+            val why = when (failure) {
+                PitchEngine.RecordingFailure.STORAGE -> "couldn't write to storage (it may be full)"
+                PitchEngine.RecordingFailure.MICROPHONE -> "the microphone was lost"
+            }
+            Toast.makeText(
+                context,
+                "Recording stopped: $why. What was captured has been saved.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     DisposableEffect(useSamplePlayer) {
@@ -306,19 +374,6 @@ fun MainScreen(navController: NavHostController? = null) {
         }
         onDispose {
             SamplePlayer.release()
-        }
-    }
-
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            // Recording deliberately keeps running when the screen turns off or the app is left
-            if (event == Lifecycle.Event.ON_PAUSE) ToneGenerator.stop()
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            ToneGenerator.stop()
         }
     }
 
@@ -349,16 +404,20 @@ fun MainScreen(navController: NavHostController? = null) {
         val sessionId = System.currentTimeMillis().toString()
         val recordingsDir = File(context.filesDir, "recordings")
         recordingsDir.mkdirs()
-        engine.startRecording(
+        val started = engine.startRecording(
             audioFile = File(recordingsDir, "session_${sessionId}_audio.wav"),
             pitchFile = File(recordingsDir, "session_${sessionId}_pitch.json")
         )
         // The service shows the notification and keeps the mic alive in the background
-        if (engine.isRecording.value) {
+        if (started) {
             RecordingService.start(context)
         } else {
-            Toast.makeText(context, "Couldn't start recording: the microphone is unavailable", Toast.LENGTH_LONG)
-                .show()
+            val why = if (engine.isRunning()) {
+                "the recording couldn't be saved to storage (it may be full)"
+            } else {
+                "the microphone is unavailable"
+            }
+            Toast.makeText(context, "Couldn't start recording: $why", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -514,7 +573,10 @@ fun MainScreen(navController: NavHostController? = null) {
             appPrefs.edit().putBoolean(PREF_SOLFEGE, checked).apply()
         },
         onOpenRangeTest = { rangeTestActive = true },
-        onOpenExercises = { exerciseActive = true },
+        onOpenExercises = {
+            exerciseToResume = null
+            exerciseActive = true
+        },
         onShowRangeOnPianoChange = { showRangeOnPiano = it },
         onBpmChange = { bpm = it },
         onThresholdChange = { newDb ->
@@ -548,9 +610,16 @@ fun MainScreen(navController: NavHostController? = null) {
             keyWidthDp = whiteKeyWidthDpFloat,
             graphColors = graphColors,
             useSamplePlayer = useSamplePlayer,
-            onOpenRangeTest = { rangeTestActive = true },
-            onExit = { exerciseActive = false },
-            modifier = Modifier.padding(outerPadding)
+            onOpenRangeTest = { exerciseId ->
+                exerciseToResume = exerciseId
+                rangeTestActive = true
+            },
+            onExit = {
+                exerciseActive = false
+                exerciseToResume = null
+            },
+            modifier = Modifier.padding(outerPadding),
+            resumeExerciseId = exerciseToResume
         )
         return
     }
@@ -561,6 +630,15 @@ fun MainScreen(navController: NavHostController? = null) {
             .padding(outerPadding),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        if (!hasMicPermission) {
+            MicPermissionBanner(
+                onAllow = {
+                    bannerAskedAtMs = SystemClock.elapsedRealtime()
+                    permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                }
+            )
+            Spacer(modifier = Modifier.height(smallGap))
+        }
         if (micUnavailable && hasMicPermission) {
             MicUnavailableBanner(
                 onRetry = {
@@ -914,6 +992,43 @@ private fun GestureTip(onDismiss: () -> Unit, modifier: Modifier = Modifier) {
             )
             TextButton(onClick = onDismiss) { Text("Got it") }
         }
+    }
+}
+
+/** Shown while the app has no microphone permission, so the empty graph isn't left unexplained. */
+@Composable
+private fun MicPermissionBanner(onAllow: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "Microphone access is needed to show your pitch.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = onAllow) { Text("Allow") }
+        }
+    }
+}
+
+/** Opens this app's page in the system settings, where a refused permission can be switched back on. */
+private fun openAppSettings(context: Context) {
+    val intent = Intent(
+        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+        Uri.fromParts("package", context.packageName, null)
+    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    try {
+        context.startActivity(intent)
+    } catch (e: ActivityNotFoundException) {
+        Log.w("MainScreen", "No settings screen to open", e)
+        Toast.makeText(context, "Allow the microphone for this app in your phone's settings", Toast.LENGTH_LONG)
+            .show()
     }
 }
 

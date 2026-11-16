@@ -118,10 +118,20 @@ class PitchEngine(
     private val _isPaused = MutableStateFlow(false)
     val isPaused: StateFlow<Boolean> = _isPaused
 
-    /** True when the microphone couldn't be opened (in use elsewhere); the UI offers a retry. */
+    /** True when the microphone couldn't be opened (in use elsewhere) or was lost; the UI offers a retry. */
     private val _micUnavailable = MutableStateFlow(false)
     val micUnavailable: StateFlow<Boolean> = _micUnavailable
 
+    /** Why a recording was cut short by something other than the user. What was captured is still saved. */
+    enum class RecordingFailure { STORAGE, MICROPHONE }
+
+    private val _recordingFailures = MutableSharedFlow<RecordingFailure>(extraBufferCapacity = 1)
+
+    /** Emits when a recording in progress had to be stopped (storage full, microphone lost). */
+    val recordingFailures: SharedFlow<RecordingFailure> = _recordingFailures
+
+    // Also read on the audio thread, when the microphone is lost
+    @Volatile
     private var detector: AudioRecordPitchDetector? = null
 
     @Volatile
@@ -189,7 +199,9 @@ class PitchEngine(
                     if (_isRecording.value) {
                         recordPoint(recordedStableNotes, frequencyHz, midiNote, timeMs)
                     }
-                }
+                },
+                onMicLost = { onMicLost(newDetector) },
+                onDiskError = { onDiskWriteFailed() }
             )
         }
 
@@ -198,6 +210,25 @@ class PitchEngine(
         detector = newDetector
         running = true
         return true
+    }
+
+    /**
+     * The microphone stream died under [lost] (called on the audio thread). Any recording is saved as
+     * far as it got, the microphone is let go, and [micUnavailable] lets the user retry.
+     */
+    private fun onMicLost(lost: AudioRecordPitchDetector) {
+        // Already stopped or replaced from the UI thread: nothing left to do
+        if (detector !== lost) return
+        val wasRecording = _isRecording.value
+        stop()
+        publishReading(-1f, 0f, System.currentTimeMillis())
+        _micUnavailable.value = true
+        if (wasRecording) _recordingFailures.tryEmit(RecordingFailure.MICROPHONE)
+    }
+
+    /** The audio could no longer be written (called on the audio thread): keep what's on disk. */
+    private fun onDiskWriteFailed() {
+        if (stopRecording() != null) _recordingFailures.tryEmit(RecordingFailure.STORAGE)
     }
 
     /** Recording length so far, excluding paused time (0 when not recording). */
@@ -238,9 +269,14 @@ class PitchEngine(
         }
     }
 
-    fun startRecording(audioFile: File, pitchFile: File) {
-        val activeDetector = detector ?: return
-        if (_isRecording.value) return
+    /**
+     * Starts recording the audio to [audioFile]; the pitch trace goes to [pitchFile] when it stops.
+     * Returns false when nothing was started: the microphone isn't open, or the audio file couldn't
+     * be created (no storage left, say).
+     */
+    fun startRecording(audioFile: File, pitchFile: File): Boolean {
+        val activeDetector = detector ?: return false
+        if (_isRecording.value) return true
 
         synchronized(recordLock) {
             recordedSession.clear()
@@ -254,8 +290,17 @@ class PitchEngine(
             _isPaused.value = false
         }
 
-        activeDetector.startDiskRecording(audioFile)
+        if (!activeDetector.startDiskRecording(audioFile)) {
+            synchronized(recordLock) {
+                currentPitchFile = null
+                currentAudioFile = null
+            }
+            // Whatever part of the file was created is of no use
+            audioFile.delete()
+            return false
+        }
         _isRecording.value = true
+        return true
     }
 
     /**

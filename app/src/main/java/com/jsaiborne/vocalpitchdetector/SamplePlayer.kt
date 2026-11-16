@@ -12,6 +12,9 @@ object SamplePlayer {
     private val sampleMap = mutableMapOf<Int, Int>()
     private var loadedSamplesCount = 0
 
+    /** How far from a sample's own note it can be played. */
+    private const val MAX_SHIFT_SEMITONES = 12
+
     // Define your available samples and their MIDI values
     private val AVAILABLE_SAMPLES = mapOf(
         36 to R.raw.piano_c2,
@@ -44,6 +47,10 @@ object SamplePlayer {
 
         val bestBaseMidi = sampleMap.keys.minByOrNull { abs(it - midi) } ?: return false
         val sampleId = sampleMap[bestBaseMidi] ?: return false
+
+        // SoundPool can only shift a sample by an octave either way (0.5x to 2x). A note further off
+        // would sound at the wrong pitch, so leave it to the caller's synthesised tone
+        if (abs(midi - bestBaseMidi) > MAX_SHIFT_SEMITONES) return false
 
         val semitoneDelta = (midi - bestBaseMidi).toDouble()
         val rate = 2.0.pow(semitoneDelta / 12.0).toFloat()

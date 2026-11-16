@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Dark window behind the app while it starts in dark mode, instead of a white flash -->
+    <style name="Theme.VocalPitchdetector" parent="android:Theme.Material.NoActionBar" />
+</resources>

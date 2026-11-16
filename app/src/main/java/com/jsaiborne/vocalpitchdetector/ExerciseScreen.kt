@@ -62,9 +62,13 @@ fun ExerciseScreen(
     keyWidthDp: Float,
     graphColors: GraphColors,
     useSamplePlayer: Boolean,
-    onOpenRangeTest: () -> Unit,
+    // Opens the vocal range test from the setup of the exercise with this id. The test replaces this
+    // screen, which afterwards comes back with that id as [resumeExerciseId]
+    onOpenRangeTest: (exerciseId: String) -> Unit,
     onExit: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    // The exercise whose setup to reopen straight away (see [onOpenRangeTest]); null starts at the list
+    resumeExerciseId: String? = null
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences(APP_PREFS_NAME, Context.MODE_PRIVATE) }
@@ -73,10 +77,12 @@ fun ExerciseScreen(
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
 
-    var step by remember { mutableStateOf(ExerciseStep.LIBRARY) }
-    var exercise by remember { mutableStateOf<Exercise?>(null) }
+    // A built-in can be reopened at once; one of the user's own has to wait until they're read from disk
+    val resumed = remember { BUILT_IN_EXERCISES.firstOrNull { it.id == resumeExerciseId } }
+    var step by remember { mutableStateOf(if (resumed != null) ExerciseStep.SETUP else ExerciseStep.LIBRARY) }
+    var exercise by remember { mutableStateOf(resumed) }
     var settings by remember { mutableStateOf(readExerciseSettings(prefs, savedRange)) }
-    var bpm by remember { mutableFloatStateOf(100f) }
+    var bpm by remember { mutableFloatStateOf(resumed?.bpm ?: 100f) }
     var outcome by remember { mutableStateOf<RunOutcome?>(null) }
     var newBest by remember { mutableStateOf(false) }
     // Bumped on every start, so "Sing it again" builds a fresh schedule
@@ -90,7 +96,18 @@ fun ExerciseScreen(
     var editReturn by remember { mutableStateOf(ExerciseStep.LIBRARY) }
     var renaming by remember { mutableStateOf<Exercise?>(null) }
 
-    LaunchedEffect(store) { mine = withContext(Dispatchers.IO) { store.loadAll() } }
+    LaunchedEffect(store) {
+        val loaded = withContext(Dispatchers.IO) { store.loadAll() }
+        mine = loaded
+        // Back from the range test: reopen the setup of the user's own exercise it was opened from,
+        // unless they've already gone somewhere else in the meantime
+        val own = loaded.firstOrNull { it.exercise.id == resumeExerciseId }?.exercise
+        if (own != null && exercise == null && step == ExerciseStep.LIBRARY) {
+            exercise = own
+            bpm = own.bpm
+            step = ExerciseStep.SETUP
+        }
+    }
 
     // Guide notes sound best as piano samples; load them for the exercises even if the user's
     // piano uses the synthesised tone, and release them again on the way out
@@ -232,7 +249,7 @@ fun ExerciseScreen(
                             hasRangeTest = savedRange != null,
                             onSettingsChange = { settings = it },
                             onBpmChange = { bpm = it },
-                            onOpenRangeTest = onOpenRangeTest,
+                            onOpenRangeTest = { onOpenRangeTest(current.id) },
                             onStart = {
                                 saveExerciseSettings(prefs, settings)
                                 saveLastPlayed(prefs, current.id)

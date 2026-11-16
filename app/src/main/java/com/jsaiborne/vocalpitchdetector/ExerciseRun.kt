@@ -52,6 +52,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -60,6 +61,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
@@ -170,20 +173,38 @@ internal fun ExerciseRun(
         if (repeating && repIndex != null) plan = plan.withRepeatAfter(repIndex)
     }
 
+    // Freezes on the spot, piano notes included; resuming carries on from the same moment
+    val pauseRun: () -> Unit = {
+        if (!paused) {
+            clock.pause()
+            SamplePlayer.pauseAll()
+            ToneGenerator.stop()
+            paused = true
+        }
+    }
+    // Leaving the app pauses the run: otherwise the guide notes would play on in the background and
+    // the time away would be scored as silence. The user resumes it when they come back
+    val latestPauseRun by rememberUpdatedState(pauseRun)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) latestPauseRun()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     val controls = RunControls(
         paused = paused,
         repeating = repeating,
         onTogglePause = {
-            // Freezes on the spot, piano notes included, and carries on from the same moment
             if (paused) {
                 clock.resume()
                 SamplePlayer.resumeAll()
+                paused = false
             } else {
-                clock.pause()
-                SamplePlayer.pauseAll()
-                ToneGenerator.stop()
+                pauseRun()
             }
-            paused = !paused
         },
         onToggleRepeat = {
             // Turning it off takes back the go lined up next, so the exercise moves on after this one

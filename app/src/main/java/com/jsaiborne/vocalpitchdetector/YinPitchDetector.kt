@@ -46,13 +46,10 @@ class YinPitchDetector(
         if (minLag >= maxLag) return YinResult(null, 1.0, rms)
 
         // 3. Difference Function (Autocorrelation-like)
-        // Note: Zeroing the array is required as the loop doesn't write every index in existence
-        difference.fill(0f, minLag, maxLag + 1)
-
-        // This is the heavy O(N^2) loop.
-        // Optimization: buffer[i] access is fast, but we limit 'tau' range strictly.
+        // This is the heavy O(N^2) loop. It starts at lag 1, not minLag: the normalisation below needs
+        // the lags under minLag too, even though no pitch is looked for there.
         val limit = readLen
-        for (tau in minLag..maxLag) {
+        for (tau in 1..maxLag) {
             var sum = 0f
             val n = limit - tau
             for (i in 0 until n) {
@@ -63,11 +60,13 @@ class YinPitchDetector(
         }
 
         // 4. Cumulative Mean Normalized Difference (CMNDF)
-        cmndf.fill(0f, minLag, maxLag + 1)
+        // The running mean covers every lag from 1. Starting it at minLag made the dips of short periods
+        // (notes from about A5 up) look shallow next to the dips at twice the period, so those notes
+        // were read an octave low.
         var runningSum = 0f
         cmndf[0] = 1f // Guard
 
-        for (tau in minLag..maxLag) {
+        for (tau in 1..maxLag) {
             runningSum += difference[tau]
             cmndf[tau] = if (runningSum == 0f) 1f else (difference[tau] * tau) / runningSum
         }
